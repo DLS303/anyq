@@ -1,0 +1,1645 @@
+import json
+import re
+from copy import deepcopy
+from datetime import datetime, timezone
+from pathlib import Path
+from threading import Lock
+from uuid import uuid4
+
+from app.geo import centroid, haversine_km
+from app.schemas import (
+    ChatMessage,
+    ChatThread,
+    CrmActivity,
+    CrmActivityCreate,
+    CrmActivityToggle,
+    CrmContact,
+    CrmContactCreate,
+    CrmInvoice,
+    CrmInvoiceCreate,
+    Deal,
+    DealCreate,
+    DealMove,
+    Favorite,
+    FUNNEL_STAGES,
+    Inquiry,
+    InquiryCreate,
+    Lead,
+    LeadConvert,
+    LeadCreate,
+    Material,
+    MaterialCreate,
+    MaterialOrder,
+    MaterialOrderCreate,
+    MessageCreate,
+    OrderCreate,
+    Plot,
+    PlotCreate,
+    Review,
+    ReviewCreate,
+    SavedSearch,
+    ServiceOrder,
+    Specialist,
+    ThreadCreate,
+    User,
+)
+from app.authutil import DEMO_PASSWORD, hash_password, make_token, verify_password
+from app.seed import PLOTS, USERS
+from app.seed_phase2 import DEALS, MESSAGES, ORDERS, PHASE2_USERS, REVIEWS, SPECIALISTS, THREADS
+from app.seed_crm import CRM_ACTIVITIES, CRM_CONTACTS, CRM_EXTRA_DEALS, CRM_INVOICES, CRM_LEADS
+from app.seed_materials import MATERIALS, SUPPLIER
+from app.seed_site import (
+    BUDGET,
+    CHANGES,
+    DAILY,
+    DIRECTORY,
+    DRAWINGS,
+    INCIDENTS,
+    INSPECTIONS,
+    MEETINGS,
+    PROJECTS,
+    PUNCH,
+    RFIS,
+    SCHEDULE,
+    SUBS,
+    TIMESHEETS,
+)
+from app.site_models import (
+    BudgetLine,
+    ChangeOrder,
+    DailyLog,
+    DirectoryRow,
+    Drawing,
+    Incident,
+    Inspection,
+    Meeting,
+    Project,
+    PunchItem,
+    RFI,
+    ScheduleTask,
+    Submittal,
+    Timesheet,
+)
+from app.trust import trust_score
+
+CADASTRE = re.compile(r"^\d{2}-\d{3}-\d{3}-\d{3}$")
+DB_PATH = Path(__file__).resolve().parents[3] / "data" / "db.json"
+
+
+def _slugify(text: str) -> str:
+    raw = "".join(ch.lower() if ch.isalnum() else "-" for ch in text)
+    return "-".join(part for part in raw.split("-") if part)[:48] or "plot"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class MemoryStore:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self.users: dict[str, User] = {}
+        self.users_by_id: dict[str, User] = {}
+        self.plots: dict[str, Plot] = {}
+        self.inquiries: dict[str, Inquiry] = {}
+        self.favorites: list[Favorite] = []
+        self.searches: dict[str, SavedSearch] = {}
+        self.specialists: dict[str, Specialist] = {}
+        self.orders: dict[str, ServiceOrder] = {}
+        self.reviews: dict[str, Review] = {}
+        self.deals: dict[str, Deal] = {}
+        self.threads: dict[str, ChatThread] = {}
+        self.messages: dict[str, ChatMessage] = {}
+        self.credentials: dict[str, str] = {}
+        self.materials: dict[str, Material] = {}
+        self.material_orders: dict[str, MaterialOrder] = {}
+        self.projects: dict[str, Project] = {}
+        self.daily_logs: dict[str, DailyLog] = {}
+        self.rfis: dict[str, RFI] = {}
+        self.submittals: dict[str, Submittal] = {}
+        self.punches: dict[str, PunchItem] = {}
+        self.inspections: dict[str, Inspection] = {}
+        self.incidents: dict[str, Incident] = {}
+        self.drawings: dict[str, Drawing] = {}
+        self.schedule: dict[str, ScheduleTask] = {}
+        self.budget_lines: dict[str, BudgetLine] = {}
+        self.change_orders: dict[str, ChangeOrder] = {}
+        self.timesheets: dict[str, Timesheet] = {}
+        self.meetings: dict[str, Meeting] = {}
+        self.directory: dict[str, DirectoryRow] = {}
+        self.leads: dict[str, Lead] = {}
+        self.crm_contacts: dict[str, CrmContact] = {}
+        self.crm_activities: dict[str, CrmActivity] = {}
+        self.crm_invoices: dict[str, CrmInvoice] = {}
+        self._load()
+        self._ensure_seed_users()
+        self._ensure_demo_passwords()
+        self._ensure_materials()
+        self._ensure_site()
+        self._ensure_crm()
+
+    def _index_user(self, user: User) -> None:
+        self.users[user.email.lower()] = user
+        self.users_by_id[user.id] = user
+
+    def _ensure_seed_users(self) -> None:
+        added = False
+        for u in list(USERS) + list(PHASE2_USERS) + [SUPPLIER]:
+            if u.email.lower() not in self.users:
+                self._index_user(deepcopy(u))
+                added = True
+        if added:
+            self._save()
+
+    def _ensure_demo_passwords(self) -> None:
+        added = False
+        for u in list(self.users_by_id.values()):
+            if u.id not in self.credentials:
+                self.credentials[u.id] = hash_password(DEMO_PASSWORD)
+                added = True
+        if added:
+            self._save()
+
+    def _ensure_materials(self) -> None:
+        if self.materials:
+            return
+        self.materials = {m.id: deepcopy(m) for m in MATERIALS}
+        self._save()
+
+    def _ensure_site(self) -> None:
+        if self.projects:
+            return
+        self.projects = {p.id: deepcopy(p) for p in PROJECTS}
+        self.daily_logs = {x.id: deepcopy(x) for x in DAILY}
+        self.rfis = {x.id: deepcopy(x) for x in RFIS}
+        self.submittals = {x.id: deepcopy(x) for x in SUBS}
+        self.punches = {x.id: deepcopy(x) for x in PUNCH}
+        self.inspections = {x.id: deepcopy(x) for x in INSPECTIONS}
+        self.incidents = {x.id: deepcopy(x) for x in INCIDENTS}
+        self.drawings = {x.id: deepcopy(x) for x in DRAWINGS}
+        self.schedule = {x.id: deepcopy(x) for x in SCHEDULE}
+        self.budget_lines = {x.id: deepcopy(x) for x in BUDGET}
+        self.change_orders = {x.id: deepcopy(x) for x in CHANGES}
+        self.timesheets = {x.id: deepcopy(x) for x in TIMESHEETS}
+        self.meetings = {x.id: deepcopy(x) for x in MEETINGS}
+        self.directory = {x.id: deepcopy(x) for x in DIRECTORY}
+        self._save()
+
+    def _ensure_crm(self) -> None:
+        saved = False
+        if not self.crm_contacts:
+            self.crm_contacts = {c.id: deepcopy(c) for c in CRM_CONTACTS}
+            saved = True
+        if not self.leads:
+            self.leads = {l.id: deepcopy(l) for l in CRM_LEADS}
+            saved = True
+        if not self.crm_activities:
+            self.crm_activities = {a.id: deepcopy(a) for a in CRM_ACTIVITIES}
+            saved = True
+        if not self.crm_invoices:
+            self.crm_invoices = {i.id: deepcopy(i) for i in CRM_INVOICES}
+            saved = True
+        for d in CRM_EXTRA_DEALS:
+            if d.id not in self.deals:
+                self.deals[d.id] = deepcopy(d)
+                saved = True
+        if saved:
+            self._save()
+
+    def _seed_phase2(self) -> None:
+        self.specialists = {s.id: deepcopy(s) for s in SPECIALISTS}
+        self.orders = {o.id: deepcopy(o) for o in ORDERS}
+        self.reviews = {r.id: deepcopy(r) for r in REVIEWS}
+        self.deals = {d.id: deepcopy(d) for d in DEALS}
+        self.threads = {t.id: deepcopy(t) for t in THREADS}
+        self.messages = {m.id: deepcopy(m) for m in MESSAGES}
+
+    def _load(self) -> None:
+        if not DB_PATH.exists():
+            self.plots = {p.id: deepcopy(p) for p in PLOTS}
+            self._seed_phase2()
+            self._save_unlocked()
+            return
+        raw = json.loads(DB_PATH.read_text(encoding="utf-8"))
+        for item in raw.get("users", []):
+            user = User.model_validate(item)
+            self._index_user(user)
+        self.credentials = {str(k): str(v) for k, v in (raw.get("credentials") or {}).items()}
+        self.plots = {item["id"]: Plot.model_validate(item) for item in raw.get("plots", [])}
+        self.inquiries = {item["id"]: Inquiry.model_validate(item) for item in raw.get("inquiries", [])}
+        self.favorites = [Favorite.model_validate(item) for item in raw.get("favorites", [])]
+        self.searches = {item["id"]: SavedSearch.model_validate(item) for item in raw.get("searches", [])}
+        self.specialists = {item["id"]: Specialist.model_validate(item) for item in raw.get("specialists", [])}
+        self.orders = {item["id"]: ServiceOrder.model_validate(item) for item in raw.get("orders", [])}
+        self.reviews = {item["id"]: Review.model_validate(item) for item in raw.get("reviews", [])}
+        self.deals = {item["id"]: Deal.model_validate(item) for item in raw.get("deals", [])}
+        self.threads = {item["id"]: ChatThread.model_validate(item) for item in raw.get("threads", [])}
+        self.messages = {item["id"]: ChatMessage.model_validate(item) for item in raw.get("messages", [])}
+        self.materials = {item["id"]: Material.model_validate(item) for item in raw.get("materials", [])}
+        self.material_orders = {item["id"]: MaterialOrder.model_validate(item) for item in raw.get("material_orders", [])}
+        self.projects = {item["id"]: Project.model_validate(item) for item in raw.get("projects", [])}
+        self.daily_logs = {item["id"]: DailyLog.model_validate(item) for item in raw.get("daily_logs", [])}
+        self.rfis = {item["id"]: RFI.model_validate(item) for item in raw.get("rfis", [])}
+        self.submittals = {item["id"]: Submittal.model_validate(item) for item in raw.get("submittals", [])}
+        self.punches = {item["id"]: PunchItem.model_validate(item) for item in raw.get("punches", [])}
+        self.inspections = {item["id"]: Inspection.model_validate(item) for item in raw.get("inspections", [])}
+        self.incidents = {item["id"]: Incident.model_validate(item) for item in raw.get("incidents", [])}
+        self.drawings = {item["id"]: Drawing.model_validate(item) for item in raw.get("drawings", [])}
+        self.schedule = {item["id"]: ScheduleTask.model_validate(item) for item in raw.get("schedule", [])}
+        self.budget_lines = {item["id"]: BudgetLine.model_validate(item) for item in raw.get("budget_lines", [])}
+        self.change_orders = {item["id"]: ChangeOrder.model_validate(item) for item in raw.get("change_orders", [])}
+        self.timesheets = {item["id"]: Timesheet.model_validate(item) for item in raw.get("timesheets", [])}
+        self.meetings = {item["id"]: Meeting.model_validate(item) for item in raw.get("meetings", [])}
+        self.directory = {item["id"]: DirectoryRow.model_validate(item) for item in raw.get("directory", [])}
+        self.leads = {item["id"]: Lead.model_validate(item) for item in raw.get("leads", [])}
+        self.crm_contacts = {item["id"]: CrmContact.model_validate(item) for item in raw.get("crm_contacts", [])}
+        self.crm_activities = {item["id"]: CrmActivity.model_validate(item) for item in raw.get("crm_activities", [])}
+        self.crm_invoices = {item["id"]: CrmInvoice.model_validate(item) for item in raw.get("crm_invoices", [])}
+        seed_by_id = {p.id: p for p in PLOTS}
+        filled = False
+        for pid, plot in self.plots.items():
+            seed = seed_by_id.get(pid)
+            if seed and not plot.photos:
+                plot.photos = list(seed.photos)
+                filled = True
+        if not self.plots:
+            self.plots = {p.id: deepcopy(p) for p in PLOTS}
+            filled = True
+        if not self.specialists:
+            self._seed_phase2()
+            filled = True
+        if filled:
+            self._save_unlocked()
+
+    def _save_unlocked(self) -> None:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "plots": [p.model_dump() for p in self.plots.values()],
+            "inquiries": [i.model_dump() for i in self.inquiries.values()],
+            "favorites": [f.model_dump() for f in self.favorites],
+            "searches": [s.model_dump() for s in self.searches.values()],
+            "specialists": [s.model_dump() for s in self.specialists.values()],
+            "orders": [o.model_dump() for o in self.orders.values()],
+            "reviews": [r.model_dump() for r in self.reviews.values()],
+            "deals": [d.model_dump() for d in self.deals.values()],
+            "leads": [x.model_dump() for x in self.leads.values()],
+            "crm_contacts": [x.model_dump() for x in self.crm_contacts.values()],
+            "crm_activities": [x.model_dump() for x in self.crm_activities.values()],
+            "crm_invoices": [x.model_dump() for x in self.crm_invoices.values()],
+            "threads": [t.model_dump() for t in self.threads.values()],
+            "messages": [m.model_dump() for m in self.messages.values()],
+            "users": [u.model_dump() for u in self.users_by_id.values()],
+            "credentials": self.credentials,
+            "materials": [m.model_dump() for m in self.materials.values()],
+            "material_orders": [o.model_dump() for o in self.material_orders.values()],
+            "projects": [p.model_dump() for p in self.projects.values()],
+            "daily_logs": [x.model_dump() for x in self.daily_logs.values()],
+            "rfis": [x.model_dump() for x in self.rfis.values()],
+            "submittals": [x.model_dump() for x in self.submittals.values()],
+            "punches": [x.model_dump() for x in self.punches.values()],
+            "inspections": [x.model_dump() for x in self.inspections.values()],
+            "incidents": [x.model_dump() for x in self.incidents.values()],
+            "drawings": [x.model_dump() for x in self.drawings.values()],
+            "schedule": [x.model_dump() for x in self.schedule.values()],
+            "budget_lines": [x.model_dump() for x in self.budget_lines.values()],
+            "change_orders": [x.model_dump() for x in self.change_orders.values()],
+            "timesheets": [x.model_dump() for x in self.timesheets.values()],
+            "meetings": [x.model_dump() for x in self.meetings.values()],
+            "directory": [x.model_dump() for x in self.directory.values()],
+        }
+        tmp = DB_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(DB_PATH)
+
+    def _save(self) -> None:
+        with self._lock:
+            self._save_unlocked()
+
+    def db_path(self) -> str:
+        return str(DB_PATH)
+
+    def get_user_by_email(self, email: str) -> User | None:
+        return self.users.get(email.lower().strip())
+
+    def get_user(self, user_id: str) -> User | None:
+        return self.users_by_id.get(user_id)
+
+    def list_plots(
+        self,
+        *,
+        q: str | None = None,
+        purpose: str | None = None,
+        district: str | None = None,
+        gas: str | None = None,
+        electricity: str | None = None,
+        water: str | None = None,
+        verified: bool | None = None,
+        status: str | None = "published",
+        owner_id: str | None = None,
+        lat: float | None = None,
+        lng: float | None = None,
+        radius_km: float | None = None,
+    ) -> list[Plot]:
+        items = list(self.plots.values())
+        if status:
+            items = [p for p in items if p.status == status]
+        if owner_id:
+            items = [p for p in items if p.owner_id == owner_id]
+        if purpose:
+            items = [p for p in items if p.purpose == purpose]
+        if district:
+            items = [p for p in items if district.lower() in p.district.lower()]
+        if gas:
+            items = [p for p in items if p.gas == gas]
+        if electricity:
+            items = [p for p in items if p.electricity == electricity]
+        if water:
+            items = [p for p in items if p.water == water]
+        if verified is True:
+            items = [p for p in items if p.verified]
+        if q:
+            needle = q.lower()
+            items = [
+                p
+                for p in items
+                if needle in p.title_ru.lower()
+                or needle in p.title_kk.lower()
+                or needle in p.district.lower()
+                or needle in p.cadastral_no
+                or needle in p.purpose
+            ]
+        if lat is not None and lng is not None and radius_km:
+            origin = (lat, lng)
+            kept: list[Plot] = []
+            for p in items:
+                c = centroid(p.polygon)
+                if c and haversine_km(origin, c) <= radius_km:
+                    kept.append(p)
+            items = kept
+        return sorted(items, key=lambda p: p.price_kzt)
+
+    def get_plot(self, plot_id: str) -> Plot | None:
+        if plot_id in self.plots:
+            return self.plots[plot_id]
+        for p in self.plots.values():
+            if p.slug == plot_id:
+                return p
+        return None
+
+    def create_plot(self, owner: User, body: PlotCreate) -> Plot:
+        cad = body.cadastral_no.strip()
+        if not CADASTRE.match(cad):
+            raise ValueError("Кадастровый номер: формат 20-315-027-142")
+        poly = list(body.polygon or [])
+        if len(poly) >= 3 and poly[0] != poly[-1]:
+            poly.append(poly[0])
+        if len(poly) < 4:
+            raise ValueError("Нарисуйте контур участка на карте (минимум 3 точки)")
+        with self._lock:
+            pid = f"p-{uuid4().hex[:8]}"
+            plot = Plot(
+                id=pid,
+                slug=_slugify(body.title_ru) + "-" + pid[-4:],
+                owner_id=owner.id,
+                cadastral_no=cad,
+                title_ru=body.title_ru,
+                title_kk=body.title_kk or body.title_ru,
+                district=body.district,
+                purpose=body.purpose,
+                area_sotka=body.area_sotka,
+                price_kzt=body.price_kzt,
+                divisible=body.divisible,
+                land_category=body.land_category,
+                status="pending",
+                verified=False,
+                electricity=body.electricity,
+                gas=body.gas,
+                water=body.water,
+                sewage=body.sewage,
+                access_road=body.access_road,
+                relief=body.relief,
+                soil=body.soil,
+                encumbrances=body.encumbrances,
+                registered_buildings=body.registered_buildings,
+                red_lines=body.red_lines,
+                power_protection_zone=body.power_protection_zone,
+                gas_protection_zone=body.gas_protection_zone,
+                water_protection=body.water_protection,
+                docs=body.docs,
+                description_ru=body.description_ru,
+                description_kk=body.description_kk,
+                polygon=poly,
+                photos=list(body.photos),
+            )
+            plot.trust_score = trust_score(plot, verified=False)
+            self.plots[pid] = plot
+            self._save_unlocked()
+            return plot
+
+    def moderate(self, plot_id: str, action: str, comment: str = "") -> Plot | None:
+        plot = self.get_plot(plot_id)
+        if not plot:
+            return None
+        with self._lock:
+            if action == "approve":
+                plot.status = "published"
+                plot.verified = bool(CADASTRE.match(plot.cadastral_no))
+                plot.moderation_note = comment
+            elif action == "revision":
+                plot.status = "needs_revision"
+                plot.verified = False
+                plot.moderation_note = comment or "Нужна доработка"
+            elif action == "reject":
+                plot.status = "rejected"
+                plot.verified = False
+                plot.moderation_note = comment
+            plot.trust_score = trust_score(plot, verified=plot.verified)
+            self.plots[plot.id] = plot
+            self._save_unlocked()
+            return plot
+
+    def queue(self) -> list[Plot]:
+        return [p for p in self.plots.values() if p.status in ("pending", "needs_revision")]
+
+    def add_inquiry(self, plot: Plot, body: InquiryCreate, buyer_id: str | None) -> Inquiry:
+        with self._lock:
+            iid = f"i-{uuid4().hex[:8]}"
+            item = Inquiry(
+                id=iid,
+                plot_id=plot.id,
+                plot_title=plot.title_ru,
+                buyer_id=buyer_id,
+                name=body.name.strip(),
+                phone=body.phone.strip(),
+                message=body.message.strip(),
+                created_at=_now(),
+            )
+            self.inquiries[iid] = item
+            self._save_unlocked()
+        self.deal_from_inquiry(item)
+        return item
+
+    def list_inquiries(self, user: User) -> list[Inquiry]:
+        if user.role in ("moderator", "admin"):
+            return list(self.inquiries.values())
+        if user.role == "owner":
+            owned = {p.id for p in self.plots.values() if p.owner_id == user.id}
+            return [i for i in self.inquiries.values() if i.plot_id in owned]
+        return [i for i in self.inquiries.values() if i.buyer_id == user.id]
+
+    def toggle_favorite(self, user_id: str, plot_id: str) -> bool:
+        with self._lock:
+            existing = next((f for f in self.favorites if f.user_id == user_id and f.plot_id == plot_id), None)
+            if existing:
+                self.favorites = [f for f in self.favorites if f is not existing]
+                self._save_unlocked()
+                return False
+            self.favorites.append(Favorite(user_id=user_id, plot_id=plot_id))
+            self._save_unlocked()
+            return True
+
+    def list_favorites(self, user_id: str) -> list[Plot]:
+        ids = {f.plot_id for f in self.favorites if f.user_id == user_id}
+        return [p for p in self.plots.values() if p.id in ids and p.status == "published"]
+
+    def is_favorite(self, user_id: str, plot_id: str) -> bool:
+        return any(f.user_id == user_id and f.plot_id == plot_id for f in self.favorites)
+
+    def update_plot(self, plot_id: str, owner: User, body: PlotCreate) -> Plot:
+        plot = self.get_plot(plot_id)
+        if not plot:
+            raise ValueError("Участок не найден")
+        if plot.owner_id != owner.id and owner.role != "admin":
+            raise PermissionError("Чужой участок")
+        if plot.status not in ("draft", "pending", "needs_revision"):
+            raise ValueError("Редактировать можно черновик или объявление на доработке")
+        cad = body.cadastral_no.strip()
+        if not CADASTRE.match(cad):
+            raise ValueError("Кадастровый номер: формат 20-315-027-142")
+        poly = list(body.polygon or plot.polygon)
+        if len(poly) >= 3 and poly[0] != poly[-1]:
+            poly.append(poly[0])
+        if len(poly) < 4:
+            raise ValueError("Нарисуйте контур участка на карте (минимум 3 точки)")
+        with self._lock:
+            plot.cadastral_no = cad
+            plot.title_ru = body.title_ru
+            plot.title_kk = body.title_kk or body.title_ru
+            plot.district = body.district
+            plot.purpose = body.purpose
+            plot.area_sotka = body.area_sotka
+            plot.price_kzt = body.price_kzt
+            plot.divisible = body.divisible
+            plot.land_category = body.land_category
+            plot.electricity = body.electricity
+            plot.gas = body.gas
+            plot.water = body.water
+            plot.sewage = body.sewage
+            plot.access_road = body.access_road
+            plot.relief = body.relief
+            plot.soil = body.soil
+            plot.encumbrances = body.encumbrances
+            plot.registered_buildings = body.registered_buildings
+            plot.red_lines = body.red_lines
+            plot.power_protection_zone = body.power_protection_zone
+            plot.gas_protection_zone = body.gas_protection_zone
+            plot.water_protection = body.water_protection
+            plot.docs = body.docs
+            plot.description_ru = body.description_ru
+            plot.description_kk = body.description_kk
+            plot.polygon = poly
+            plot.photos = list(body.photos)
+            plot.trust_score = trust_score(plot, verified=False)
+            self.plots[plot.id] = plot
+            self._save_unlocked()
+            return plot
+
+    def submit_plot(self, plot_id: str, owner: User) -> Plot:
+        plot = self.get_plot(plot_id)
+        if not plot:
+            raise ValueError("Участок не найден")
+        if plot.owner_id != owner.id and owner.role != "admin":
+            raise PermissionError("Чужой участок")
+        if plot.status not in ("draft", "needs_revision", "pending"):
+            raise ValueError("Нельзя повторно отправить это объявление")
+        with self._lock:
+            plot.status = "pending"
+            plot.verified = False
+            self.plots[plot.id] = plot
+            self._save_unlocked()
+            return plot
+
+    def suggest(self, q: str, limit: int = 8) -> list[dict]:
+        needle = q.lower().strip()
+        if len(needle) < 2:
+            return []
+        seen: set[str] = set()
+        out: list[dict] = []
+        for p in self.plots.values():
+            if p.status != "published":
+                continue
+            for kind, value in (
+                ("title", p.title_ru),
+                ("title", p.title_kk),
+                ("district", p.district),
+                ("cadastral", p.cadastral_no),
+            ):
+                if needle in value.lower() and value not in seen:
+                    seen.add(value)
+                    out.append({"kind": kind, "value": value, "slug": p.slug})
+                    if len(out) >= limit:
+                        return out
+        return out
+
+    def save_search(self, user: User, title: str, params: dict) -> SavedSearch:
+        with self._lock:
+            sid = f"s-{uuid4().hex[:8]}"
+            item = SavedSearch(
+                id=sid,
+                user_id=user.id,
+                title=title or "Поиск",
+                params=params,
+                created_at=_now(),
+            )
+            self.searches[sid] = item
+            self._save_unlocked()
+            return item
+
+    def list_searches(self, user_id: str) -> list[SavedSearch]:
+        return [s for s in self.searches.values() if s.user_id == user_id]
+
+    def delete_search(self, user_id: str, search_id: str) -> bool:
+        item = self.searches.get(search_id)
+        if not item or item.user_id != user_id:
+            return False
+        with self._lock:
+            del self.searches[search_id]
+            self._save_unlocked()
+            return True
+
+    def set_inquiry_status(self, user: User, inquiry_id: str, status: str) -> Inquiry | None:
+        item = self.inquiries.get(inquiry_id)
+        if not item:
+            return None
+        plot = self.get_plot(item.plot_id)
+        allowed = user.role in ("moderator", "admin") or (plot and plot.owner_id == user.id)
+        if not allowed:
+            raise PermissionError("Нет доступа")
+        with self._lock:
+            item.status = status  # type: ignore[assignment]
+            self.inquiries[item.id] = item
+            self._save_unlocked()
+            return item
+
+
+    def rating_of(self, specialist_id: str) -> tuple[float, int]:
+        stars = [r.stars for r in self.reviews.values() if r.specialist_id == specialist_id]
+        if not stars:
+            return 0.0, 0
+        return round(sum(stars) / len(stars), 2), len(stars)
+
+    def specialist_public(self, spec: Specialist) -> dict:
+        avg, n = self.rating_of(spec.id)
+        return {**spec.model_dump(), "rating": avg, "reviews_count": n}
+
+    def get_specialist(self, sid: str) -> Specialist | None:
+        if sid in self.specialists:
+            return self.specialists[sid]
+        for s in self.specialists.values():
+            if s.slug == sid or s.user_id == sid:
+                return s
+        return None
+
+    def list_specialists(self, category: str | None = None, q: str | None = None) -> list[dict]:
+        items = list(self.specialists.values())
+        if category:
+            items = [s for s in items if s.category == category]
+        if q:
+            n = q.lower()
+            items = [
+                s
+                for s in items
+                if n in s.company_ru.lower() or n in s.company_kk.lower() or n in s.category or n in s.city.lower()
+            ]
+        return [self.specialist_public(s) for s in items]
+
+    def create_order(self, client: User, body: OrderCreate) -> ServiceOrder:
+        spec = self.get_specialist(body.specialist_id)
+        if not spec:
+            raise ValueError("Специалист не найден")
+        funnel = "design" if spec.category in ("survey", "architecture", "legal") else "construction"
+        stage = FUNNEL_STAGES[funnel][0]
+        with self._lock:
+            oid = f"ord-{uuid4().hex[:8]}"
+            tid = f"th-{uuid4().hex[:8]}"
+            did = f"deal-{uuid4().hex[:8]}"
+            now = _now()
+            order = ServiceOrder(
+                id=oid,
+                specialist_id=spec.id,
+                client_id=client.id,
+                plot_id=body.plot_id,
+                message=body.message,
+                status="requested",
+                deal_id=did,
+                thread_id=tid,
+                created_at=now,
+                updated_at=now,
+            )
+            thread = ChatThread(
+                id=tid,
+                user_a=client.id,
+                user_b=spec.user_id,
+                plot_id=body.plot_id,
+                order_id=oid,
+                title=spec.company_ru,
+                updated_at=now,
+            )
+            deal = Deal(
+                id=did,
+                funnel=funnel,  # type: ignore[arg-type]
+                stage=stage,
+                title=f"{spec.company_ru} — заказ",
+                client_id=client.id,
+                specialist_id=spec.id,
+                plot_id=body.plot_id,
+                order_id=oid,
+                created_at=now,
+            )
+            if body.message:
+                mid = f"m-{uuid4().hex[:8]}"
+                self.messages[mid] = ChatMessage(
+                    id=mid,
+                    thread_id=tid,
+                    author_id=client.id,
+                    text=body.message,
+                    created_at=now,
+                )
+            self.orders[oid] = order
+            self.threads[tid] = thread
+            self.deals[did] = deal
+            self._save_unlocked()
+            return order
+
+    def list_orders(self, user: User) -> list[ServiceOrder]:
+        if user.role in ("moderator", "admin"):
+            return list(self.orders.values())
+        spec = next((s for s in self.specialists.values() if s.user_id == user.id), None)
+        if spec:
+            return [o for o in self.orders.values() if o.specialist_id == spec.id]
+        return [o for o in self.orders.values() if o.client_id == user.id]
+
+    def set_order_status(self, user: User, order_id: str, status: str, quote_kzt: int | None = None) -> ServiceOrder:
+        order = self.orders.get(order_id)
+        if not order:
+            raise ValueError("Заказ не найден")
+        spec = self.get_specialist(order.specialist_id)
+        is_spec = spec and spec.user_id == user.id
+        is_client = order.client_id == user.id
+        if user.role not in ("admin", "moderator") and not is_spec and not is_client:
+            raise PermissionError("Нет доступа к заказу")
+        if status == "completed" and not (is_spec or user.role in ("admin", "moderator")):
+            raise PermissionError("Закрыть заказ может исполнитель")
+        with self._lock:
+            order.status = status  # type: ignore[assignment]
+            if quote_kzt is not None:
+                order.quote_kzt = quote_kzt
+            order.updated_at = _now()
+            if order.deal_id and order.deal_id in self.deals:
+                deal = self.deals[order.deal_id]
+                if status == "quoted":
+                    deal.stage = "quote" if deal.funnel == "construction" else "sketch"
+                    if quote_kzt:
+                        deal.amount_kzt = quote_kzt
+                if status == "completed":
+                    deal.stage = "handover" if deal.funnel == "design" else "acceptance"
+            self.orders[order.id] = order
+            self._save_unlocked()
+            return order
+
+    def add_review(self, client: User, order_id: str, body: ReviewCreate) -> Review:
+        order = self.orders.get(order_id)
+        if not order or order.client_id != client.id:
+            raise PermissionError("Отзыв только от заказчика сделки")
+        if order.status != "completed":
+            raise ValueError("Отзыв после закрытого заказа (как у Kaspi)")
+        if any(r.order_id == order_id for r in self.reviews.values()):
+            raise ValueError("Отзыв уже оставлен")
+        with self._lock:
+            rid = f"rev-{uuid4().hex[:8]}"
+            item = Review(
+                id=rid,
+                order_id=order.id,
+                specialist_id=order.specialist_id,
+                client_id=client.id,
+                stars=body.stars,
+                text=body.text,
+                created_at=_now(),
+            )
+            self.reviews[rid] = item
+            self._save_unlocked()
+            return item
+
+    def list_reviews(self, specialist_id: str) -> list[Review]:
+        spec = self.get_specialist(specialist_id)
+        sid = spec.id if spec else specialist_id
+        return [r for r in self.reviews.values() if r.specialist_id == sid]
+
+    def list_deals(self, user: User, funnel: str | None = None) -> list[Deal]:
+        items = list(self.deals.values())
+        if funnel:
+            items = [d for d in items if d.funnel == funnel]
+        if user.role in ("admin", "moderator"):
+            pass
+        elif user.role == "supplier":
+            items = [d for d in items if d.supplier_id == user.id or d.client_id == user.id]
+        elif user.role == "owner":
+            items = [d for d in items if d.owner_id == user.id or d.client_id == user.id or d.funnel == "land_sale"]
+        else:
+            spec = next((s for s in self.specialists.values() if s.user_id == user.id), None)
+            if spec:
+                items = [d for d in items if d.specialist_id == spec.id or d.client_id == user.id]
+            else:
+                items = [d for d in items if d.client_id == user.id or user.role in ("admin", "moderator")]
+        return sorted(items, key=lambda d: d.created_at, reverse=True)
+
+    def get_deal(self, deal_id: str) -> Deal | None:
+        return self.deals.get(deal_id)
+
+    def create_deal(self, user: User, body: DealCreate) -> Deal:
+        with self._lock:
+            did = f"deal-{uuid4().hex[:8]}"
+            deal = Deal(
+                id=did,
+                funnel=body.funnel,
+                stage=body.stage or "lead",
+                title=body.title,
+                amount_kzt=body.amount_kzt,
+                client_name=body.client_name or user.full_name,
+                client_phone=body.client_phone or user.phone,
+                client_id=user.id,
+                plot_id=body.plot_id,
+                specialist_id=body.specialist_id,
+                responsible_name="Асет Сагинтаев",
+                source="Прямой ввод",
+                created_at=_now(),
+            )
+            self.deals[did] = deal
+            if body.notes:
+                act_id = f"act-{uuid4().hex[:8]}"
+                self.crm_activities[act_id] = CrmActivity(
+                    id=act_id,
+                    deal_id=did,
+                    activity_type="note",
+                    title="Первичная заметка к сделке",
+                    description=body.notes,
+                    completed=True,
+                    author_name=user.full_name,
+                    created_at=_now(),
+                )
+            self._save_unlocked()
+            return deal
+
+    def move_deal(self, user: User, deal_id: str, body: DealMove) -> Deal:
+        deal = self.deals.get(deal_id)
+        if not deal:
+            raise ValueError("Сделка не найдена")
+        stages = FUNNEL_STAGES.get(deal.funnel, [])
+        if body.stage not in stages:
+            raise ValueError("Неизвестный этап воронки")
+        with self._lock:
+            prev_stage = deal.stage
+            deal.stage = body.stage
+            deal.updated_at = _now()
+            self.deals[deal.id] = deal
+            act_id = f"act-{uuid4().hex[:8]}"
+            self.crm_activities[act_id] = CrmActivity(
+                id=act_id,
+                deal_id=deal.id,
+                activity_type="note",
+                title=f"Смена стадии: {prev_stage} → {body.stage}",
+                description=f"Этап изменен пользователем {user.full_name}",
+                completed=True,
+                author_name=user.full_name,
+                created_at=_now(),
+            )
+            self._save_unlocked()
+            return deal
+
+    def deal_from_inquiry(self, inquiry: Inquiry) -> Deal | None:
+        plot = self.get_plot(inquiry.plot_id)
+        with self._lock:
+            did = f"deal-{uuid4().hex[:8]}"
+            deal = Deal(
+                id=did,
+                funnel="land_sale",
+                stage="lead",
+                title=f"Заявка: {inquiry.plot_title}",
+                client_id=inquiry.buyer_id,
+                client_name=inquiry.name,
+                client_phone=inquiry.phone,
+                owner_id=plot.owner_id if plot else None,
+                plot_id=inquiry.plot_id,
+                plot_title=inquiry.plot_title,
+                inquiry_id=inquiry.id,
+                amount_kzt=plot.price_kzt if plot else 0,
+                source="Заявка с сайта",
+                responsible_name="Асет Сагинтаев",
+                created_at=_now(),
+            )
+            self.deals[did] = deal
+            lid = f"lead-{uuid4().hex[:8]}"
+            self.leads[lid] = Lead(
+                id=lid,
+                title=f"Интерес: {inquiry.plot_title}",
+                name=inquiry.name,
+                phone=inquiry.phone,
+                source="Заявка на участок",
+                status="contacted",
+                funnel_target="land_sale",
+                budget_kzt=plot.price_kzt if plot else 0,
+                plot_id=inquiry.plot_id,
+                notes=inquiry.message,
+                deal_id=did,
+                created_at=_now(),
+            )
+            act_id = f"act-{uuid4().hex[:8]}"
+            self.crm_activities[act_id] = CrmActivity(
+                id=act_id,
+                deal_id=did,
+                activity_type="call",
+                title=f"Звонок: {inquiry.name} ({inquiry.phone})",
+                description=f"Интерес к участку {inquiry.plot_title}. Сообщение: {inquiry.message}",
+                due_date=_now()[:10],
+                author_name="Система",
+                created_at=_now(),
+            )
+            self._save_unlocked()
+            return deal
+
+    def list_leads(self, user: User, status: str | None = None) -> list[Lead]:
+        items = list(self.leads.values())
+        if status:
+            items = [l for l in items if l.status == status]
+        return sorted(items, key=lambda l: l.created_at, reverse=True)
+
+    def create_lead(self, body: LeadCreate) -> Lead:
+        with self._lock:
+            lid = f"lead-{uuid4().hex[:8]}"
+            lead = Lead(
+                id=lid,
+                title=body.title,
+                name=body.name,
+                phone=body.phone,
+                email=body.email,
+                source=body.source,
+                funnel_target=body.funnel_target,
+                budget_kzt=body.budget_kzt,
+                plot_id=body.plot_id,
+                notes=body.notes,
+                created_at=_now(),
+            )
+            self.leads[lid] = lead
+            act_id = f"act-{uuid4().hex[:8]}"
+            self.crm_activities[act_id] = CrmActivity(
+                id=act_id,
+                lead_id=lid,
+                activity_type="call",
+                title=f"Звонок новому лиду: {body.name}",
+                description=f"Телефон: {body.phone}. Источник: {body.source}. Примечания: {body.notes}",
+                due_date=_now()[:10],
+                author_name="Система",
+                created_at=_now(),
+            )
+            self._save_unlocked()
+            return lead
+
+    def convert_lead(self, user: User, lead_id: str, body: LeadConvert) -> Deal:
+        lead = self.leads.get(lead_id)
+        if not lead:
+            raise ValueError("Лид не найден")
+        with self._lock:
+            did = f"deal-{uuid4().hex[:8]}"
+            deal = Deal(
+                id=did,
+                funnel=body.funnel,
+                stage="lead" if body.funnel == "land_sale" else "brief" if body.funnel == "design" else "request" if body.funnel == "construction" else "quote_req" if body.funnel == "materials" else "consult",
+                title=body.deal_title or lead.title,
+                client_name=lead.name,
+                client_phone=lead.phone,
+                amount_kzt=body.amount_kzt or lead.budget_kzt,
+                plot_id=lead.plot_id,
+                source=lead.source,
+                responsible_name="Асет Сагинтаев",
+                created_at=_now(),
+            )
+            self.deals[did] = deal
+            lead.status = "converted"
+            lead.deal_id = did
+            self.leads[lead.id] = lead
+            for a in self.crm_activities.values():
+                if a.lead_id == lead_id and not a.deal_id:
+                    a.deal_id = did
+            act_id = f"act-{uuid4().hex[:8]}"
+            self.crm_activities[act_id] = CrmActivity(
+                id=act_id,
+                deal_id=did,
+                activity_type="note",
+                title=f"Лид успешно сконвертирован в сделку ({body.funnel})",
+                description=f"Менеджер {user.full_name} перевел лид '{lead.title}' в воронку сделок.",
+                completed=True,
+                author_name=user.full_name,
+                created_at=_now(),
+            )
+            self._save_unlocked()
+            return deal
+
+    def list_crm_contacts(self, q: str | None = None, ctype: str | None = None) -> list[CrmContact]:
+        items = list(self.crm_contacts.values())
+        if ctype:
+            items = [c for c in items if c.contact_type == ctype]
+        if q:
+            term = q.lower()
+            items = [
+                c for c in items
+                if term in c.name.lower() or term in c.company_name.lower() or term in c.phone or term in c.bin_iin
+            ]
+        return sorted(items, key=lambda c: c.created_at, reverse=True)
+
+    def create_crm_contact(self, body: CrmContactCreate) -> CrmContact:
+        with self._lock:
+            cid = f"cnt-{uuid4().hex[:8]}"
+            contact = CrmContact(
+                id=cid,
+                name=body.name,
+                company_name=body.company_name,
+                bin_iin=body.bin_iin,
+                phone=body.phone,
+                email=body.email,
+                city=body.city or "Алматы",
+                contact_type=body.contact_type,
+                notes=body.notes,
+                created_at=_now(),
+            )
+            self.crm_contacts[cid] = contact
+            self._save_unlocked()
+            return contact
+
+    def list_crm_activities(self, deal_id: str | None = None, lead_id: str | None = None) -> list[CrmActivity]:
+        items = list(self.crm_activities.values())
+        if deal_id:
+            items = [a for a in items if a.deal_id == deal_id]
+        elif lead_id:
+            items = [a for a in items if a.lead_id == lead_id]
+        return sorted(items, key=lambda a: a.created_at, reverse=True)
+
+    def create_crm_activity(self, user: User, body: CrmActivityCreate) -> CrmActivity:
+        with self._lock:
+            aid = f"act-{uuid4().hex[:8]}"
+            activity = CrmActivity(
+                id=aid,
+                deal_id=body.deal_id,
+                lead_id=body.lead_id,
+                activity_type=body.activity_type,
+                title=body.title,
+                description=body.description,
+                due_date=body.due_date,
+                author_id=user.id,
+                author_name=user.full_name,
+                created_at=_now(),
+            )
+            self.crm_activities[aid] = activity
+            self._save_unlocked()
+            return activity
+
+    def toggle_crm_activity(self, activity_id: str, completed: bool) -> CrmActivity:
+        act = self.crm_activities.get(activity_id)
+        if not act:
+            raise ValueError("Дело/задача не найдена")
+        with self._lock:
+            act.completed = completed
+            act.completed_at = _now() if completed else ""
+            self.crm_activities[act.id] = act
+            self._save_unlocked()
+            return act
+
+    def list_crm_invoices(self, deal_id: str | None = None) -> list[CrmInvoice]:
+        items = list(self.crm_invoices.values())
+        if deal_id:
+            items = [i for i in items if i.deal_id == deal_id]
+        return sorted(items, key=lambda i: i.created_at, reverse=True)
+
+    def create_crm_invoice(self, body: CrmInvoiceCreate) -> CrmInvoice:
+        with self._lock:
+            inv_id = f"inv-{uuid4().hex[:8]}"
+            num = f"ANYQ-INV-{len(self.crm_invoices) + 1:03d}"
+            invoice = CrmInvoice(
+                id=inv_id,
+                deal_id=body.deal_id,
+                number=num,
+                title=body.title,
+                amount_kzt=body.amount_kzt,
+                status="sent",
+                payer_name=body.payer_name,
+                payer_iin_bin=body.payer_iin_bin,
+                escrow_enabled=body.escrow_enabled,
+                due_date=body.due_date or _now()[:10],
+                created_at=_now(),
+            )
+            self.crm_invoices[inv_id] = invoice
+            aid = f"act-{uuid4().hex[:8]}"
+            self.crm_activities[aid] = CrmActivity(
+                id=aid,
+                deal_id=body.deal_id,
+                activity_type="invoice",
+                title=f"Выставлен счет {num} на {body.amount_kzt:,} ₸",
+                description=f"Плательщик: {body.payer_name}. Эскроу: {'Да' if body.escrow_enabled else 'Нет'}",
+                completed=False,
+                due_date=invoice.due_date,
+                author_name="Система",
+                created_at=_now(),
+            )
+            self._save_unlocked()
+            return invoice
+
+    def pay_crm_invoice(self, invoice_id: str) -> CrmInvoice:
+        inv = self.crm_invoices.get(invoice_id)
+        if not inv:
+            raise ValueError("Счет не найден")
+        with self._lock:
+            inv.status = "paid"
+            inv.paid_at = _now()
+            self.crm_invoices[inv.id] = inv
+            for a in self.crm_activities.values():
+                if a.deal_id == inv.deal_id and a.activity_type == "invoice" and inv.number in a.title:
+                    a.completed = True
+                    a.completed_at = inv.paid_at
+            aid = f"act-{uuid4().hex[:8]}"
+            self.crm_activities[aid] = CrmActivity(
+                id=aid,
+                deal_id=inv.deal_id,
+                activity_type="note",
+                title=f"Оплата получена: счет {inv.number} (Kaspi Pay / Эскроу)",
+                description=f"Сумма {inv.amount_kzt:,} ₸ зачислена на эскроу-счет сделки.",
+                completed=True,
+                author_name="Kaspi Эскроу",
+                created_at=_now(),
+            )
+            self._save_unlocked()
+            return inv
+
+    def deal_to_project(self, user: User, deal_id: str) -> Project:
+        deal = self.deals.get(deal_id)
+        if not deal:
+            raise ValueError("Сделка не найдена")
+        with self._lock:
+            pid = f"prj-{deal.id[-8:]}"
+            slug = f"project-{deal.id[-8:]}"
+            project = Project(
+                id=pid,
+                slug=slug,
+                title=f"Стройка: {deal.title}",
+                plot_id=deal.plot_id,
+                owner_id=deal.client_id,
+                contractor_id=deal.specialist_id or "sp-smr",
+                address="г. Алматы",
+                status="active",
+                start=_now()[:10],
+                finish="2027-05-30",
+                budget_kzt=deal.amount_kzt or 25_000_000,
+            )
+            self.projects[pid] = project
+            deal.project_id = pid
+            bl_id = f"bl-{uuid4().hex[:8]}"
+            self.budget_lines[bl_id] = BudgetLine(
+                id=bl_id,
+                project_id=pid,
+                code="01-SMR",
+                title=deal.title,
+                budget_kzt=project.budget_kzt,
+                committed_kzt=project.budget_kzt,
+                actual_kzt=0,
+            )
+            aid = f"act-{uuid4().hex[:8]}"
+            self.crm_activities[aid] = CrmActivity(
+                id=aid,
+                deal_id=deal.id,
+                activity_type="note",
+                title="Сделка переведена в ProjectHub (Строительный проект)",
+                description=f"Создан строительный проект {pid} с бюджетом {project.budget_kzt:,} ₸.",
+                completed=True,
+                author_name=user.full_name,
+                created_at=_now(),
+            )
+            self._save_unlocked()
+            return project
+
+    def crm_analytics(self, user: User) -> dict:
+        deals = list(self.deals.values())
+        total_pipeline_kzt = sum(d.amount_kzt for d in deals if d.stage not in ("lost", "won"))
+        won_deals = [d for d in deals if d.stage == "won" or d.stage in ("handover", "acceptance", "accepted", "registered")]
+        won_sum_kzt = sum(d.amount_kzt for d in won_deals)
+        funnel_counts: dict[str, int] = {}
+        stage_counts: dict[str, int] = {}
+        for d in deals:
+            funnel_counts[d.funnel] = funnel_counts.get(d.funnel, 0) + 1
+            key = f"{d.funnel}:{d.stage}"
+            stage_counts[key] = stage_counts.get(key, 0) + 1
+
+        active_leads = [l for l in self.leads.values() if l.status != "junk"]
+        pending_activities = [a for a in self.crm_activities.values() if not a.completed]
+        return {
+            "total_deals": len(deals),
+            "open_pipeline_kzt": total_pipeline_kzt,
+            "won_deals_count": len(won_deals),
+            "won_deals_kzt": won_sum_kzt,
+            "total_leads": len(self.leads),
+            "active_leads_count": len(active_leads),
+            "pending_activities_count": len(pending_activities),
+            "total_contacts": len(self.crm_contacts),
+            "funnel_counts": funnel_counts,
+            "stage_counts": stage_counts,
+        }
+
+    def list_threads(self, user: User) -> list[ChatThread]:
+        return [t for t in self.threads.values() if t.user_a == user.id or t.user_b == user.id]
+
+    def get_thread(self, tid: str) -> ChatThread | None:
+        return self.threads.get(tid)
+
+    def thread_messages(self, tid: str) -> list[ChatMessage]:
+        return sorted(
+            [m for m in self.messages.values() if m.thread_id == tid],
+            key=lambda m: m.created_at,
+        )
+
+    def open_thread(self, user: User, body: ThreadCreate) -> ChatThread:
+        peer = self.get_user(body.peer_id) or self.get_user_by_email(body.peer_id)
+        spec = self.get_specialist(body.peer_id)
+        peer_id = spec.user_id if spec else (peer.id if peer else "")
+        if not peer_id:
+            raise ValueError("Собеседник не найден")
+        existing = next(
+            (
+                t
+                for t in self.threads.values()
+                if {t.user_a, t.user_b} == {user.id, peer_id} and t.plot_id == body.plot_id
+            ),
+            None,
+        )
+        if existing:
+            return existing
+        with self._lock:
+            tid = f"th-{uuid4().hex[:8]}"
+            thread = ChatThread(
+                id=tid,
+                user_a=user.id,
+                user_b=peer_id,
+                plot_id=body.plot_id,
+                order_id=body.order_id,
+                title=body.title or "Диалог",
+                updated_at=_now(),
+            )
+            self.threads[tid] = thread
+            self._save_unlocked()
+            return thread
+
+    def add_message(self, user: User, thread_id: str, body: MessageCreate) -> ChatMessage:
+        thread = self.threads.get(thread_id)
+        if not thread or user.id not in (thread.user_a, thread.user_b):
+            raise PermissionError("Нет доступа к чату")
+        text = body.text.strip()
+        if not text:
+            raise ValueError("Пустое сообщение")
+        with self._lock:
+            mid = f"m-{uuid4().hex[:8]}"
+            msg = ChatMessage(id=mid, thread_id=thread_id, author_id=user.id, text=text, created_at=_now())
+            self.messages[mid] = msg
+            thread.updated_at = msg.created_at
+            self.threads[thread.id] = thread
+            self._save_unlocked()
+            return msg
+
+    def register(self, email: str, password: str, full_name: str, phone: str, role: str) -> tuple[User, str]:
+        email = email.lower().strip()
+        if "@" not in email or "." not in email:
+            raise ValueError("Некорректный email")
+        if len(password) < 6:
+            raise ValueError("Пароль минимум 6 символов")
+        if len(full_name.strip()) < 2:
+            raise ValueError("Укажите имя")
+        if role not in ("buyer", "owner", "supplier"):
+            raise ValueError("Роль: покупатель, продавец или поставщик")
+        if self.get_user_by_email(email):
+            raise ValueError("Такой email уже зарегистрирован")
+        with self._lock:
+            uid = f"u-{uuid4().hex[:8]}"
+            user = User(id=uid, email=email, full_name=full_name.strip(), role=role, phone=phone.strip())  # type: ignore[arg-type]
+            self._index_user(user)
+            self.credentials[uid] = hash_password(password)
+            self._save_unlocked()
+            return user, make_token(uid)
+
+    def login(self, email: str, password: str) -> tuple[User, str]:
+        user = self.get_user_by_email(email)
+        if not user:
+            raise ValueError("Неверный email или пароль")
+        stored = self.credentials.get(user.id, "")
+        if not stored or not verify_password(password, stored):
+            raise ValueError("Неверный email или пароль")
+        return user, make_token(user.id)
+
+    def list_materials(self, category: str | None = None, q: str | None = None) -> list[Material]:
+        items = [m for m in self.materials.values() if m.published]
+        if category:
+            items = [m for m in items if m.category == category]
+        if q:
+            n = q.lower()
+            items = [m for m in items if n in m.title_ru.lower() or n in m.title_kk.lower() or n in m.category]
+        return sorted(items, key=lambda m: m.price_kzt)
+
+    def get_material(self, mid: str) -> Material | None:
+        if mid in self.materials:
+            return self.materials[mid]
+        for m in self.materials.values():
+            if m.slug == mid:
+                return m
+        return None
+
+    def supplier_materials(self, user_id: str) -> list[Material]:
+        return [m for m in self.materials.values() if m.supplier_id == user_id]
+
+    def create_material(self, supplier: User, body: MaterialCreate) -> Material:
+        if supplier.role not in ("supplier", "admin"):
+            raise PermissionError("Добавлять позиции может поставщик")
+        with self._lock:
+            mid = f"mat-{uuid4().hex[:8]}"
+            item = Material(
+                id=mid,
+                slug=_slugify(body.title_ru) + "-" + mid[-4:],
+                supplier_id=supplier.id,
+                category=body.category,
+                title_ru=body.title_ru,
+                title_kk=body.title_kk or body.title_ru,
+                unit=body.unit,
+                price_kzt=body.price_kzt,
+                min_qty=body.min_qty,
+                stock=body.stock,
+                city=body.city,
+                photo=body.photo,
+                description_ru=body.description_ru,
+                description_kk=body.description_kk,
+            )
+            self.materials[mid] = item
+            self._save_unlocked()
+            return item
+
+    def create_material_order(self, client: User, body: MaterialOrderCreate) -> MaterialOrder:
+        mat = self.get_material(body.material_id)
+        if not mat or not mat.published:
+            raise ValueError("Позиция не найдена")
+        if body.qty < mat.min_qty:
+            raise ValueError(f"Минимум {mat.min_qty} {mat.unit}")
+        with self._lock:
+            oid = f"mo-{uuid4().hex[:8]}"
+            order = MaterialOrder(
+                id=oid,
+                material_id=mat.id,
+                material_title=mat.title_ru,
+                supplier_id=mat.supplier_id,
+                client_id=client.id,
+                qty=body.qty,
+                unit=mat.unit,
+                amount_kzt=int(body.qty * mat.price_kzt),
+                plot_id=body.plot_id,
+                address=body.address,
+                phone=body.phone or client.phone,
+                created_at=_now(),
+            )
+            self.material_orders[oid] = order
+            if mat.stock >= body.qty:
+                mat.stock -= body.qty
+                self.materials[mat.id] = mat
+            did = f"deal-{uuid4().hex[:8]}"
+            deal = Deal(
+                id=did,
+                funnel="materials",
+                stage="quote_req",
+                title=f"Поставка: {mat.title_ru} ({body.qty} {mat.unit})",
+                client_id=client.id,
+                client_name=client.full_name,
+                client_phone=body.phone or client.phone,
+                supplier_id=mat.supplier_id,
+                plot_id=body.plot_id,
+                order_id=oid,
+                amount_kzt=int(body.qty * mat.price_kzt),
+                source="Маркетплейс материалов",
+                responsible_name="Асет Сагинтаев",
+                created_at=_now(),
+            )
+            self.deals[did] = deal
+            act_id = f"act-{uuid4().hex[:8]}"
+            self.crm_activities[act_id] = CrmActivity(
+                id=act_id,
+                deal_id=did,
+                activity_type="task",
+                title=f"Логистика и доставка: {mat.title_ru}",
+                description=f"Заказ {oid}. Адрес: {body.address}. Телефон: {body.phone or client.phone}",
+                due_date=_now()[:10],
+                author_name="Система",
+                created_at=_now(),
+            )
+            self._save_unlocked()
+            return order
+
+    def list_material_orders(self, user: User) -> list[MaterialOrder]:
+        if user.role in ("admin", "moderator"):
+            return list(self.material_orders.values())
+        if user.role == "supplier":
+            return [o for o in self.material_orders.values() if o.supplier_id == user.id]
+        return [o for o in self.material_orders.values() if o.client_id == user.id]
+
+    def set_material_order_status(self, user: User, oid: str, status: str) -> MaterialOrder:
+        order = self.material_orders.get(oid)
+        if not order:
+            raise ValueError("Заказ не найден")
+        allowed = user.role in ("admin", "moderator") or order.supplier_id == user.id
+        if not allowed:
+            raise PermissionError("Статус меняет поставщик")
+        with self._lock:
+            order.status = status  # type: ignore[assignment]
+            self.material_orders[order.id] = order
+            self._save_unlocked()
+            return order
+
+    def get_project(self, pid: str) -> Project | None:
+        if pid in self.projects:
+            return self.projects[pid]
+        for p in self.projects.values():
+            if p.slug == pid or p.plot_id == pid:
+                return p
+        return None
+
+    def list_projects(self) -> list[Project]:
+        return list(self.projects.values())
+
+    def project_snapshot(self, pid: str) -> dict | None:
+        p = self.get_project(pid)
+        if not p:
+            return None
+        lines = [b for b in self.budget_lines.values() if b.project_id == p.id]
+        budget = sum(b.budget_kzt for b in lines) or p.budget_kzt
+        committed = sum(b.committed_kzt for b in lines)
+        actual = sum(b.actual_kzt for b in lines)
+        open_rfi = sum(1 for x in self.rfis.values() if x.project_id == p.id and x.status == "open")
+        open_punch = sum(1 for x in self.punches.values() if x.project_id == p.id and x.status == "open")
+        open_inc = sum(1 for x in self.incidents.values() if x.project_id == p.id and not x.closed)
+        fail_insp = sum(1 for x in self.inspections.values() if x.project_id == p.id and x.result == "fail")
+        health = "green"
+        if open_inc or fail_insp:
+            health = "red"
+        elif open_rfi or open_punch or actual > budget * 0.85:
+            health = "amber"
+        return {
+            "project": p.model_dump(),
+            "health": health,
+            "budget_kzt": budget,
+            "committed_kzt": committed,
+            "actual_kzt": actual,
+            "open_rfi": open_rfi,
+            "open_punch": open_punch,
+            "open_incidents": open_inc,
+            "fail_inspections": fail_insp,
+            "counts": {
+                "daily": sum(1 for x in self.daily_logs.values() if x.project_id == p.id),
+                "rfi": sum(1 for x in self.rfis.values() if x.project_id == p.id),
+                "punch": sum(1 for x in self.punches.values() if x.project_id == p.id),
+                "inspections": sum(1 for x in self.inspections.values() if x.project_id == p.id),
+                "drawings": sum(1 for x in self.drawings.values() if x.project_id == p.id and x.current),
+            },
+        }
+
+    def _by_project(self, table: dict, pid: str) -> list:
+        proj = self.get_project(pid)
+        if not proj:
+            return []
+        return [x for x in table.values() if getattr(x, "project_id", "") == proj.id]
+
+    def add_daily(self, pid: str, body: dict, author_id: str) -> DailyLog:
+        proj = self.get_project(pid)
+        if not proj:
+            raise ValueError("Проект не найден")
+        with self._lock:
+            item = DailyLog(id=f"dl-{uuid4().hex[:8]}", project_id=proj.id, author_id=author_id, **body)
+            self.daily_logs[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def add_rfi(self, pid: str, body: dict) -> RFI:
+        proj = self.get_project(pid)
+        if not proj:
+            raise ValueError("Проект не найден")
+        with self._lock:
+            n = sum(1 for x in self.rfis.values() if x.project_id == proj.id) + 1
+            item = RFI(id=f"rfi-{uuid4().hex[:8]}", project_id=proj.id, number=f"RFI-{n:03d}", created_at=_now(), **body)
+            self.rfis[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def answer_rfi(self, rid: str, answer: str) -> RFI:
+        item = self.rfis.get(rid)
+        if not item:
+            raise ValueError("RFI не найден")
+        with self._lock:
+            item.answer = answer
+            item.status = "answered"
+            self.rfis[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def add_punch(self, pid: str, body: dict) -> PunchItem:
+        proj = self.get_project(pid)
+        if not proj:
+            raise ValueError("Проект не найден")
+        with self._lock:
+            item = PunchItem(id=f"pu-{uuid4().hex[:8]}", project_id=proj.id, created_at=_now(), **body)
+            self.punches[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def set_punch(self, iid: str, status: str) -> PunchItem:
+        item = self.punches.get(iid)
+        if not item:
+            raise ValueError("Пункт не найден")
+        with self._lock:
+            item.status = status  # type: ignore[assignment]
+            self.punches[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def add_inspection(self, pid: str, body: dict) -> Inspection:
+        proj = self.get_project(pid)
+        if not proj:
+            raise ValueError("Проект не найден")
+        with self._lock:
+            item = Inspection(id=f"in-{uuid4().hex[:8]}", project_id=proj.id, **body)
+            self.inspections[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def add_incident(self, pid: str, body: dict) -> Incident:
+        proj = self.get_project(pid)
+        if not proj:
+            raise ValueError("Проект не найден")
+        with self._lock:
+            item = Incident(id=f"inc-{uuid4().hex[:8]}", project_id=proj.id, **body)
+            self.incidents[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def close_incident(self, iid: str) -> Incident:
+        item = self.incidents.get(iid)
+        if not item:
+            raise ValueError("Инцидент не найден")
+        with self._lock:
+            item.closed = True
+            self.incidents[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def add_timesheet(self, pid: str, body: dict) -> Timesheet:
+        proj = self.get_project(pid)
+        if not proj:
+            raise ValueError("Проект не найден")
+        with self._lock:
+            item = Timesheet(id=f"ts-{uuid4().hex[:8]}", project_id=proj.id, **body)
+            self.timesheets[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def add_meeting(self, pid: str, body: dict) -> Meeting:
+        proj = self.get_project(pid)
+        if not proj:
+            raise ValueError("Проект не найден")
+        with self._lock:
+            item = Meeting(id=f"mt-{uuid4().hex[:8]}", project_id=proj.id, **body)
+            self.meetings[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def set_task_pct(self, tid: str, pct: int, status: str | None = None) -> ScheduleTask:
+        item = self.schedule.get(tid)
+        if not item:
+            raise ValueError("Работа не найдена")
+        with self._lock:
+            item.pct = max(0, min(100, pct))
+            if status:
+                item.status = status  # type: ignore[assignment]
+            elif item.pct >= 100:
+                item.status = "done"
+            elif item.pct > 0:
+                item.status = "in_progress"
+            self.schedule[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def add_schedule_task(self, pid: str, body: dict) -> ScheduleTask:
+        proj = self.get_project(pid)
+        if not proj:
+            raise ValueError("Проект не найден")
+        with self._lock:
+            item = ScheduleTask(id=f"st-{uuid4().hex[:8]}", project_id=proj.id, **body)
+            self.schedule[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def update_schedule_task(self, tid: str, body: dict) -> ScheduleTask:
+        item = self.schedule.get(tid)
+        if not item:
+            raise ValueError("Работа не найдена")
+        with self._lock:
+            for k, v in body.items():
+                if v is not None and hasattr(item, k):
+                    setattr(item, k, v)
+            if item.pct >= 100 and item.status != "blocked":
+                item.status = "done"
+            elif item.pct > 0 and item.status == "not_started":
+                item.status = "in_progress"
+            self.schedule[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def delete_schedule_task(self, tid: str) -> None:
+        with self._lock:
+            if tid in self.schedule:
+                del self.schedule[tid]
+                self._save_unlocked()
+
+    def set_change(self, cid: str, status: str) -> ChangeOrder:
+        item = self.change_orders.get(cid)
+        if not item:
+            raise ValueError("CO не найден")
+        with self._lock:
+            item.status = status  # type: ignore[assignment]
+            if status == "approved":
+                # roll into first matching budget line extras
+                extras = next((b for b in self.budget_lines.values() if b.project_id == item.project_id and b.code == "05"), None)
+                if extras:
+                    extras.committed_kzt += item.amount_kzt
+            self.change_orders[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def add_change(self, pid: str, body: dict) -> ChangeOrder:
+        proj = self.get_project(pid)
+        if not proj:
+            raise ValueError("Проект не найден")
+        with self._lock:
+            n = sum(1 for x in self.change_orders.values() if x.project_id == proj.id) + 1
+            item = ChangeOrder(id=f"co-{uuid4().hex[:8]}", project_id=proj.id, number=f"CO-{n:03d}", **body)
+            self.change_orders[item.id] = item
+            self._save_unlocked()
+            return item
+
+
+store = MemoryStore()

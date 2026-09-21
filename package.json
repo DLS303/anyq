@@ -1,0 +1,21 @@
+{
+  "name": "superapp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Супер-приложение: земля, стройка, архитектура РК — скелет фазы 1",
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:web": "npm run dev --prefix apps/web",
+    "dev:api": "apps\\api\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --reload-dir apps/api --app-dir apps/api --host 127.0.0.1 --port 8010",
+    "prod:api": "apps\\api\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --app-dir apps/api --host 127.0.0.1 --port 8010",
+    "prod:web": "npm run start --prefix apps/web -- -p 3000",
+    "prod": "concurrently -k -n api,web -c cyan,magenta \"npm run prod:api\" \"npm run prod:web\"",
+    "start": "npm run prod",
+    "install:api": "apps\\api\\.venv\\Scripts\\python.exe -m pip install -r apps/api/requirements.txt",
+    "build": "npm run build --prefix apps/web"
+  },
+  "workspaces": ["apps/web"],
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

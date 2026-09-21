@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ANYQ · АНЫҚ — превью стекла над землёй</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-canvas: #efe8de;
+      --ink: #1c1915;
+      --ink-mute: rgba(28, 25, 21, 0.58);
+      --primary: #2f5b8a;
+      --primary-ink: #f4f7fa;
+      --clarity: #3e7a62;
+      --caution: #c4923a;
+      --void: #8a847c;
+      --glass-1: rgba(255, 255, 255, 0.08);
+      --glass-2: rgba(255, 255, 255, 0.11);
+      --glass-3: rgba(255, 255, 255, 0.16);
+      --border: rgba(255, 255, 255, 0.38);
+      --spring: 420ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font-family: Inter, system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--bg-canvas);
+    }
+    .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; letter-spacing: 0.02em; }
+    .noise {
+      pointer-events: none;
+      position: fixed; inset: 0; z-index: 0; opacity: 0.035;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+    .grid-bg {
+      pointer-events: none;
+      position: fixed; inset: 0; z-index: 0; opacity: 0.035;
+      background-image:
+        linear-gradient(to right, #2f5b8a 1px, transparent 1px),
+        linear-gradient(to bottom, #2f5b8a 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+    .wrap { position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 24px 20px 80px; }
+    .l1, .l2, .l3 {
+      background: var(--glass-2);
+      backdrop-filter: blur(36px);
+      -webkit-backdrop-filter: blur(36px);
+      border: 1px solid var(--border);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 18px 50px rgba(28,25,21,.10);
+    }
+    .l1 { background: var(--glass-1); backdrop-filter: blur(20px); box-shadow: none; }
+    .l3 { background: var(--glass-3); backdrop-filter: blur(56px); box-shadow: 0 28px 80px rgba(28,25,21,.22); }
+    nav.l1 {
+      position: sticky; top: 14px; z-index: 10;
+      display: flex; align-items: center; gap: 18px;
+      padding: 10px 16px; border-radius: 999px;
+    }
+    .mark {
+      width: 32px; height: 32px; border-radius: 999px;
+      border: 1px solid var(--primary); color: var(--primary);
+      display: grid; place-items: center; font-size: 10px; font-weight: 600; letter-spacing: .12em;
+    }
+    .brand { font-weight: 600; letter-spacing: -0.03em; }
+    .brand small { display: block; font-weight: 400; font-size: 10px; letter-spacing: .22em; color: var(--ink-mute); text-transform: uppercase; }
+    nav a { color: var(--ink-mute); text-decoration: none; font-size: 13px; }
+    .cta {
+      margin-left: auto; background: var(--primary); color: var(--primary-ink);
+      border: 0; border-radius: 999px; padding: 8px 14px; font: inherit; cursor: pointer;
+    }
+    .hero {
+      margin-top: 28px; min-height: 420px; border-radius: 28px; overflow: hidden; position: relative;
+      border: 1px solid rgba(47,91,138,.18);
+    }
+    .hero img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .hero .veil { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(239,232,222,.82), rgba(239,232,222,.2)); }
+    .hero .copy { position: relative; padding: 40px 36px; max-width: 560px; }
+    h1 { font-size: 40px; line-height: 1.15; letter-spacing: -0.02em; font-weight: 500; margin: 8px 0 12px; }
+    .lead { font-size: 17px; line-height: 1.65; color: var(--ink-mute); }
+    .chain { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0; }
+    .node {
+      background: var(--glass-1); backdrop-filter: blur(20px);
+      border: 1px solid var(--border); border-radius: 999px;
+      padding: 8px 12px; font-size: 12px; letter-spacing: .04em;
+    }
+    .node.dim { opacity: .45; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+    .ghost { background: transparent; border: 1px solid rgba(47,91,138,.28); color: var(--primary); border-radius: 999px; padding: 10px 16px; font: inherit; }
+    h2 { font-size: 24px; font-weight: 500; letter-spacing: -0.015em; margin: 48px 0 16px; }
+    .vitrina { display: grid; grid-template-columns: 1.2fr .8fr; gap: 16px; min-height: 480px; }
+    .map {
+      border-radius: 24px; overflow: hidden; position: relative; min-height: 420px;
+      border: 1px solid rgba(47,91,138,.16);
+    }
+    .map img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .cadastre {
+      position: absolute; inset: 18% 22%;
+      border: 1.5px solid var(--primary);
+      box-shadow: 0 0 0 1px rgba(255,255,255,.4);
+      pointer-events: none;
+    }
+    .cross { position: absolute; width: 12px; height: 12px; }
+    .cross::before, .cross::after { content: ""; position: absolute; background: var(--primary); }
+    .cross::before { left: 5px; top: 0; width: 1px; height: 12px; }
+    .cross::after { top: 5px; left: 0; height: 1px; width: 12px; }
+    .cards { display: grid; gap: 12px; }
+    .card {
+      border-radius: 20px; overflow: hidden; cursor: pointer;
+      transition: transform var(--spring), background var(--spring);
+    }
+    .card:hover { transform: translateY(-2px); background: rgba(255,255,255,.14); }
+    .card:active { transform: scale(0.98); }
+    .card img { width: 100%; height: 110px; object-fit: cover; display: block; }
+    .card .body { padding: 14px 16px 16px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      border-radius: 999px; padding: 4px 9px; font-size: 12px;
+      background: var(--glass-1); border: 1px solid var(--border);
+    }
+    .dot { width: 8px; height: 8px; border-radius: 99px; }
+    .ok { background: var(--clarity); }
+    .warn { background: var(--caution); }
+    .na { background: var(--void); }
+    .price { margin: 8px 0 0; font-weight: 500; }
+    .caption { font-size: 12px; letter-spacing: .04em; color: var(--ink-mute); }
+    .passport { display: grid; grid-template-columns: 1.1fr .9fr; gap: 16px; }
+    .pass-map { border-radius: 24px; overflow: hidden; position: relative; min-height: 360px; }
+    .pass-map img { width: 100%; height: 100%; object-fit: cover; }
+    .panel { border-radius: 24px; padding: 22px; }
+    .dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 16px 0; font-size: 15px; }
+    dt { color: var(--ink-mute); font-size: 12px; }
+    .modal-wrap { display: grid; place-items: center; margin-top: 12px; }
+    .modal { width: min(400px, 100%); border-radius: 24px; padding: 24px; position: relative; overflow: hidden; }
+    .modal::before {
+      content: ""; position: absolute; top: -40px; left: -40px; width: 180px; height: 180px;
+      background: radial-gradient(circle, rgba(255,255,255,.35), transparent 70%);
+      pointer-events: none;
+    }
+    .services { display: grid; gap: 10px; margin-top: 16px; }
+    .cap { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-radius: 18px; }
+    .empty {
+      margin-top: 36px; border-radius: 24px; padding: 48px 24px; text-align: center;
+      background: var(--bg-canvas);
+    }
+    @media (max-width: 860px) {
+      .vitrina, .passport { grid-template-columns: 1fr; }
+      h1 { font-size: 32px; }
+      .hero .copy { padding: 28px 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="grid-bg"></div>
+  <div class="wrap">
+    <nav class="l1">
+      <div class="mark">AQ</div>
+      <div class="brand">ANYQ <small>АНЫҚ</small></div>
+      <a href="#vitrina">Участки</a>
+      <a href="#pass">Паспорт</a>
+      <a href="#pay">Отчёт</a>
+      <button class="cta">Смотреть Алматы</button>
+    </nav>
+
+    <section class="hero">
+      <img src="almaty-aerial.jpg" alt="" />
+      <div class="veil"></div>
+      <div class="copy">
+        <p class="caption">ЗЕМЛЯ → ЯСНОСТЬ → ДЕЙСТВИЕ → ДЕНЬГИ → СТРОЙКА</p>
+        <h1>Сначала ясность,<br />потом лопата.</h1>
+        <p class="lead">АНЫҚ — не объявление с фото. Стеклянная панель над участком: кадастр, сети, ограничения, затем геодезист и Kaspi.</p>
+        <div class="chain">
+          <span class="node l1">Земля</span>
+          <span class="node l1">Ясность</span>
+          <span class="node l1">Действие</span>
+          <span class="node l1">Деньги</span>
+          <span class="node l1 dim">Стройка</span>
+        </div>
+        <div class="row">
+          <button class="cta">Смотреть участки Алматы</button>
+          <button class="ghost">Что такое паспорт риска</button>
+        </div>
+      </div>
+    </section>
+
+    <h2 id="vitrina">Витрина — стекло над спутником</h2>
+    <div class="vitrina">
+      <div class="map">
+        <img src="almaty-aerial.jpg" alt="" />
+        <div class="cadastre"></div>
+        <div class="cross" style="top:18%;left:22%"></div>
+        <div class="cross" style="top:18%;right:22%"></div>
+        <div class="cross" style="bottom:18%;left:22%"></div>
+        <div class="cross" style="bottom:18%;right:22%"></div>
+      </div>
+      <div class="cards">
+        <article class="card l2">
+          <img src="plot-parcel.jpg" alt="" />
+          <div class="body">
+            <span class="pill"><span class="dot ok"></span> ясно · можно ИЖС</span>
+            <h3 style="margin:8px 0 0;font-size:18px;font-weight:500">Бесагаш, 8.4 сотки</h3>
+            <p class="price">28 500 000 ₸</p>
+            <p class="caption mono">20-315-•••-•••</p>
+          </div>
+        </article>
+        <article class="card l2">
+          <img src="plot-parcel.jpg" alt="" style="filter:saturate(.85)" />
+          <div class="body">
+            <span class="pill"><span class="dot warn"></span> ограничения · красные линии</span>
+            <h3 style="margin:8px 0 0;font-size:18px;font-weight:500">Медеу, 12 соток</h3>
+            <p class="price">94 000 000 ₸</p>
+            <p class="caption mono">20-314-•••-•••</p>
+          </div>
+        </article>
+      </div>
+    </div>
+
+    <h2 id="pass">Паспорт риска</h2>
+    <div class="passport">
+      <div class="pass-map">
+        <img src="plot-parcel.jpg" alt="" />
+        <div class="cadastre" style="inset:12% 14%"></div>
+      </div>
+      <div class="panel l2">
+        <span class="pill"><span class="dot ok"></span> вердикт: строить можно</span>
+        <h3 style="font-size:24px;font-weight:500;margin:12px 0 4px">ИЖС Бесагаш</h3>
+        <p class="caption">Талгарский район · газ и свет на границе</p>
+        <dl class="dl">
+          <div><dt>Кадастр</dt><dd class="mono">20-315-•••-•••</dd></div>
+          <div><dt>Площадь</dt><dd>8.4 сотки</dd></div>
+          <div><dt>Электричество</dt><dd>подключено</dd></div>
+          <div><dt>Газ</dt><dd>подключено</dd></div>
+          <div><dt>Красные линии</dt><dd>нет</dd></div>
+          <div><dt>Обременения</dt><dd>не выявлены</dd></div>
+        </dl>
+        <div class="row">
+          <button class="cta">Отчёт ясности · 3 900 ₸</button>
+          <button class="ghost">Выезд геодезиста</button>
+        </div>
+        <p class="caption" style="margin-top:12px">не оферта · рабочий альбом участка</p>
+      </div>
+    </div>
+
+    <h2 id="pay">Оплата отчёта · заказ услуги</h2>
+    <div class="passport">
+      <div class="modal-wrap">
+        <div class="modal l3">
+          <p class="caption">ОТЧЁТ ЯСНОСТИ</p>
+          <p style="font-size:32px;margin:8px 0;font-weight:500">3 900 ₸</p>
+          <p class="lead" style="font-size:15px">Кадастр без маски, сети, ограничения, что можно строить на этом контуре.</p>
+          <button class="cta" style="width:100%;margin-top:16px">Оплатить в Kaspi</button>
+          <p class="caption" style="margin-top:10px">После оплаты кадастр откроется на этой карточке.</p>
+        </div>
+      </div>
+      <div>
+        <div class="services">
+          <div class="cap l2"><span>Геодезист · вынос границ</span><strong class="mono">45 000 ₸</strong></div>
+          <div class="cap l2"><span>Комплект ПСД</span><strong class="mono">от 180 000 ₸</strong></div>
+          <div class="cap l2"><span>Разговор с архитектором</span><strong class="mono">25 000 ₸</strong></div>
+        </div>
+        <div class="empty l1">
+          <p class="caption">СОБИРАЕМ ЯСНОСТЬ</p>
+          <p class="lead" style="margin:8px 0 0">В этом районе пока нет участков с паспортом. Стекло пустое — земля на фоне остаётся.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

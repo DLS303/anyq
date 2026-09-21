@@ -1,0 +1,479 @@
+import type {
+  ChatMessage,
+  ChatThread,
+  CrmActivity,
+  CrmAnalytics,
+  CrmContact,
+  CrmInvoice,
+  Deal,
+  DevCalc,
+  Inquiry,
+  Lead,
+  ModuleInfo,
+  Plot,
+  Material,
+  MaterialOrder,
+  Review,
+  ServiceOrder,
+  Specialist,
+  User,
+} from "./types";
+
+export function getApiBase(): string {
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
+      return "http://127.0.0.1:8010";
+    }
+  }
+  return process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8010";
+}
+
+export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8010";
+
+type Envelope<T> = { ok: boolean; data: T; total?: number; detail?: string };
+
+function detailOf(json: unknown, fallback: string) {
+  if (json && typeof json === "object" && "detail" in json) {
+    const d = (json as { detail: unknown }).detail;
+    if (typeof d === "string") return d;
+  }
+  return fallback;
+}
+
+async function request<T>(path: string, init?: RequestInit & { email?: string }): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (!(init?.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("superapp_token");
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+  }
+  if (init?.email) headers.set("x-demo-user", init.email);
+  const res = await fetch(`${getApiBase()}${path}`, {
+    ...init,
+    headers,
+    cache: "no-store",
+  });
+  const json = (await res.json()) as Envelope<T>;
+  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  return json.data;
+}
+
+export function fetchPlots(params: Record<string, string | undefined> = {}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v) q.set(k, v);
+  }
+  const s = q.toString();
+  return request<Plot[]>(`/v1/plots${s ? `?${s}` : ""}`);
+}
+
+export async function fetchPlot(id: string, email?: string) {
+  const headers = new Headers();
+  if (email) headers.set("x-demo-user", email);
+  const res = await fetch(`${API}/v1/plots/${id}`, { headers, cache: "no-store" });
+  const json = (await res.json()) as Envelope<Plot> & { calc?: DevCalc; favorite?: boolean };
+  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  return { plot: json.data, calc: json.calc, favorite: Boolean(json.favorite) };
+}
+
+export function fetchModules() {
+  return request<ModuleInfo[]>("/v1/modules");
+}
+
+export function fetchDemoUsers() {
+  return request<User[]>("/v1/auth/users");
+}
+
+export function fetchMyPlots(email: string) {
+  return request<Plot[]>("/v1/cabinet/plots", { email });
+}
+
+export function createPlot(email: string, body: Record<string, unknown>) {
+  return request<Plot>("/v1/cabinet/plots", {
+    method: "POST",
+    email,
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchQueue(email: string) {
+  return request<Plot[]>("/v1/moderation/queue", { email });
+}
+
+export function moderatePlot(
+  email: string,
+  id: string,
+  action: "approve" | "revision" | "reject",
+  comment = "",
+) {
+  return request<Plot>(`/v1/moderation/${id}`, {
+    method: "POST",
+    email,
+    body: JSON.stringify({ action, comment }),
+  });
+}
+
+export function sendInquiry(
+  plotId: string,
+  body: { name: string; phone: string; message: string },
+  email?: string,
+) {
+  return request<Inquiry>(`/v1/plots/${plotId}/inquiries`, {
+    method: "POST",
+    email,
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchInquiries(email: string) {
+  return request<Inquiry[]>("/v1/cabinet/inquiries", { email });
+}
+
+export function fetchFavorites(email: string) {
+  return request<Plot[]>("/v1/cabinet/favorites", { email });
+}
+
+export function toggleFavorite(email: string, plotId: string) {
+  return request<{ favorite: boolean; plot_id: string }>(`/v1/cabinet/favorites/${plotId}`, {
+    method: "POST",
+    email,
+  });
+}
+
+export function updatePlot(email: string, id: string, body: Record<string, unknown>) {
+  return request<Plot>(`/v1/cabinet/plots/${id}`, {
+    method: "PATCH",
+    email,
+    body: JSON.stringify(body),
+  });
+}
+
+export function submitPlot(email: string, id: string) {
+  return request<Plot>(`/v1/cabinet/plots/${id}/submit`, { method: "POST", email });
+}
+
+export function suggestPlots(q: string) {
+  return request<{ kind: string; value: string; slug: string }[]>(
+    `/v1/plots/suggest?q=${encodeURIComponent(q)}`,
+  );
+}
+
+export async function uploadPhoto(email: string, file: File) {
+  const headers = new Headers();
+  headers.set("x-demo-user", email);
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(`${API}/v1/cabinet/photos`, { method: "POST", headers, body: fd });
+  const json = (await res.json()) as Envelope<{ url: string }>;
+  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  return json.data.url;
+}
+
+export function saveSearch(email: string, title: string, params: Record<string, string | undefined>) {
+  return request("/v1/cabinet/searches", {
+    method: "POST",
+    email,
+    body: JSON.stringify({ title, params }),
+  });
+}
+
+export function fetchSavedSearches(email: string) {
+  return request<{ id: string; title: string; params: Record<string, string> }[]>("/v1/cabinet/searches", {
+    email,
+  });
+}
+
+export function fetchSpecialists(params: Record<string, string | undefined> = {}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
+  const s = q.toString();
+  return request<Specialist[]>(`/v1/specialists${s ? `?${s}` : ""}`);
+}
+
+export async function fetchSpecialist(id: string) {
+  const res = await fetch(`${API}/v1/specialists/${id}`, { cache: "no-store" });
+  const json = (await res.json()) as Envelope<Specialist> & { reviews?: Review[] };
+  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  return { specialist: json.data, reviews: json.reviews ?? [] };
+}
+
+export function createOrder(email: string, specialistId: string, body: { plot_id?: string; message: string }) {
+  return request<ServiceOrder>(`/v1/specialists/${specialistId}/orders`, {
+    method: "POST",
+    email,
+    body: JSON.stringify({ specialist_id: specialistId, ...body }),
+  });
+}
+
+export function fetchOrders(email: string) {
+  return request<ServiceOrder[]>("/v1/orders", { email });
+}
+
+export function setOrderStatus(email: string, id: string, status: string, quote_kzt?: number) {
+  const q = new URLSearchParams({ status });
+  if (quote_kzt != null) q.set("quote_kzt", String(quote_kzt));
+  return request<ServiceOrder>(`/v1/orders/${id}/status?${q}`, { method: "POST", email });
+}
+
+export function reviewOrder(email: string, id: string, stars: number, text: string) {
+  return request<Review>(`/v1/orders/${id}/review`, {
+    method: "POST",
+    email,
+    body: JSON.stringify({ stars, text }),
+  });
+}
+
+export function fetchFunnels() {
+  return request<Record<string, string[]>>("/v1/crm/funnels");
+}
+
+export function fetchDeals(email: string, funnel?: string) {
+  const q = funnel ? `?funnel=${funnel}` : "";
+  return request<Deal[]>(`/v1/crm/deals${q}`, { email });
+}
+
+export function moveDeal(email: string, id: string, stage: string) {
+  return request<Deal>(`/v1/crm/deals/${id}/move`, {
+    method: "POST",
+    email,
+    body: JSON.stringify({ stage }),
+  });
+}
+
+export async function fetchDealDetail(email: string, id: string) {
+  const headers = new Headers();
+  headers.set("x-demo-user", email);
+  const token = typeof window !== "undefined" ? localStorage.getItem("superapp_token") : null;
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(`${API}/v1/crm/deals/${id}`, { headers, cache: "no-store" });
+  const json = (await res.json()) as { ok: boolean; data: Deal; activities: CrmActivity[]; invoices: CrmInvoice[]; detail?: string };
+  if (!res.ok) throw new Error(json.detail || res.statusText);
+  return { deal: json.data, activities: json.activities, invoices: json.invoices };
+}
+
+export function createDeal(
+  email: string,
+  body: {
+    funnel: string;
+    stage?: string;
+    title: string;
+    amount_kzt: number;
+    client_name?: string;
+    client_phone?: string;
+    plot_id?: string;
+    specialist_id?: string;
+    notes?: string;
+  },
+) {
+  return request<Deal>("/v1/crm/deals", { method: "POST", email, body: JSON.stringify(body) });
+}
+
+export function dealToProject(email: string, id: string) {
+  return request<Record<string, unknown>>(`/v1/crm/deals/${id}/to-project`, { method: "POST", email });
+}
+
+export function fetchLeads(email: string, status?: string) {
+  const q = status ? `?status=${status}` : "";
+  return request<Lead[]>(`/v1/crm/leads${q}`, { email });
+}
+
+export function createLead(body: {
+  title: string;
+  name: string;
+  phone: string;
+  email?: string;
+  source?: string;
+  funnel_target?: string;
+  budget_kzt?: number;
+  plot_id?: string;
+  notes?: string;
+}) {
+  return request<Lead>("/v1/crm/leads", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function convertLead(
+  email: string,
+  leadId: string,
+  body: { funnel: string; deal_title?: string; amount_kzt?: number },
+) {
+  return request<Deal>(`/v1/crm/leads/${leadId}/convert`, { method: "POST", email, body: JSON.stringify(body) });
+}
+
+export function fetchContacts(email: string, params: { q?: string; ctype?: string } = {}) {
+  const p = new URLSearchParams();
+  if (params.q) p.set("q", params.q);
+  if (params.ctype) p.set("ctype", params.ctype);
+  const qs = p.toString();
+  return request<CrmContact[]>(`/v1/crm/contacts${qs ? `?${qs}` : ""}`, { email });
+}
+
+export function createContact(
+  email: string,
+  body: {
+    name: string;
+    company_name?: string;
+    bin_iin?: string;
+    phone: string;
+    email?: string;
+    city?: string;
+    contact_type?: string;
+    notes?: string;
+  },
+) {
+  return request<CrmContact>("/v1/crm/contacts", { method: "POST", email, body: JSON.stringify(body) });
+}
+
+export function fetchActivities(email: string, params: { deal_id?: string; lead_id?: string } = {}) {
+  const p = new URLSearchParams();
+  if (params.deal_id) p.set("deal_id", params.deal_id);
+  if (params.lead_id) p.set("lead_id", params.lead_id);
+  const qs = p.toString();
+  return request<CrmActivity[]>(`/v1/crm/activities${qs ? `?${qs}` : ""}`, { email });
+}
+
+export function createActivity(
+  email: string,
+  body: {
+    deal_id?: string;
+    lead_id?: string;
+    activity_type: string;
+    title: string;
+    description?: string;
+    due_date?: string;
+  },
+) {
+  return request<CrmActivity>("/v1/crm/activities", { method: "POST", email, body: JSON.stringify(body) });
+}
+
+export function toggleActivity(email: string, id: string, completed: boolean) {
+  return request<CrmActivity>(`/v1/crm/activities/${id}/toggle`, {
+    method: "POST",
+    email,
+    body: JSON.stringify({ completed }),
+  });
+}
+
+export function fetchInvoices(email: string, deal_id?: string) {
+  const q = deal_id ? `?deal_id=${deal_id}` : "";
+  return request<CrmInvoice[]>(`/v1/crm/invoices${q}`, { email });
+}
+
+export function createInvoice(
+  email: string,
+  body: {
+    deal_id: string;
+    title: string;
+    amount_kzt: number;
+    payer_name: string;
+    payer_iin_bin?: string;
+    escrow_enabled?: boolean;
+    due_date?: string;
+  },
+) {
+  return request<CrmInvoice>("/v1/crm/invoices", { method: "POST", email, body: JSON.stringify(body) });
+}
+
+export function payInvoice(email: string, id: string) {
+  return request<CrmInvoice>(`/v1/crm/invoices/${id}/pay`, { method: "POST", email });
+}
+
+export function fetchCrmAnalytics(email: string) {
+  return request<CrmAnalytics>("/v1/crm/analytics", { email });
+}
+
+export function fetchThreads(email: string) {
+  return request<ChatThread[]>("/v1/chat/threads", { email });
+}
+
+export async function fetchMessages(email: string, tid: string) {
+  const headers = new Headers();
+  headers.set("x-demo-user", email);
+  const res = await fetch(`${API}/v1/chat/threads/${tid}/messages`, { headers, cache: "no-store" });
+  const json = (await res.json()) as Envelope<ChatMessage[]> & { thread?: ChatThread };
+  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  return { messages: json.data, thread: json.thread };
+}
+
+export function loginRequest(email: string, password: string) {
+  return request<{ user: User; token: string }>("/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function registerRequest(body: {
+  email: string;
+  password: string;
+  full_name: string;
+  phone: string;
+  role: "buyer" | "owner" | "supplier";
+}) {
+  return request<{ user: User; token: string }>("/v1/auth/register", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchMaterials(params: Record<string, string | undefined> = {}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
+  const s = q.toString();
+  return request<Material[]>(`/v1/materials${s ? `?${s}` : ""}`);
+}
+
+export function fetchMaterial(id: string) {
+  return request<Material>(`/v1/materials/${id}`);
+}
+
+export function createMaterial(email: string, body: Record<string, unknown>) {
+  return request<Material>("/v1/materials", { method: "POST", email, body: JSON.stringify(body) });
+}
+
+export function fetchSupplierMaterials(email: string) {
+  return request<Material[]>("/v1/cabinet/materials", { email });
+}
+
+export function orderMaterial(
+  email: string,
+  body: { material_id: string; qty: number; plot_id?: string; address?: string; phone?: string },
+) {
+  return request<MaterialOrder>("/v1/material-orders", {
+    method: "POST",
+    email,
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchMaterialOrders(email: string) {
+  return request<MaterialOrder[]>("/v1/material-orders", { email });
+}
+
+export function setMaterialOrderStatus(email: string, id: string, status: string) {
+  return request<MaterialOrder>(`/v1/material-orders/${id}/status?status=${status}`, {
+    method: "POST",
+    email,
+  });
+}
+
+export function fetchProjects() {
+  return request<Record<string, unknown>[]>("/v1/site/projects");
+}
+
+export function fetchSiteBundle(id: string) {
+  return request<Record<string, unknown>>(`/v1/site/projects/${id}/bundle`);
+}
+
+export function postSite(path: string, email: string, body: Record<string, unknown> = {}) {
+  return request(`/v1/site/${path}`, { method: "POST", email, body: JSON.stringify(body) });
+}
+
+export function sendChat(email: string, tid: string, text: string) {
+  return request<ChatMessage>(`/v1/chat/threads/${tid}/messages`, {
+    method: "POST",
+    email,
+    body: JSON.stringify({ text }),
+  });
+}
