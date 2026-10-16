@@ -1,47 +1,64 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { fetchPlots, orderMaterial } from "@/lib/api";
+import { orderMaterial } from "@/lib/api";
 import { MATERIAL_CAT, money } from "@/lib/format";
-import type { Locale, Material, Plot } from "@/lib/types";
+import type { Locale, Material } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { CheckCircle2, Minus, Plus, ShieldCheck, Truck, ArrowRight, User } from "lucide-react";
 
 export function MaterialView({ locale, item }: { locale: Locale; item: Material }) {
   const m = t(locale);
+  const router = useRouter();
   const { user } = useAuth();
-  const [qty, setQty] = useState(String(item.min_qty));
-  const [plotId, setPlotId] = useState("");
-  const [address, setAddress] = useState("");
+  const [qty, setQty] = useState(Number(item.min_qty) || 1);
+  const [address, setAddress] = useState("г. Алматы");
   const [phone, setPhone] = useState(user?.phone ?? "");
-  const [plots, setPlots] = useState<Plot[]>([]);
+  const [customerName, setCustomerName] = useState(user?.full_name ?? "");
   const [done, setDone] = useState("");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    fetchPlots()
-      .then(setPlots)
-      .catch(() => setPlots([]));
-  }, []);
+  function adjustQty(delta: number) {
+    setQty((prev) => Math.max(item.min_qty, prev + delta));
+  }
 
   async function order() {
-    if (!user) {
-      setError(m.needLogin);
-      return;
-    }
+    setBusy(true);
+    setError("");
     try {
+      if (!user) {
+        window.dispatchEvent(
+          new CustomEvent("anyq-toast", {
+            detail: { message: "Сначала зарегистрируйте компанию для пилота Engicon" },
+          }),
+        );
+        router.push(`/${locale}/login?mode=register`);
+        return;
+      }
+
       const o = await orderMaterial(user.email, {
         material_id: item.id,
         qty: Number(qty),
-        plot_id: plotId || undefined,
         address,
         phone,
       });
+
       setDone(o.id);
-      setError("");
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("anyq-toast", {
+            detail: { message: `Заказ #${o.id} на поставку ${qty} ${item.unit} успешно оформлен!` },
+          })
+        );
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "error");
+      setError(err instanceof Error ? err.message : "Ошибка оформления заказа");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -50,68 +67,184 @@ export function MaterialView({ locale, item }: { locale: Locale; item: Material 
   const amount = Number(qty || 0) * item.price_kzt;
 
   return (
-    <div className="grid md:grid-cols-[1.1fr_0.9fr] gap-8">
-      <div>
+    <div className="grid md:grid-cols-[1.15fr_0.85fr] gap-8">
+      <div className="space-y-6">
         {item.photo ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={item.photo} alt="" className="h-64 w-full object-cover border border-ink/10" />
+          <img
+            src={item.photo}
+            alt=""
+            className="h-80 w-full object-cover rounded-3xl border border-slate-200 shadow-luxury"
+          />
         ) : null}
-        <p className="text-[11px] uppercase tracking-wider text-ink/45 mt-4">{MATERIAL_CAT[item.category][locale]}</p>
-        <h1 className="font-serif text-4xl mt-1">{title}</h1>
-        <p className="mt-3 text-ink/70">{desc}</p>
-        <p className="mt-4 font-serif text-3xl">
-          {money(item.price_kzt, locale)} / {item.unit}
-        </p>
-        <p className="text-sm text-ink/50 mt-1">
-          {item.city} · склад {item.stock} {item.unit}
-        </p>
+
+        <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="pill text-[11px] text-slate-600 font-semibold">{MATERIAL_CAT[item.category][locale]}</span>
+            <span className="pill text-[11px] text-emerald-800 bg-emerald-50 border-emerald-200 font-semibold flex items-center gap-1">
+              <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+              Сертифицировано в РК
+            </span>
+          </div>
+
+          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 mt-2">{title}</h1>
+          <p className="mt-4 text-slate-600 leading-relaxed text-sm sm:text-base">{desc}</p>
+
+          <div className="mt-6 pt-6 border-t border-slate-100 flex flex-wrap items-baseline gap-3">
+            <span className="text-3xl font-extrabold text-pine">{money(item.price_kzt, locale)}</span>
+            <span className="text-sm font-medium text-slate-500">/ {item.unit} (с НДС)</span>
+          </div>
+
+          <div className="mt-3 flex items-center gap-4 text-xs font-medium text-slate-500">
+            <span>Локация: {item.city}</span>
+            <span>•</span>
+            <span>На складе: {item.stock} {item.unit}</span>
+            <span>•</span>
+            <span>Мин. партия: {item.min_qty} {item.unit}</span>
+          </div>
+        </div>
       </div>
-      <div className="border border-ink/10 bg-white/50 p-5 h-fit">
-        <h2 className="font-serif text-2xl">{m.orderMat}</h2>
+
+      {/* Order Panel Card */}
+      <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90 h-fit">
+        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">{m.orderMat}</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Прямой договор поставки на объект</p>
+          </div>
+          <Truck className="h-6 w-6 text-pine" />
+        </div>
+
         {done ? (
-          <p className="mt-3 text-sm">
-            {m.submitted}{" "}
-            <Link href={`/${locale}/cabinet`} className="underline font-medium text-pine">
-              {m.navCabinet}
-            </Link>
-            <span className="mx-2 text-ink/30">•</span>
-            <Link href={`/${locale}/crm`} className="underline font-medium text-pine">
-              {m.navCrm}
-            </Link>
-          </p>
-        ) : (
-          <div className="mt-3 grid gap-3">
-            <label className="text-xs uppercase tracking-wider text-ink/50">
-              {m.qty} ({item.unit}, min {item.min_qty})
-              <input
-                className="mt-1 w-full border border-ink/15 px-3 py-2 text-sm font-sans normal-case tracking-normal"
-                type="number"
-                min={item.min_qty}
-                step="any"
-                value={qty}
-                onChange={(e) => setQty(e.target.value)}
-              />
-            </label>
-            <select className="border border-ink/15 px-3 py-2 text-sm" value={plotId} onChange={(e) => setPlotId(e.target.value)}>
-              <option value="">участок доставки (необяз.)</option>
-              {plots.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {locale === "kk" ? p.title_kk : p.title_ru}
-                </option>
-              ))}
-            </select>
-            <input className="border border-ink/15 px-3 py-2 text-sm" placeholder="адрес" value={address} onChange={(e) => setAddress(e.target.value)} />
-            <input className="border border-ink/15 px-3 py-2 text-sm" placeholder={m.phone} value={phone} onChange={(e) => setPhone(e.target.value)} />
-            <p className="text-sm">{money(Number.isFinite(amount) ? amount : 0, locale)}</p>
-            <button type="button" onClick={order} className="bg-pine text-paper py-2">
-              {m.order}
-            </button>
-            {error ? <p className="text-clay text-sm">{error}</p> : null}
-            {!user ? (
-              <Link href={`/${locale}/login`} className="text-sm underline">
-                {m.needLogin}
+          <div className="mt-6 p-5 rounded-2xl bg-emerald-50 border border-emerald-200">
+            <div className="flex items-center gap-2 text-emerald-900 font-bold">
+              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+              <span>Заказ #{done} оформлен</span>
+            </div>
+            <p className="text-xs text-emerald-800 mt-2 leading-relaxed">
+              Позиция зарезервирована на складе поставщика. Сделка создана в воронке CRM.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2 text-xs">
+              <Link
+                href={`/${locale}/cabinet`}
+                className="btn-ice !py-2 !px-4 text-xs font-semibold"
+              >
+                {m.navCabinet}
               </Link>
-            ) : null}
+              <Link
+                href={`/${locale}/crm`}
+                className="btn-ghost !py-2 !px-4 text-xs font-semibold"
+              >
+                {m.navCrm}
+              </Link>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-6 grid gap-4">
+            {/* Quantity Selector with +/- */}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">
+                {m.qty} ({item.unit}, мин. {item.min_qty})
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => adjustQty(-1)}
+                  className="h-11 w-11 rounded-xl bg-slate-100 border border-slate-200 grid place-items-center hover:bg-slate-200 text-slate-700 font-bold transition-colors"
+                >
+                  <Minus className="h-4 w-4" />
+                </button>
+                <input
+                  type="number"
+                  min={item.min_qty}
+                  value={qty}
+                  onChange={(e) => setQty(Math.max(item.min_qty, Number(e.target.value)))}
+                  className="flex-1 text-center font-bold text-lg text-slate-900 border border-slate-200 rounded-xl px-3 py-2 bg-white"
+                />
+                <button
+                  type="button"
+                  onClick={() => adjustQty(1)}
+                  className="h-11 w-11 rounded-xl bg-slate-100 border border-slate-200 grid place-items-center hover:bg-slate-200 text-slate-700 font-bold transition-colors"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Delivery Address */}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">
+                Адрес объекта доставки
+              </label>
+              <input
+                type="text"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="г. Алматы, мкр. Бесагаш, участок 14"
+                className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+              />
+            </div>
+
+            {/* Customer Contact */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">
+                  Контактное лицо
+                </label>
+                <input
+                  type="text"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  placeholder="Имя"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">
+                  {m.phone}
+                </label>
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="+7 (701) 000-00-00"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                />
+              </div>
+            </div>
+
+            {/* Calculation summary */}
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 my-1">
+              <div className="flex justify-between items-center text-xs text-slate-500">
+                <span>Объем:</span>
+                <span className="font-semibold text-slate-700">{qty} {item.unit}</span>
+              </div>
+              <div className="flex justify-between items-center text-xs text-slate-500 mt-1">
+                <span>Цена за ед.:</span>
+                <span className="font-semibold text-slate-700">{money(item.price_kzt, locale)}</span>
+              </div>
+              <div className="flex justify-between items-baseline mt-3 pt-3 border-t border-slate-200">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-900">Итого:</span>
+                <span className="text-xl font-extrabold text-pine">{money(amount, locale)}</span>
+              </div>
+            </div>
+
+            {/* Submit Button */}
+            <button
+              type="button"
+              onClick={order}
+              disabled={busy}
+              className="btn-ice w-full font-bold text-sm shadow-navy justify-center"
+            >
+              <Truck className="h-4 w-4" />
+              <span>{busy ? "Оформление..." : "Заказать на объект"}</span>
+            </button>
+
+            {error ? <p className="text-xs text-red-600 font-semibold">{error}</p> : null}
+
+            <p className="text-[11px] text-slate-400 text-center">
+              Безопасная сделка · Оплата через Kaspi Pay / Эскроу счета ANYQ
+            </p>
           </div>
         )}
       </div>

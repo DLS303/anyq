@@ -2,125 +2,421 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { fetchDemoUsers, loginRequest, registerRequest } from "@/lib/api";
+import { loginRequest, registerRequest } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { Locale } from "@/lib/types";
+import { MATERIAL_CAT } from "@/lib/format";
+import type { Locale, MaterialCat } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { Building2, Lock, Mail, Truck } from "lucide-react";
 
-type Demo = { email: string; full_name: string; role: string };
+type RegRole = "buyer" | "contractor" | "supplier";
 
-function roleName(role: string, locale: Locale) {
-  const m = t(locale);
-  if (role === "owner") return m.owner;
-  if (role === "moderator") return m.moderator;
-  if (role === "admin") return m.admin;
-  if (role === "specialist") return m.specialist;
-  if (role === "contractor") return m.contractor;
-  if (role === "supervisor") return m.supervisor;
-  if (role === "supplier") return m.supplier;
-  return m.buyer;
-}
+const CATS: MaterialCat[] = ["concrete", "inert", "brick", "metal", "lumber", "roofing", "mix"];
 
-export function LoginView({ locale }: { locale: Locale }) {
+export function LoginView({
+  locale,
+  initialMode = "register",
+}: {
+  locale: Locale;
+  initialMode?: "login" | "register";
+}) {
   const m = t(locale);
   const { login } = useAuth();
   const router = useRouter();
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register">(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
-  const [role, setRole] = useState<"buyer" | "owner" | "supplier">("buyer");
+  const [company, setCompany] = useState("");
+  const [companyBin, setCompanyBin] = useState("");
+  const [city, setCity] = useState("Алматы");
+  const [role, setRole] = useState<RegRole>("supplier");
+  const [pilotOn, setPilotOn] = useState(true);
+  const [skuTitle, setSkuTitle] = useState("");
+  const [skuCategory, setSkuCategory] = useState<MaterialCat>("concrete");
+  const [skuUnit, setSkuUnit] = useState("т");
+  const [skuPrice, setSkuPrice] = useState("");
+  const [skuStock, setSkuStock] = useState("");
   const [error, setError] = useState("");
-  const [demos, setDemos] = useState<Demo[]>([]);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    fetchDemoUsers()
-      .then((data) => setDemos(data as unknown as Demo[]))
-      .catch(() => setDemos([]));
-  }, []);
+    setMode(initialMode);
+  }, [initialMode]);
 
-  async function onLogin(e?: React.FormEvent, preset?: string) {
-    e?.preventDefault();
+  function toast(message: string) {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(new CustomEvent("anyq-toast", { detail: { message } }));
+  }
+
+  async function onLogin(e: React.FormEvent) {
+    e.preventDefault();
     setError("");
+    setBusy(true);
     try {
-      const res = await loginRequest(preset || email, preset ? "demo123" : password);
+      const res = await loginRequest(email, password);
       login(res.user, res.token);
+      toast(`Добро пожаловать в ANYQ, ${res.user.full_name}`);
       router.push(`/${locale}/cabinet`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "error");
+      setError(err instanceof Error ? err.message : "Неверный логин или пароль");
+    } finally {
+      setBusy(false);
     }
   }
 
   async function onRegister(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    const bin = companyBin.replace(/\D/g, "");
+    const price = Math.round(Number(skuPrice) || 0);
+    if (company.trim().length < 2) {
+      setError("Укажите компанию");
+      return;
+    }
+    if (bin.length !== 12) {
+      setError("БИН должен быть из 12 цифр");
+      return;
+    }
+    if (fullName.trim().length < 2) {
+      setError("Укажите контактное лицо");
+      return;
+    }
+    if (phone.trim().length < 6) {
+      setError("Укажите телефон");
+      return;
+    }
+    if (role === "supplier") {
+      if (skuTitle.trim().length < 2) {
+        setError("Укажите первую позицию для каталога");
+        return;
+      }
+      if (price <= 0) {
+        setError("Укажите цену позиции");
+        return;
+      }
+    }
+    setBusy(true);
     try {
       const res = await registerRequest({
         email,
         password,
-        full_name: fullName,
-        phone,
+        full_name: fullName.trim(),
+        phone: phone.trim(),
+        company: company.trim(),
+        company_bin: bin,
+        city: city.trim() || "Алматы",
         role,
+        pilot: pilotOn ? "engicon" : "",
+        sku_title: role === "supplier" ? skuTitle.trim() : "",
+        sku_category: skuCategory,
+        sku_unit: skuUnit.trim() || "т",
+        sku_price: role === "supplier" ? price : 0,
+        sku_stock: role === "supplier" ? Number(skuStock) || 0 : 0,
       });
       login(res.user, res.token);
-      router.push(`/${locale}/cabinet`);
+      if (role === "supplier") {
+        toast(`«${skuTitle.trim()}» уже в каталоге. Пилот Engicon.`);
+        router.push(`/${locale}/materials`);
+      } else {
+        toast(`${company.trim()} в пилоте Engicon`);
+        router.push(`/${locale}/cabinet`);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "error");
+      setError(err instanceof Error ? err.message : "Ошибка регистрации");
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
-    <div className="grid md:grid-cols-[1fr_1fr] gap-10 max-w-4xl">
-      <div>
-        <div className="flex gap-3 mb-4 text-sm">
-          <button type="button" className={mode === "login" ? "underline" : "text-ink/50"} onClick={() => setMode("login")}>
-            {m.navLogin}
-          </button>
-          <button type="button" className={mode === "register" ? "underline" : "text-ink/50"} onClick={() => setMode("register")}>
-            {m.register}
-          </button>
-        </div>
-        <p className="text-ink/60 mb-4">{m.loginLead}</p>
-        {mode === "login" ? (
-          <form onSubmit={onLogin} className="grid gap-3">
-            <input className="border border-ink/15 px-3 py-2" type="email" required placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-            <input className="border border-ink/15 px-3 py-2" type="password" required placeholder={m.password} value={password} onChange={(e) => setPassword(e.target.value)} />
-            <button className="btn-ice">{m.navLogin}</button>
-          </form>
-        ) : (
-          <form onSubmit={onRegister} className="grid gap-3">
-            <input className="border border-ink/15 px-3 py-2" required placeholder={m.fullName} value={fullName} onChange={(e) => setFullName(e.target.value)} />
-            <input className="border border-ink/15 px-3 py-2" type="email" required placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-            <input className="border border-ink/15 px-3 py-2" placeholder={m.phone} value={phone} onChange={(e) => setPhone(e.target.value)} />
-            <input className="border border-ink/15 px-3 py-2" type="password" required minLength={6} placeholder={m.password} value={password} onChange={(e) => setPassword(e.target.value)} />
-            <select className="border border-ink/15 px-3 py-2" value={role} onChange={(e) => setRole(e.target.value as "buyer" | "owner" | "supplier")}>
-              <option value="buyer">{m.buyer}</option>
-              <option value="owner">{m.owner}</option>
-              <option value="supplier">{m.supplier}</option>
-            </select>
-            <button className="btn-ice">{m.register}</button>
-          </form>
-        )}
-        {error ? <p className="text-clay text-sm mt-3">{error}</p> : null}
-      </div>
-      <div>
-        <p className="text-xs uppercase tracking-wider text-ink/45 mb-3">{m.demoHint}</p>
-        <div className="grid gap-2">
-          {demos.map((u) => (
+    <div className="max-w-4xl mx-auto py-6 sm:py-10">
+      <div className="grid md:grid-cols-[1.15fr_0.85fr] gap-8 items-start">
+        <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
+          <div className="flex items-center gap-2 mb-6 p-1 bg-slate-100 rounded-2xl w-fit border border-slate-200">
             <button
-              key={u.email}
               type="button"
-              onClick={() => onLogin(undefined, u.email)}
-              className="glass rounded-frost px-4 py-3 text-left hover:border-ice/40"
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                mode === "register" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-900"
+              }`}
+              onClick={() => setMode("register")}
             >
-              <span className="block font-medium">{u.full_name}</span>
-              <span className="text-sm text-ink/50">
-                {roleName(u.role, locale)} · {u.email}
-              </span>
+              {m.register}
             </button>
-          ))}
+            <button
+              type="button"
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                mode === "login" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-900"
+              }`}
+              onClick={() => setMode("login")}
+            >
+              {m.navLogin}
+            </button>
+          </div>
+
+          <h1 className="text-2xl font-bold text-slate-900 mb-1">
+            {mode === "login" ? "Вход в ANYQ" : "Регистрация компании"}
+          </h1>
+          <p className="text-xs text-slate-500 mb-6">{m.loginLead}</p>
+
+          {mode === "login" ? (
+            <form onSubmit={onLogin} className="grid gap-3.5">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Электронная почта
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
+                  <input
+                    className="w-full pl-10 pr-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900 focus:border-pine"
+                    type="email"
+                    required
+                    placeholder="name@company.kz"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  {m.password}
+                </label>
+                <div className="relative">
+                  <Lock className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
+                  <input
+                    className="w-full pl-10 pr-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900 focus:border-pine"
+                    type="password"
+                    required
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={busy}
+                className="btn-ice w-full font-bold text-sm shadow-navy justify-center mt-2"
+              >
+                {busy ? "Авторизация..." : m.navLogin}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={onRegister} className="grid gap-3">
+              <div className="grid sm:grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Компания</span>
+                  <input
+                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                    required
+                    autoComplete="organization"
+                    placeholder="ТОО «Название»"
+                    value={company}
+                    onChange={(e) => setCompany(e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">БИН</span>
+                  <input
+                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900 font-mono"
+                    required
+                    inputMode="numeric"
+                    autoComplete="off"
+                    maxLength={12}
+                    placeholder="12 цифр"
+                    value={companyBin}
+                    onChange={(e) => setCompanyBin(e.target.value.replace(/\D/g, "").slice(0, 12))}
+                  />
+                </label>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Город</span>
+                  <input
+                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                    required
+                    autoComplete="address-level2"
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">{m.phone}</span>
+                  <input
+                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                    required
+                    type="tel"
+                    autoComplete="tel"
+                    placeholder="+7 707 000 00 00"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
+                </label>
+              </div>
+
+              <label className="block">
+                <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Контактное лицо</span>
+                <input
+                  className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                  required
+                  autoComplete="name"
+                  placeholder="Имя и фамилия"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                />
+              </label>
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Email</span>
+                  <input
+                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                    type="email"
+                    required
+                    autoComplete="email"
+                    placeholder="email@company.kz"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">{m.password}</span>
+                  <input
+                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                    type="password"
+                    required
+                    minLength={6}
+                    autoComplete="new-password"
+                    placeholder="Минимум 6 символов"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </label>
+              </div>
+
+              <label className="block">
+                <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Роль в пилоте</span>
+                <select
+                  className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as RegRole)}
+                >
+                  <option value="supplier">Поставщик — позиция сразу в каталоге</option>
+                  <option value="buyer">Заказчик Engicon</option>
+                  <option value="contractor">Подрядчик</option>
+                </select>
+              </label>
+
+              {role === "supplier" ? (
+                <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white/70 p-3.5">
+                  <p className="text-xs font-semibold text-slate-700">Первая позиция. Публикуется в каталог сразу, без модератора.</p>
+                  <label className="block">
+                    <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Категория</span>
+                    <select
+                      className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                      value={skuCategory}
+                      onChange={(e) => setSkuCategory(e.target.value as MaterialCat)}
+                    >
+                      {CATS.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {MATERIAL_CAT[cat].ru}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Название позиции</span>
+                    <input
+                      className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                      required
+                      placeholder="Цемент М500"
+                      value={skuTitle}
+                      onChange={(e) => setSkuTitle(e.target.value)}
+                    />
+                  </label>
+                  <div className="grid grid-cols-3 gap-3">
+                    <label className="block">
+                      <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Ед.</span>
+                      <input
+                        className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                        value={skuUnit}
+                        onChange={(e) => setSkuUnit(e.target.value)}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Цена, ₸</span>
+                      <input
+                        className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                        inputMode="numeric"
+                        required
+                        placeholder="28500"
+                        value={skuPrice}
+                        onChange={(e) => setSkuPrice(e.target.value.replace(/[^\d]/g, ""))}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Остаток</span>
+                      <input
+                        className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                        inputMode="decimal"
+                        placeholder="0"
+                        value={skuStock}
+                        onChange={(e) => setSkuStock(e.target.value.replace(/[^\d.]/g, ""))}
+                      />
+                    </label>
+                  </div>
+                </div>
+              ) : null}
+
+              <label className="flex items-start gap-2.5 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 accent-[#2F5B8A]"
+                  checked={pilotOn}
+                  onChange={(e) => setPilotOn(e.target.checked)}
+                />
+                <span>Пилот Engicon. Компания участвует в пилотном проекте.</span>
+              </label>
+
+              <button type="submit" disabled={busy} className="btn-ice w-full font-bold text-sm shadow-navy justify-center mt-1">
+                {busy ? "Регистрация..." : role === "supplier" ? "Зарегистрировать и открыть каталог" : m.register}
+              </button>
+            </form>
+          )}
+
+          {error ? (
+            <p role="alert" className="text-xs font-semibold text-red-600 bg-red-50 p-3 rounded-xl border border-red-200 mt-4">
+              {error}
+            </p>
+          ) : null}
         </div>
+
+        <aside className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
+          <div className="flex items-center gap-2 mb-3">
+            <Building2 className="h-5 w-5 text-pine" />
+            <h2 className="text-lg font-bold text-slate-900">Пилот с Engicon</h2>
+          </div>
+          <p className="text-sm text-slate-600 leading-relaxed">
+            Компания входит по своим реквизитам. Поставщик указывает первую позицию, и она сразу появляется в каталоге материалов.
+          </p>
+          <ul className="mt-5 grid gap-3 text-sm text-slate-700">
+            <li className="flex gap-2">
+              <Truck className="h-4 w-4 mt-0.5 text-pine shrink-0" />
+              <span>Поставщик: БИН, город, цена и остаток. Модератор не нужен.</span>
+            </li>
+            <li className="flex gap-2">
+              <Building2 className="h-4 w-4 mt-0.5 text-pine shrink-0" />
+              <span>Заказчик Engicon и подрядчик попадают в кабинет и видят каталог.</span>
+            </li>
+          </ul>
+          <p className="mt-5 text-xs text-slate-500 leading-relaxed">
+            Оплата и эскроу в этом пилоте не подключены. Заказ поставки фиксируется как заявка.
+          </p>
+        </aside>
       </div>
     </div>
   );

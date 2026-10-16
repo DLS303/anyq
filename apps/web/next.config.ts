@@ -19,8 +19,12 @@ const nextConfig: NextConfig = {
     ],
   },
   async rewrites() {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8010";
-    return [{ source: "/uploads/:path*", destination: `${backendUrl}/uploads/:path*` }];
+    const backendUrl = process.env.INTERNAL_API_URL || "http://127.0.0.1:8010";
+    return [
+      { source: "/v1/:path*", destination: `${backendUrl}/v1/:path*` },
+      { source: "/health", destination: `${backendUrl}/health` },
+      { source: "/uploads/:path*", destination: `${backendUrl}/uploads/:path*` },
+    ];
   },
 };
 

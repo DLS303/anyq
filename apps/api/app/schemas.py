@@ -45,6 +45,10 @@ class User(BaseModel):
     full_name: str
     role: Role
     phone: str = ""
+    company: str = ""
+    company_bin: str = ""
+    city: str = ""
+    pilot: str = ""
 
 
 class PlotDocs(BaseModel):
@@ -266,7 +270,7 @@ class Lead(BaseModel):
     email: str = ""
     source: str = "Сайт"
     status: LeadStatus = "new"
-    funnel_target: Funnel = "land_sale"
+    funnel_target: Funnel = "construction"
     budget_kzt: int = 0
     plot_id: str | None = None
     notes: str = ""
@@ -282,14 +286,14 @@ class LeadCreate(BaseModel):
     phone: str
     email: str = ""
     source: str = "Сайт"
-    funnel_target: Funnel = "land_sale"
+    funnel_target: Funnel = "construction"
     budget_kzt: int = 0
     plot_id: str | None = None
     notes: str = ""
 
 
 class LeadConvert(BaseModel):
-    funnel: Funnel = "land_sale"
+    funnel: Funnel = "construction"
     deal_title: str = ""
     amount_kzt: int = 0
 
@@ -411,7 +415,7 @@ class Deal(BaseModel):
 
 
 class DealCreate(BaseModel):
-    funnel: Funnel = "land_sale"
+    funnel: Funnel = "construction"
     stage: str = "lead"
     title: str
     amount_kzt: int = 0
@@ -520,7 +524,16 @@ class RegisterBody(BaseModel):
     password: str
     full_name: str
     phone: str = ""
-    role: Literal["buyer", "owner", "supplier"] = "buyer"
+    company: str = ""
+    company_bin: str = ""
+    city: str = "Алматы"
+    role: Literal["buyer", "contractor", "supplier"] = "buyer"
+    pilot: str = "engicon"
+    sku_title: str = ""
+    sku_category: MaterialCat = "concrete"
+    sku_unit: str = "т"
+    sku_price: int = 0
+    sku_stock: float = 0
 
 
 class LoginBody(BaseModel):

@@ -2,10 +2,28 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useLayoutEffect, useState, useRef } from "react";
 import { AuthProvider, useAuth } from "@/lib/auth";
-import { CompareProvider, useCompare } from "@/lib/compare";
+import { CompareProvider } from "@/lib/compare";
 import type { Locale } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { LuxuryNavTabs } from "./LuxuryNavTabs";
+import { LuxuryProgressBar } from "./LuxuryProgressBar";
+import { PageTransition } from "./PageTransition";
+import {
+  Building2,
+  Calculator,
+  HardHat,
+  Layers,
+  MessageSquare,
+  User as UserIcon,
+  LogOut,
+  ChevronDown,
+  CheckCircle2,
+  X,
+  Briefcase,
+  SlidersHorizontal,
+} from "lucide-react";
 
 function otherLocale(locale: Locale): Locale {
   return locale === "ru" ? "kk" : "ru";
@@ -16,101 +34,346 @@ function swapLocale(pathname: string, locale: Locale) {
   return pathname.replace(/^\/(ru|kk)/, `/${next}`) || `/${next}`;
 }
 
+function navItems(locale: Locale, m: ReturnType<typeof t>) {
+  const link = (path: string) => `/${locale}${path}`;
+  return [
+    { href: link("/crm"), label: m.navCrm, icon: Briefcase },
+    { href: link("/materials"), label: m.navMaterials, icon: Layers },
+    { href: link("/estimates"), label: "Автосмета", icon: Calculator },
+    { href: link("/specialists"), label: m.navSpecialists, icon: HardHat },
+    { href: link("/site"), label: m.navSite, icon: Building2 },
+    { href: link("/control"), label: "Панель", icon: SlidersHorizontal },
+    { href: link("/chat"), label: m.navChat, icon: MessageSquare },
+    { href: link("/cabinet"), label: m.navCabinet, icon: UserIcon },
+  ];
+}
+
 function Header({ locale }: { locale: Locale }) {
   const m = t(locale);
   const { user, logout } = useAuth();
   const pathname = usePathname();
   const link = (path: string) => `/${locale}${path}`;
-  const nav: { href: string; label: string }[] = [
-    { href: link("/catalog"), label: m.navCatalog },
-    { href: link("/materials"), label: m.navMaterials },
-    { href: link("/specialists"), label: m.navSpecialists },
-    { href: link("/site"), label: m.navSite },
-    { href: link("/crm"), label: m.navCrm },
-    { href: link("/chat"), label: m.navChat },
-    { href: link("/publish"), label: m.navPublish },
-    { href: link("/cabinet"), label: m.navCabinet },
-  ];
-  if (user?.role === "moderator" || user?.role === "admin") {
-    nav.push({ href: link("/moderation"), label: m.navModeration });
-  }
+  const nav = navItems(locale, m);
+  const [open, setOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setOpen(false);
+    setUserMenuOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [open]);
 
   const word = locale === "kk" ? "АНЫҚ" : "ANYQ";
-  const sub = locale === "kk" ? "ANYQ" : "АНЫҚ";
 
   return (
-    <header className="sticky top-3 z-30 px-3">
-      <div className="glass mx-auto flex max-w-6xl items-center gap-4 rounded-full px-4 py-2.5">
-        <Link href={link("")} className="flex items-center gap-2.5 shrink-0">
-          <span className="grid h-9 w-9 place-items-center rounded-full border border-pine text-[11px] font-semibold tracking-[0.12em] text-pine">
+    <header className="anyq-header sticky top-0 z-40 pt-[max(0.5rem,env(safe-area-inset-top))] px-3">
+      <div className="glass mx-auto flex max-w-6xl items-center gap-2.5 rounded-full px-3 py-2 sm:px-4 shadow-luxury">
+        {/* Mobile menu hamburger */}
+        <button
+          type="button"
+          className="lg:hidden grid h-10 w-10 place-items-center rounded-full text-pine hover:bg-slate-100 transition-colors"
+          aria-label="Меню"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className="flex flex-col gap-1.5">
+            <span className={`block h-0.5 w-4.5 bg-pine transition-transform duration-300 ${open ? "translate-y-2 rotate-45" : ""}`} />
+            <span className={`block h-0.5 w-4.5 bg-pine transition-opacity duration-300 ${open ? "opacity-0" : ""}`} />
+            <span className={`block h-0.5 w-4.5 bg-pine transition-transform duration-300 ${open ? "-translate-y-2 -rotate-45" : ""}`} />
+          </span>
+        </button>
+
+        {/* Brand Logo */}
+        <Link href={link("")} className="flex items-center gap-2.5 shrink-0 group">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-pine to-ice text-[11px] font-bold tracking-[0.14em] text-white shadow-navy group-hover:scale-105 transition-transform">
             AQ
           </span>
           <span className="leading-tight">
-            <span className="block text-[17px] font-semibold tracking-tight">{word}</span>
-            <span className="block text-[10px] uppercase tracking-[0.22em] text-ink/45">{sub}</span>
+            <span className="block text-[17px] font-bold tracking-tight text-pine flex items-center gap-1.5">
+              {word}
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            </span>
+            <span className="hidden xs:block text-[9px] uppercase tracking-[0.25em] text-slate-500 font-semibold">
+              PREMIUM PROPTECH
+            </span>
           </span>
         </Link>
-        <nav className="hidden lg:flex items-center gap-1 text-[13px] text-ink/60">
-          {nav.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`rounded-full px-2.5 py-1 hover:text-pine ${pathname === item.href ? "text-pine bg-white/40" : ""}`}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
+
+        {/* Luxury Desktop Nav with sliding glass capsule and haptic physics */}
+        <LuxuryNavTabs items={nav} />
+
+        {/* Right side actions */}
         <div className="ml-auto flex items-center gap-2 text-sm">
+          {/* Language Switch */}
           <Link
             href={swapLocale(pathname, locale)}
-            className="rounded-full border border-pine/25 px-2.5 py-1 uppercase tracking-wider text-[11px] text-pine"
+            className="grid h-9 min-w-9 place-items-center rounded-full border border-slate-300 px-2 uppercase tracking-wider text-[11px] font-bold text-pine hover:bg-white transition-colors"
           >
             {otherLocale(locale)}
           </Link>
+
+          {/* User Auth or Menu */}
           {user ? (
-            <button onClick={logout} className="hidden sm:block text-ink/50 hover:text-ink px-2">
-              {user.full_name}
-            </button>
+            <div className="relative" ref={userMenuRef}>
+              <button
+                type="button"
+                onClick={() => setUserMenuOpen((v) => !v)}
+                className="flex items-center gap-2 pl-2.5 pr-3 py-1 rounded-full bg-white border border-slate-200 shadow-xs hover:border-slate-300 transition-all text-xs font-medium text-slate-700 max-w-[11rem]"
+              >
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                <span className="truncate">{user.full_name}</span>
+                <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+              </button>
+
+              {userMenuOpen && (
+                <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-white p-2 shadow-2xl border border-slate-100 animate-fadeIn z-50">
+                  <div className="px-3 py-2 border-b border-slate-100">
+                    <p className="text-xs font-semibold text-slate-900 truncate">{user.full_name}</p>
+                    <p className="text-[11px] text-slate-500 capitalize">{user.role} · {user.email}</p>
+                  </div>
+                  <div className="grid gap-1 py-1 text-xs">
+                    <Link
+                      href={link("/cabinet")}
+                      onClick={() => setUserMenuOpen(false)}
+                      className="px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
+                    >
+                      <UserIcon className="h-4 w-4 text-slate-500" />
+                      {m.navCabinet}
+                    </Link>
+                    <Link
+                      href={link("/crm")}
+                      onClick={() => setUserMenuOpen(false)}
+                      className="px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
+                    >
+                      <Briefcase className="h-4 w-4 text-slate-500" />
+                      {m.navCrm}
+                    </Link>
+                    <Link
+                      href={link("/chat")}
+                      onClick={() => setUserMenuOpen(false)}
+                      className="px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
+                    >
+                      <MessageSquare className="h-4 w-4 text-slate-500" />
+                      {m.navChat}
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        logout();
+                        setUserMenuOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl text-red-600 hover:bg-red-50 flex items-center gap-2 font-medium"
+                    >
+                      <LogOut className="h-4 w-4 text-red-500" />
+                      {m.navLogout}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           ) : (
-            <Link href={link("/login")} className="btn-ice text-sm !py-1.5 !px-4">
-              {m.navLogin}
+            <Link href={link("/login?mode=register")} className="btn-ice text-xs !py-1.5 !px-4 !min-h-9 font-semibold">
+              {m.register}
             </Link>
           )}
         </div>
       </div>
+
+      {/* Mobile Drawer */}
+      {open ? (
+        <div className="lg:hidden fixed inset-0 z-50">
+          <button type="button" className="absolute inset-0 bg-slate-950/40 backdrop-blur-xs" aria-label="Закрыть" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-0 h-full w-[min(88vw,340px)] bg-white shadow-2xl p-5 pt-[max(1.25rem,env(safe-area-inset-top))] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6 pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <span className="grid h-8 w-8 place-items-center rounded-lg bg-pine text-white text-xs font-bold">AQ</span>
+                <span className="font-bold text-base text-pine">{word}</span>
+              </div>
+              <button type="button" onClick={() => setOpen(false)} className="p-1 rounded-full text-slate-500">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <nav className="grid gap-1.5 text-sm">
+              <Link
+                href={link("")}
+                className={`rounded-xl px-3.5 py-2.5 font-medium flex items-center gap-2.5 ${
+                  pathname === link("") ? "bg-pine text-white font-semibold" : "text-slate-700 hover:bg-slate-50"
+                }`}
+                onClick={() => setOpen(false)}
+              >
+                Главная
+              </Link>
+              {nav.map((item) => {
+                const Icon = item.icon;
+                const active = pathname.startsWith(item.href);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setOpen(false)}
+                    className={`rounded-xl px-3.5 py-2.5 font-medium flex items-center gap-2.5 ${
+                      active ? "bg-pine text-white font-semibold" : "text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+
+            <div className="mt-6">
+              {user ? (
+                <button
+                  type="button"
+                  className="w-full rounded-xl border border-red-200 text-red-600 font-medium py-2.5 text-sm hover:bg-red-50"
+                  onClick={() => {
+                    logout();
+                    setOpen(false);
+                  }}
+                >
+                  {m.navLogout} · {user.full_name}
+                </button>
+              ) : (
+                <Link href={link("/login?mode=register")} className="btn-ice w-full text-center font-semibold" onClick={() => setOpen(false)}>
+                  {m.register}
+                </Link>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
     </header>
+  );
+}
+
+function RouteWash() {
+  const pathname = usePathname();
+  const prev = useRef(pathname);
+  const [show, setShow] = useState(false);
+
+  useLayoutEffect(() => {
+    if (prev.current === pathname) return;
+    prev.current = pathname;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (typeof document.startViewTransition === "function") return;
+    setShow(true);
+    const id = window.setTimeout(() => setShow(false), 760);
+    return () => window.clearTimeout(id);
+  }, [pathname]);
+
+  if (!show) return null;
+  return <div className="route-wash" aria-hidden onAnimationEnd={() => setShow(false)} />;
+}
+
+function GlobalToast() {
+  const [toast, setToast] = useState<{ message: string } | null>(null);
+
+  useEffect(() => {
+    function onToast(e: Event) {
+      const detail = (e as CustomEvent<{ message: string }>).detail;
+      if (detail?.message) {
+        setToast({ message: detail.message });
+        setTimeout(() => setToast(null), 3800);
+      }
+    }
+    window.addEventListener("anyq-toast", onToast);
+    return () => window.removeEventListener("anyq-toast", onToast);
+  }, []);
+
+  if (!toast) return null;
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50 animate-fadeIn">
+      <div className="flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-slate-900 text-white text-xs font-semibold shadow-2xl border border-slate-800">
+        <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+        <span>{toast.message}</span>
+      </div>
+    </div>
   );
 }
 
 function Footer({ locale }: { locale: Locale }) {
   const m = t(locale);
   return (
-    <footer className="mt-20 px-4">
-      <div className="glass-strong mx-auto max-w-6xl rounded-frost px-6 py-8 text-sm text-ink/50">
-        <span className="font-semibold text-pine">ANYQ · АНЫҚ</span>
-        <span className="mx-3">—</span>
-        {m.footer}
+    <footer className="mt-20 px-4 mb-20 lg:mb-0">
+      <div className="glass-strong mx-auto max-w-6xl rounded-3xl p-6 sm:p-8 text-sm text-slate-500 shadow-luxury border border-slate-200/90">
+        <div className="flex flex-wrap items-center justify-between gap-4 pb-6 border-b border-slate-200/70">
+          <div className="flex items-center gap-3">
+            <span className="grid h-8 w-8 place-items-center rounded-xl bg-pine text-white text-xs font-bold shadow-navy">
+              AQ
+            </span>
+            <div>
+              <span className="font-bold text-slate-900 text-base">ANYQ · АНЫҚ</span>
+              <p className="text-xs text-slate-400">Цифровая экосистема девелопмента РК</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
+            <span className="flex items-center gap-1.5 text-emerald-700">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              API & GIS активны
+            </span>
+            <span>·</span>
+            <span>СНиП РК 3.01-101-2013</span>
+            <span>·</span>
+            <span>Smart Bridge Ready</span>
+          </div>
+        </div>
+        <p className="mt-4 text-xs leading-relaxed text-slate-500">{m.footer}</p>
       </div>
     </footer>
   );
 }
 
-function CompareBar({ locale }: { locale: Locale }) {
+function BottomNav({ locale }: { locale: Locale }) {
   const m = t(locale);
-  const { ids } = useCompare();
-  if (ids.length === 0) return null;
+  const pathname = usePathname();
+  const items = [
+    { href: `/${locale}`, label: "Главная", match: (p: string) => p === `/${locale}` },
+    { href: `/${locale}/crm`, label: "CRM", match: (p: string) => p.includes("/crm") },
+    { href: `/${locale}/materials`, label: m.navMaterials, match: (p: string) => p.includes("/materials") },
+    { href: `/${locale}/estimates`, label: "Смета", match: (p: string) => p.includes("/estimates") },
+    { href: `/${locale}/cabinet`, label: m.navCabinet, match: (p: string) => p.includes("/cabinet") || p.includes("/login") },
+  ];
   return (
-    <div className="fixed bottom-4 inset-x-0 z-40 px-4">
-      <div className="l3 mx-auto max-w-6xl rounded-full px-5 py-3 flex items-center justify-between text-sm">
-        <span>
-          {ids.length} {m.compareBar}
-        </span>
-        <Link href={`/${locale}/compare?ids=${ids.join(",")}`} className="text-pine underline">
-          {m.compareOpen}
-        </Link>
+    <nav className="anyq-tabbar lg:hidden fixed bottom-0 inset-x-0 z-40 border-t border-slate-200/80 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-luxury">
+      <div className="grid grid-cols-5">
+        {items.map((item) => {
+          const on = item.match(pathname);
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex flex-col items-center justify-center min-h-14 gap-1 text-[10px] leading-tight px-1 transition-colors ${
+                on ? "text-pine font-bold" : "text-slate-500"
+              }`}
+            >
+              <span className={`h-1 w-6 rounded-full transition-all ${on ? "bg-pine" : "bg-transparent"}`} />
+              {item.label}
+            </Link>
+          );
+        })}
       </div>
-    </div>
+    </nav>
   );
 }
 
@@ -118,10 +381,15 @@ export function AppShell({ locale, children }: { locale: Locale; children: React
   return (
     <AuthProvider>
       <CompareProvider>
+        <LuxuryProgressBar />
         <Header locale={locale} />
-        <main className="mx-auto max-w-6xl px-4 py-8 pb-24">{children}</main>
+        <main className="mx-auto max-w-6xl px-4 py-6 pb-28 lg:pb-12">
+          <PageTransition>{children}</PageTransition>
+        </main>
         <Footer locale={locale} />
-        <CompareBar locale={locale} />
+        <BottomNav locale={locale} />
+        <RouteWash />
+        <GlobalToast />
       </CompareProvider>
     </AuthProvider>
   );

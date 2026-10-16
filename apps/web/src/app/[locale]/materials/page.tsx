@@ -8,7 +8,7 @@ export default async function MaterialsPage({ params }: { params: Promise<{ loca
   const m = t(locale);
   return (
     <div>
-      <h1 className="font-serif text-4xl mb-4">{m.navMaterials}</h1>
+      <h1 className="text-2xl sm:text-4xl font-medium tracking-tight mb-4">{m.navMaterials}</h1>
       <MaterialsClient locale={locale} />
     </div>
   );

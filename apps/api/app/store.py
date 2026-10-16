@@ -28,6 +28,7 @@ from app.schemas import (
     LeadConvert,
     LeadCreate,
     Material,
+    RegisterBody,
     MaterialCreate,
     MaterialOrder,
     MaterialOrderCreate,
@@ -809,10 +810,12 @@ class MemoryStore:
     def create_deal(self, user: User, body: DealCreate) -> Deal:
         with self._lock:
             did = f"deal-{uuid4().hex[:8]}"
+            stages = FUNNEL_STAGES.get(body.funnel) or ["lead"]
+            stage = body.stage if body.stage in stages else stages[0]
             deal = Deal(
                 id=did,
                 funnel=body.funnel,
-                stage=body.stage or "lead",
+                stage=stage,
                 title=body.title,
                 amount_kzt=body.amount_kzt,
                 client_name=body.client_name or user.full_name,
@@ -1260,23 +1263,72 @@ class MemoryStore:
             self._save_unlocked()
             return msg
 
-    def register(self, email: str, password: str, full_name: str, phone: str, role: str) -> tuple[User, str]:
-        email = email.lower().strip()
+    def register(self, body: RegisterBody) -> tuple[User, str]:
+        email = body.email.lower().strip()
+        company = body.company.strip()
+        bin_no = re.sub(r"\D", "", body.company_bin)
+        contact = body.full_name.strip()
+        phone = body.phone.strip()
         if "@" not in email or "." not in email:
             raise ValueError("Некорректный email")
-        if len(password) < 6:
+        if len(body.password) < 6:
             raise ValueError("Пароль минимум 6 символов")
-        if len(full_name.strip()) < 2:
-            raise ValueError("Укажите имя")
-        if role not in ("buyer", "owner", "supplier"):
-            raise ValueError("Роль: покупатель, продавец или поставщик")
+        if len(contact) < 2:
+            raise ValueError("Укажите контактное лицо")
+        if len(company) < 2:
+            raise ValueError("Укажите компанию")
+        if len(bin_no) != 12:
+            raise ValueError("БИН должен быть из 12 цифр")
+        if len(phone) < 6:
+            raise ValueError("Укажите телефон")
+        if body.role not in ("buyer", "contractor", "supplier"):
+            raise ValueError("Роль: заказчик, подрядчик или поставщик")
+        if body.role == "supplier":
+            if len(body.sku_title.strip()) < 2:
+                raise ValueError("Укажите первую позицию для каталога")
+            if body.sku_price <= 0:
+                raise ValueError("Укажите цену позиции")
         if self.get_user_by_email(email):
             raise ValueError("Такой email уже зарегистрирован")
+        pilot = "engicon" if body.pilot.strip().lower() in ("", "engicon", "1", "true", "yes") else ""
         with self._lock:
             uid = f"u-{uuid4().hex[:8]}"
-            user = User(id=uid, email=email, full_name=full_name.strip(), role=role, phone=phone.strip())  # type: ignore[arg-type]
+            user = User(
+                id=uid,
+                email=email,
+                full_name=contact,
+                role=body.role,
+                phone=phone,
+                company=company,
+                company_bin=bin_no,
+                city=body.city.strip() or "Алматы",
+                pilot=pilot,
+            )
             self._index_user(user)
-            self.credentials[uid] = hash_password(password)
+            self.credentials[uid] = hash_password(body.password)
+            if body.role == "supplier":
+                mid = f"mat-{uuid4().hex[:8]}"
+                title = body.sku_title.strip()
+                note = f"{company}, БИН {bin_no}. {user.city}."
+                if pilot:
+                    note += " Пилот Engicon."
+                item = Material(
+                    id=mid,
+                    slug=_slugify(title) + "-" + mid[-4:],
+                    supplier_id=uid,
+                    category=body.sku_category,
+                    title_ru=title,
+                    title_kk=title,
+                    unit=body.sku_unit.strip() or "т",
+                    price_kzt=body.sku_price,
+                    min_qty=1,
+                    stock=body.sku_stock,
+                    city=user.city,
+                    description_ru=note,
+                    description_kk=note,
+                    published=True,
+                )
+                self.materials[mid] = item
             self._save_unlocked()
             return user, make_token(uid)
 

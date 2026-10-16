@@ -10,7 +10,7 @@ router = APIRouter(prefix="/v1/auth", tags=["auth"])
 @router.post("/register")
 def register(body: RegisterBody):
     try:
-        user, token = store.register(body.email, body.password, body.full_name, body.phone, body.role)
+        user, token = store.register(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "data": {"user": user, "token": token}}

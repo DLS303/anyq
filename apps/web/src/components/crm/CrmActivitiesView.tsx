@@ -206,7 +206,7 @@ export function CrmActivitiesView({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 backdrop-blur-xs p-4 animate-fadeIn">
           <div className="w-full max-w-md bg-white rounded-2xl p-6 shadow-2xl border border-ink/15">
             <h3 className="text-lg font-serif font-bold text-ink mb-1">Запланировать дело / задачу</h3>
-            <p className="text-xs text-ink/60 mb-4">Назначьте звонок клиенту, выезд на участок или составление сметы.</p>
+            <p className="text-xs text-ink/60 mb-4">Назначьте звонок клиенту, выезд на объект или составление сметы.</p>
 
             <form onSubmit={handleCreate} className="space-y-3 text-xs">
               <div>

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { createDeal, fetchDeals, fetchFunnels, moveDeal } from "@/lib/api";
-import { FUNNEL } from "@/lib/format";
+import { FUNNEL, PRODUCT_FUNNELS } from "@/lib/format";
 import type { Deal, Funnel, Locale } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { CrmKanban } from "./CrmKanban";
@@ -54,7 +54,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
 
   const [activeTab, setActiveTab] = useState<CrmTab>("deals");
   const [viewMode, setViewMode] = useState<ViewMode>("kanban");
-  const [funnel, setFunnel] = useState<Funnel>("land_sale");
+  const [funnel, setFunnel] = useState<Funnel>("construction");
   const [stages, setStages] = useState<Record<string, string[]>>({});
   const [deals, setDeals] = useState<Deal[]>([]);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
@@ -151,7 +151,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
               </h2>
             </div>
             <p className="text-xs text-ink/50 mt-0.5">
-              Сквозная воронка: земля → изыскания → проектирование → поставка стройматериалов → СМР
+              Воронка: изыскания → проектирование → материалы → СМР
             </p>
           </div>
 
@@ -168,7 +168,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
         </div>
 
         {/* Top Entity Tabs */}
-        <div className="flex items-center gap-1.5 pt-3 overflow-x-auto">
+        <div className="tab-scroll pt-3">
           {[
             { id: "deals", label: "💼 Сделки", desc: "Воронки продаж" },
             { id: "leads", label: "📥 Лиды", desc: "Входящие заявки" },
@@ -182,7 +182,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id as CrmTab)}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              className={`shrink-0 min-h-11 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 activeTab === tab.id
                   ? "bg-pine text-white shadow-xs font-semibold"
                   : "text-ink/65 hover:text-ink hover:bg-ink/5"
@@ -200,7 +200,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
           {/* 5 Funnels Switcher */}
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs font-semibold text-ink/50 uppercase tracking-wider mr-1">Воронка:</span>
-            {(["land_sale", "design", "construction", "materials", "legal"] as const).map((f) => (
+            {PRODUCT_FUNNELS.map((f) => (
               <button
                 key={f}
                 type="button"
@@ -341,9 +341,8 @@ export function CrmBoard({ locale }: { locale: Locale }) {
                   onChange={(e) => setFunnel(e.target.value as Funnel)}
                   className="w-full px-3 py-2 text-sm border border-ink/15 rounded-lg bg-white font-medium"
                 >
-                  <option value="land_sale">Продажа участка (Земля)</option>
-                  <option value="design">Проектирование / ПСД (Архитектура)</option>
                   <option value="construction">Строительство / СМР (Генподряд)</option>
+                  <option value="design">Проектирование / ПСД (Архитектура)</option>
                   <option value="materials">Поставка материалов (Бетон/Арматура)</option>
                   <option value="legal">Юр. оформление / ГАСК</option>
                 </select>
@@ -353,7 +352,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
                 <label className="block text-ink/60 font-medium mb-1">Название сделки:</label>
                 <input
                   type="text"
-                  placeholder="напр. Ремизовка — подбор участка под коттедж"
+                  placeholder="напр. Корпус Б — монолит, Наурыз"
                   value={dealTitle}
                   onChange={(e) => setDealTitle(e.target.value)}
                   className="w-full px-3 py-2 text-sm border border-ink/15 rounded-lg bg-white"

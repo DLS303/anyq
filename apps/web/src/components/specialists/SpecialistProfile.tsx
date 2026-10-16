@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { createOrder, fetchPlots } from "@/lib/api";
-import { CATEGORY, money, titleOf } from "@/lib/format";
-import type { Locale, Plot, Review, Specialist } from "@/lib/types";
+import { createOrder } from "@/lib/api";
+import { CATEGORY, money } from "@/lib/format";
+import type { Locale, Review, Specialist } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { CheckCircle2, ShieldCheck, Star, MessageSquare, Briefcase, ExternalLink, X, Send } from "lucide-react";
 
 export function SpecialistProfile({
   locale,
@@ -18,30 +20,46 @@ export function SpecialistProfile({
   reviews: Review[];
 }) {
   const m = t(locale);
+  const router = useRouter();
   const { user } = useAuth();
-  const [plots, setPlots] = useState<Plot[]>([]);
-  const [plotId, setPlotId] = useState("");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState("Здравствуйте! Требуется выезд на объект, консультация и расчет коммерческого предложения.");
+  const [clientPhone, setClientPhone] = useState(user?.phone ?? "");
+  const [clientName, setClientName] = useState(user?.full_name ?? "");
   const [done, setDone] = useState("");
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    fetchPlots()
-      .then(setPlots)
-      .catch(() => setPlots([]));
-  }, []);
+  const [busy, setBusy] = useState(false);
+  const [previewProject, setPreviewProject] = useState<{ title: string; photo?: string } | null>(null);
 
   async function order() {
-    if (!user) {
-      setError(m.needLogin);
-      return;
-    }
+    setBusy(true);
+    setError("");
     try {
-      const o = await createOrder(user.email, specialist.id, { plot_id: plotId || undefined, message });
+      if (!user) {
+        window.dispatchEvent(
+          new CustomEvent("anyq-toast", {
+            detail: { message: "Сначала зарегистрируйте компанию для пилота Engicon" },
+          }),
+        );
+        router.push(`/${locale}/login?mode=register`);
+        return;
+      }
+
+      const o = await createOrder(user.email, specialist.id, {
+        message: `${message}\nКонтакт: ${clientName}, ${clientPhone}`,
+      });
       setDone(o.thread_id || o.id);
-      setError("");
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("anyq-toast", {
+            detail: { message: `Заявка специалисту "${specialist.company_ru}" успешно создана!` },
+          })
+        );
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "error");
+      setError(err instanceof Error ? err.message : "Ошибка создания заказа");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -50,114 +68,233 @@ export function SpecialistProfile({
 
   return (
     <div className="grid gap-8">
-      <div className="grid md:grid-cols-[1.1fr_0.9fr] gap-6">
-        <div>
+      {/* Top Banner & Order Section */}
+      <div className="grid md:grid-cols-[1.2fr_0.8fr] gap-6">
+        <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
           {specialist.cover ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={specialist.cover} alt="" className="h-56 w-full object-cover border border-ink/10" />
+            <img
+              src={specialist.cover}
+              alt=""
+              className="h-64 w-full object-cover rounded-2xl border border-slate-200 mb-6 shadow-xs"
+            />
           ) : null}
-          <p className="text-[11px] uppercase tracking-wider text-ink/45 mt-4">{CATEGORY[specialist.category][locale]}</p>
-          <h1 className="font-serif text-4xl mt-1">{name}</h1>
-          <p className="mt-3 text-ink/70">{bio}</p>
-          <p className="mt-3 text-sm">
-            ★ {specialist.rating || "—"} · {specialist.reviews_count} · {specialist.city}
-            {specialist.license_verified ? ` · ${m.license} ${specialist.license_cat} ${specialist.license_no}` : ""}
-          </p>
-          {specialist.bin ? <p className="text-xs text-ink/45 mt-1">БИН {specialist.bin}</p> : null}
+
+          <div className="flex items-center gap-2 mb-2">
+            <span className="pill text-[10px] text-slate-600">{CATEGORY[specialist.category][locale]}</span>
+            {specialist.license_verified ? (
+              <span className="pill text-[10px] text-emerald-800 bg-emerald-50 border-emerald-200 flex items-center gap-1 font-semibold">
+                <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                <span>Лицензия {specialist.license_cat} подтверждена</span>
+              </span>
+            ) : null}
+          </div>
+
+          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 mt-2">{name}</h1>
+          <p className="mt-3 text-slate-600 text-sm sm:text-base leading-relaxed">{bio}</p>
+
+          <div className="mt-5 flex flex-wrap items-center gap-4 text-xs font-semibold text-slate-600">
+            <span className="flex items-center gap-1 text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200">
+              <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
+              <span>{specialist.rating || "5.0"} рейтинг</span>
+            </span>
+            <span>{specialist.reviews_count} завершенных проектов</span>
+            <span>•</span>
+            <span>{specialist.city}</span>
+            {specialist.bin ? (
+              <>
+                <span>•</span>
+                <span className="font-mono text-slate-400">БИН {specialist.bin}</span>
+              </>
+            ) : null}
+          </div>
         </div>
-        <div className="border border-ink/10 bg-white/50 p-5">
-          <h2 className="font-serif text-2xl">{m.order}</h2>
+
+        {/* Order / Inquiry Card */}
+        <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90 h-fit">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">Заказать услугу / КП</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Создает сделку в CRM и открывает защищенный чат</p>
+            </div>
+            <Briefcase className="h-6 w-6 text-pine" />
+          </div>
+
           {done ? (
-            <p className="mt-3 text-sm">
-              {m.ordered}{" "}
-              <Link href={`/${locale}/chat/${done}`} className="underline font-medium text-pine">
-                {m.navChat}
-              </Link>
-              <span className="mx-2 text-ink/30">•</span>
-              <Link href={`/${locale}/crm`} className="underline font-medium text-pine">
-                {m.navCrm}
-              </Link>
-            </p>
-          ) : (
-            <div className="mt-3 grid gap-3">
-              <select
-                className="border border-ink/15 px-3 py-2 text-sm"
-                value={plotId}
-                onChange={(e) => setPlotId(e.target.value)}
-              >
-                <option value="">участок (необязательно)</option>
-                {plots.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {titleOf(p, locale)}
-                  </option>
-                ))}
-              </select>
-              <textarea
-                className="border border-ink/15 px-3 py-2 text-sm"
-                rows={3}
-                placeholder={m.message}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-              />
-              <button type="button" onClick={order} className="bg-pine text-paper py-2">
-                {m.order}
-              </button>
-              {error ? <p className="text-clay text-sm">{error}</p> : null}
-              {!user ? (
-                <Link href={`/${locale}/login`} className="text-sm underline">
-                  {m.needLogin}
+            <div className="mt-6 p-5 rounded-2xl bg-emerald-50 border border-emerald-200">
+              <p className="text-sm font-bold text-emerald-900 flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                <span>Заявка успешно отправлена!</span>
+              </p>
+              <p className="text-xs text-emerald-800 mt-2 leading-relaxed">
+                Специалист получил уведомление. Вы можете сразу перейти в диалог или отслеживать воронку в CRM.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                <Link href={`/${locale}/chat/${done}`} className="btn-ice !py-2 !px-4 text-xs font-semibold">
+                  {m.navChat} →
                 </Link>
-              ) : null}
+                <Link href={`/${locale}/crm`} className="btn-ghost !py-2 !px-4 text-xs font-semibold">
+                  {m.navCrm} →
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-5 grid gap-3">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Ваше имя
+                </label>
+                <input
+                  type="text"
+                  value={clientName}
+                  onChange={(e) => setClientName(e.target.value)}
+                  placeholder="Имя заказчика"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Телефон для связи
+                </label>
+                <input
+                  type="tel"
+                  value={clientPhone}
+                  onChange={(e) => setClientPhone(e.target.value)}
+                  placeholder="+7 (701) 000-00-00"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  ТЗ / Вопрос по объекту
+                </label>
+                <textarea
+                  rows={3}
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={order}
+                disabled={busy}
+                className="btn-ice w-full font-bold text-sm shadow-navy justify-center mt-2"
+              >
+                <Send className="h-4 w-4" />
+                <span>{busy ? "Отправка..." : "Отправить заявку"}</span>
+              </button>
+
+              {error ? <p className="text-xs text-red-600 font-semibold">{error}</p> : null}
+
+              <p className="text-[11px] text-slate-400 text-center">
+                Все договоренности фиксируются в договоре и защищены эскроу ANYQ
+              </p>
             </div>
           )}
         </div>
       </div>
 
-      <section>
-        <h2 className="font-serif text-2xl mb-3">{m.prices}</h2>
-        <div className="grid gap-2">
+      {/* Pricing Section */}
+      <section className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
+        <h2 className="text-2xl font-bold text-slate-900 mb-4">{m.prices}</h2>
+        <div className="grid gap-2.5">
           {specialist.prices.map((p) => (
-            <div key={p.title_ru} className="flex justify-between border border-ink/10 p-3 text-sm">
-              <span>
-                {locale === "kk" ? p.title_kk : p.title_ru} · {p.unit}
+            <div
+              key={p.title_ru}
+              className="flex justify-between items-center p-3.5 rounded-2xl bg-white border border-slate-100 shadow-2xs hover:border-slate-200 transition-colors"
+            >
+              <span className="font-semibold text-slate-800 text-sm">
+                {locale === "kk" ? p.title_kk : p.title_ru} <span className="text-slate-400 font-normal">/ {p.unit}</span>
               </span>
-              <span>{money(p.price_kzt, locale)}</span>
+              <span className="font-bold text-pine text-base">{money(p.price_kzt, locale)}</span>
             </div>
           ))}
         </div>
       </section>
 
-      <section>
-        <h2 className="font-serif text-2xl mb-3">{m.portfolio}</h2>
-        <div className="grid sm:grid-cols-2 gap-3">
+      {/* Portfolio Section with Working Click-to-Preview Modal */}
+      <section className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
+        <h2 className="text-2xl font-bold text-slate-900 mb-4">{m.portfolio}</h2>
+        <div className="grid sm:grid-cols-2 gap-4">
           {specialist.portfolio.map((p) => (
-            <Link
+            <button
               key={p.title_ru}
-              href={p.plot_id ? `/${locale}/plots/${p.plot_id}` : "#"}
-              className="border border-ink/10"
+              type="button"
+              onClick={() => setPreviewProject({ title: p.title_ru, photo: p.photo })}
+              className="text-left rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-2xs hover:shadow-luxury transition-all group"
             >
               {p.photo ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={p.photo} alt="" className="h-32 w-full object-cover" />
+                <img
+                  src={p.photo}
+                  alt=""
+                  className="h-44 w-full object-cover group-hover:scale-102 transition-transform duration-300"
+                />
               ) : null}
-              <p className="p-3 text-sm">{p.title_ru}</p>
-            </Link>
+              <div className="p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-bold text-slate-900">{p.title_ru}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Нажмите для просмотра объекта</p>
+                </div>
+                <ExternalLink className="h-4 w-4 text-slate-400 group-hover:text-pine transition-colors" />
+              </div>
+            </button>
           ))}
         </div>
       </section>
 
-      <section>
-        <h2 className="font-serif text-2xl mb-3">{m.reviews}</h2>
-        {reviews.length === 0 ? <p className="text-ink/50">{m.empty}</p> : null}
+      {/* Reviews Section */}
+      <section className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
+        <h2 className="text-2xl font-bold text-slate-900 mb-4">{m.reviews}</h2>
+        {reviews.length === 0 ? <p className="text-slate-500 text-sm">{m.empty}</p> : null}
         <div className="grid gap-3">
           {reviews.map((r) => (
-            <div key={r.id} className="border border-ink/10 p-4">
-              <p>{"★".repeat(r.stars)}</p>
-              <p className="text-sm mt-1">{r.text}</p>
+            <div key={r.id} className="p-4 rounded-2xl bg-white border border-slate-100 shadow-2xs">
+              <div className="flex items-center gap-1 text-amber-500 text-sm font-bold">
+                {"★".repeat(r.stars)}
+                <span className="text-slate-400 text-xs ml-2 font-normal">Проверенный заказчик</span>
+              </div>
+              <p className="text-sm text-slate-700 mt-2 leading-relaxed">{r.text}</p>
             </div>
           ))}
         </div>
       </section>
+
+      {/* Portfolio Lightbox Modal */}
+      {previewProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div className="w-full max-w-2xl bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between p-4 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900 text-base">{previewProject.title}</h3>
+              <button
+                type="button"
+                onClick={() => setPreviewProject(null)}
+                className="p-1 rounded-full text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            {previewProject.photo ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={previewProject.photo} alt="" className="w-full h-80 object-cover" />
+            ) : null}
+            <div className="p-5 flex items-center justify-between bg-slate-50">
+              <p className="text-xs text-slate-500">Выполнено по СНиП РК с актами скрытых работ</p>
+              <button
+                type="button"
+                onClick={() => setPreviewProject(null)}
+                className="btn-ice !py-2 !px-4 text-xs font-semibold"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

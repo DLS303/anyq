@@ -39,6 +39,10 @@ export type User = {
   full_name: string;
   role: Role;
   phone?: string;
+  company?: string;
+  company_bin?: string;
+  city?: string;
+  pilot?: string;
 };
 
 export type PlotDocs = {
@@ -326,6 +330,59 @@ export type MaterialOrder = {
   phone: string;
   status: string;
   created_at: string;
+};
+
+export type EstimateInput = {
+  region: "almaty" | "astana" | "shymkent" | "west" | "north" | "other";
+  house_type: "gasblock" | "brick" | "monolith" | "frame" | "sip";
+  finish_level: "shell" | "prefinish" | "turnkey";
+  area_m2: number;
+  floors: number;
+  seismic: boolean;
+  basement: boolean;
+  relief: "flat" | "slope" | "steep";
+  utilities: {
+    electricity: "connected" | "nearby" | "absent";
+    water: "connected" | "nearby" | "absent";
+    sewage: "connected" | "nearby" | "absent";
+    gas: "connected" | "nearby" | "absent";
+    road: "connected" | "nearby" | "absent";
+  };
+  contingency_pct: number;
+  overhead_pct: number;
+  profit_pct: number;
+  include_vat: boolean;
+};
+
+export type EstimateLine = {
+  code: string;
+  section: string;
+  title: string;
+  unit: string;
+  qty: number;
+  unit_price_kzt: number;
+  total_kzt: number;
+  basis: string;
+  confidence: "high" | "medium" | "low";
+};
+
+export type EstimateResult = {
+  input: EstimateInput;
+  market: Record<string, string | number>;
+  quantities: Record<string, number>;
+  lines: EstimateLine[];
+  summary: {
+    direct_kzt: number;
+    overhead_kzt: number;
+    contingency_kzt: number;
+    profit_kzt: number;
+    vat_kzt: number;
+    total_kzt: number;
+    per_m2_kzt: number;
+    low_kzt: number;
+    high_kzt: number;
+  };
+  warnings: string[];
 };
 
 export const DISTRICTS = [

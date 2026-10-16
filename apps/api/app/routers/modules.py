@@ -10,14 +10,14 @@ MODULES = [
         title="Marketplace Service",
         phase=1,
         status="live",
-        notes="Каталог участков. Фаза 2: специалисты и заказы услуг.",
+        notes="Материалы и услуги. Рынок земли отключён.",
     ),
     ModuleInfo(
         id="gis-cadastre",
         title="GIS & Cadastre Service",
         phase=1,
-        status="live",
-        notes="Полигоны GeoJSON. PostGIS — после Docker. ЕГКН — graceful degradation.",
+        status="stub",
+        notes="Отключён: земля и кадастр не в этом контуре.",
     ),
     ModuleInfo(
         id="crm-pm",
@@ -29,8 +29,8 @@ MODULES = [
     ModuleInfo(
         id="estimate-docs",
         title="Estimate & Docs Service",
-        phase=4,
-        status="stub",
+        phase=3,
+        status="live",
         notes="KENML позже. Сейчас: бюджет, CO, журнал, график.",
     ),
     ModuleInfo(

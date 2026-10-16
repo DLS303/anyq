@@ -116,19 +116,19 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div>
           <p className="text-[11px] uppercase tracking-wider text-ink/45">Procore-style · field + office</p>
-          <h1 className="font-serif text-4xl mt-1">{p.title}</h1>
+          <h1 className="text-2xl sm:text-4xl font-medium tracking-tight mt-1">{p.title}</h1>
           <p className="text-ink/60 mt-1">{p.address}</p>
         </div>
         <div className={`${healthColor} text-paper px-3 py-2 text-xs uppercase tracking-wider`}>health {snap.health}</div>
       </div>
 
-      <div className="flex flex-wrap gap-1 mb-6 border-b border-ink/10 pb-2">
+      <div className="tab-scroll -mx-4 px-4 mb-6 border-b border-ink/10 pb-2">
         {TABS.map((x) => (
           <button
             key={x.id}
             type="button"
             onClick={() => setTab(x.id)}
-            className={`px-2 py-1 text-xs ${tab === x.id ? "bg-pine text-paper" : "text-ink/60"}`}
+            className={`shrink-0 min-h-11 px-3 rounded-full text-xs ${tab === x.id ? "bg-pine text-paper" : "text-ink/60"}`}
           >
             {locale === "kk" ? x.kk : x.ru}
           </button>
@@ -141,11 +141,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
           <Kpi label="обязательства" value={money(snap.committed_kzt, locale)} />
           <Kpi label="факт" value={money(snap.actual_kzt, locale)} />
           <Kpi label="open RFI / punch / ТБ" value={`${snap.open_rfi} / ${snap.open_punch} / ${snap.open_incidents}`} />
-          {p.plot_id ? (
-            <Link href={`/${locale}/plots/${p.plot_id}`} className="sm:col-span-4 text-sm underline">
-              цифровой паспорт участка
-            </Link>
-          ) : null}
+
         </div>
       ) : null}
 

@@ -1,15 +1,20 @@
 import { LoginView } from "@/components/login/LoginView";
-import { t } from "@/i18n/messages";
 import type { Locale } from "@/lib/types";
 
-export default async function LoginPage({ params }: { params: Promise<{ locale: string }> }) {
+export default async function LoginPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ locale: string }>;
+  searchParams: Promise<{ mode?: string }>;
+}) {
   const { locale: raw } = await params;
+  const query = await searchParams;
   const locale = raw as Locale;
-  const m = t(locale);
+  const initialMode = query.mode === "login" ? "login" : "register";
   return (
     <div>
-      <h1 className="font-serif text-4xl mb-4">{m.loginTitle}</h1>
-      <LoginView locale={locale} />
+      <LoginView locale={locale} initialMode={initialMode} />
     </div>
   );
 }

@@ -826,6 +826,19 @@
       "thread_id": "th-d3069e52",
       "created_at": "2026-09-17T07:31:58+00:00",
       "updated_at": "2026-09-17T07:31:58+00:00"
+    },
+    {
+      "id": "ord-2483047d",
+      "specialist_id": "sp-nadzor",
+      "client_id": "u-smr",
+      "plot_id": null,
+      "message": "Здравствуйте! Требуется выезд на участок, консультация и расчет коммерческого предложения.\nКонтакт: ТОО Qurylys Group, +7 727 250 33 33",
+      "status": "requested",
+      "quote_kzt": null,
+      "deal_id": "deal-7d36777f",
+      "thread_id": "th-879c3018",
+      "created_at": "2026-10-14T17:13:10+00:00",
+      "updated_at": "2026-10-14T17:13:10+00:00"
     }
   ],
   "reviews": [
@@ -1411,6 +1424,32 @@
       "expected_close_date": "",
       "created_at": "2026-09-18T13:04:56+00:00",
       "updated_at": ""
+    },
+    {
+      "id": "deal-7d36777f",
+      "funnel": "construction",
+      "stage": "request",
+      "title": "Независимый технадзор — заказ",
+      "client_id": "u-smr",
+      "client_name": "",
+      "client_phone": "",
+      "owner_id": null,
+      "specialist_id": "sp-nadzor",
+      "specialist_name": "",
+      "supplier_id": null,
+      "plot_id": null,
+      "plot_title": "",
+      "order_id": "ord-2483047d",
+      "project_id": null,
+      "inquiry_id": null,
+      "responsible_id": null,
+      "responsible_name": "Асет Сагинтаев",
+      "amount_kzt": 0,
+      "probability_pct": 60,
+      "source": "Сайт",
+      "expected_close_date": "",
+      "created_at": "2026-10-14T17:13:10+00:00",
+      "updated_at": ""
     }
   ],
   "leads": [
@@ -1848,8 +1887,8 @@
       "title": "Звонок: Серик Темиров (+7 (705) 999-00-11)",
       "description": "Интерес к участку Участок 10 сот, Бесагаш. Сообщение: Хочу посмотреть участок в субботу",
       "due_date": "2026-09-18",
-      "completed": false,
-      "completed_at": "",
+      "completed": true,
+      "completed_at": "2026-10-14T13:02:13+00:00",
       "author_id": "",
       "author_name": "Система",
       "created_at": "2026-09-18T09:08:07+00:00"
@@ -2168,6 +2207,15 @@
       "order_id": "ord-a23bc67e",
       "title": "ИП Техника 24",
       "updated_at": "2026-09-17T07:32:57+00:00"
+    },
+    {
+      "id": "th-879c3018",
+      "user_a": "u-smr",
+      "user_b": "u-nadzor",
+      "plot_id": null,
+      "order_id": "ord-2483047d",
+      "title": "Независимый технадзор",
+      "updated_at": "2026-10-14T17:13:10+00:00"
     }
   ],
   "messages": [
@@ -2233,6 +2281,13 @@
       "author_id": "u-tech",
       "text": "есть 2 куба на гусиницах",
       "created_at": "2026-09-17T07:32:57+00:00"
+    },
+    {
+      "id": "m-8e1bb1b1",
+      "thread_id": "th-879c3018",
+      "author_id": "u-smr",
+      "text": "Здравствуйте! Требуется выезд на участок, консультация и расчет коммерческого предложения.\nКонтакт: ТОО Qurylys Group, +7 727 250 33 33",
+      "created_at": "2026-10-14T17:13:10+00:00"
     }
   ],
   "users": [
@@ -2241,91 +2296,154 @@
       "email": "buyer@demo.superapp",
       "full_name": "Алия Нурланова",
       "role": "buyer",
-      "phone": "+7 777 100 20 30"
+      "phone": "+7 777 100 20 30",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-owner",
       "email": "owner@demo.superapp",
       "full_name": "Ерлан Сатыбалды",
       "role": "owner",
-      "phone": "+7 701 555 10 10"
+      "phone": "+7 701 555 10 10",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-mod",
       "email": "moderator@demo.superapp",
       "full_name": "Модератор",
       "role": "moderator",
-      "phone": ""
+      "phone": "",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-admin",
       "email": "admin@demo.superapp",
       "full_name": "Администратор",
       "role": "admin",
-      "phone": ""
+      "phone": "",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-arch",
       "email": "architect@demo.superapp",
       "full_name": "Айдар Бекмуратов",
       "role": "specialist",
-      "phone": "+7 777 200 11 11"
+      "phone": "+7 777 200 11 11",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-surv",
       "email": "surveyor@demo.superapp",
       "full_name": "Сауле Искакова",
       "role": "specialist",
-      "phone": "+7 701 300 22 22"
+      "phone": "+7 701 300 22 22",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-smr",
       "email": "contractor@demo.superapp",
       "full_name": "ТОО Qurylys Group",
       "role": "contractor",
-      "phone": "+7 727 250 33 33"
+      "phone": "+7 727 250 33 33",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-nadzor",
       "email": "supervisor@demo.superapp",
       "full_name": "Марат Технадзор",
       "role": "supervisor",
-      "phone": "+7 705 400 44 44"
+      "phone": "+7 705 400 44 44",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-law",
       "email": "lawyer@demo.superapp",
       "full_name": "Дана Юридическая",
       "role": "specialist",
-      "phone": "+7 747 500 55 55"
+      "phone": "+7 747 500 55 55",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-tech",
       "email": "excavator@demo.superapp",
       "full_name": "ИП Техника 24",
       "role": "specialist",
-      "phone": "+7 777 600 66 66"
+      "phone": "+7 777 600 66 66",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-supply",
       "email": "supplier@demo.superapp",
       "full_name": "ТОО СтройСнаб Алматы",
       "role": "supplier",
-      "phone": "+7 727 333 20 20"
+      "phone": "+7 727 333 20 20",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-b5993e84",
       "email": "pilot38350@test.kz",
       "full_name": "?????",
       "role": "buyer",
-      "phone": "+7701"
+      "phone": "+7701",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
     },
     {
       "id": "u-08024fd7",
       "email": "demo51835@test.kz",
       "full_name": "Demo New",
       "role": "buyer",
-      "phone": "+7701"
+      "phone": "+7701",
+      "company": "",
+      "company_bin": "",
+      "city": "",
+      "pilot": ""
+    },
+    {
+      "id": "u-ea4ef1dc",
+      "email": "smmsmmmarketing@gmail.com",
+      "full_name": "Ерденбеков Амир Олегович",
+      "role": "supplier",
+      "phone": "+77780294723",
+      "company": "NOVA",
+      "company_bin": "031217501316",
+      "city": "Алматы",
+      "pilot": "engicon"
     }
   ],
   "credentials": {
@@ -2341,7 +2459,8 @@
     "u-tech": "a851cf1961dfe917b5bf5c8273ae8f8b$eefa3a69be0f89512880399dea7935ef2a137de0aa5ae27123e43d7436237a69",
     "u-supply": "54ce18418e72a41975f7780ab4fe5060$a7c1d28a5c54ad3acad352bacd98ab73ecd2e1663b0e1f66db97126616fa6cfd",
     "u-b5993e84": "564601663878b716ceab9e15ff7bdd87$4fe093aedd7f755337d06309a6d80f1b7a5bfda0bf1d304234f450cfa25b0238",
-    "u-08024fd7": "c2f2fdf9a851c9746712740eab8edc0a$6625c11d3bde87e8bb77ab5d8fb44f316df1a1cbaf8edbe71c9fafe75f62c70b"
+    "u-08024fd7": "c2f2fdf9a851c9746712740eab8edc0a$6625c11d3bde87e8bb77ab5d8fb44f316df1a1cbaf8edbe71c9fafe75f62c70b",
+    "u-ea4ef1dc": "1b0b996e4bd0cf70820a02bdba8fc17d$92567f81d1caade3d38d243d82e5bab9302c534eea326a18911cfa1bb93a5c7c"
   },
   "materials": [
     {
@@ -2495,6 +2614,23 @@
       "photo": "",
       "description_ru": "",
       "description_kk": "",
+      "published": true
+    },
+    {
+      "id": "mat-a32c77e9",
+      "slug": "арматура-77e9",
+      "supplier_id": "u-ea4ef1dc",
+      "category": "metal",
+      "title_ru": "Арматура",
+      "title_kk": "Арматура",
+      "unit": "тонна",
+      "price_kzt": 200000,
+      "min_qty": 1.0,
+      "stock": 1000000.0,
+      "city": "Алматы",
+      "photo": "",
+      "description_ru": "NOVA, БИН 031217501316. Алматы. Пилот Engicon.",
+      "description_kk": "NOVA, БИН 031217501316. Алматы. Пилот Engicon.",
       "published": true
     }
   ],

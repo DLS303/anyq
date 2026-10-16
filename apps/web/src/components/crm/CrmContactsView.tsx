@@ -109,7 +109,6 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
           { id: "", label: "Все контрагенты" },
           { id: "client", label: "Клиенты" },
           { id: "contractor", label: "Подрядчики / Проектировщики" },
-          { id: "landowner", label: "Собственники участков" },
           { id: "supplier", label: "Поставщики материалов" },
           { id: "investor", label: "Инвесторы" },
         ].map((f) => (
@@ -285,7 +284,6 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
                   >
                     <option value="client">Клиент / Заказчик</option>
                     <option value="contractor">Подрядчик / Проектировщик</option>
-                    <option value="landowner">Собственник земли</option>
                     <option value="supplier">Поставщик материалов</option>
                     <option value="investor">Инвестор / Девелопер</option>
                   </select>

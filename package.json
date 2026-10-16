@@ -11,6 +11,9 @@
     "prod:web": "npm run start --prefix apps/web -- -p 3000",
     "prod": "concurrently -k -n api,web -c cyan,magenta \"npm run prod:api\" \"npm run prod:web\"",
     "start": "npm run prod",
+    "dev:mobile": "flutter run -d chrome --target=lib/main.dart",
+    "build:mobile": "flutter build web",
+    "build:apk": "flutter build apk --release",
     "install:api": "apps\\api\\.venv\\Scripts\\python.exe -m pip install -r apps/api/requirements.txt",
     "build": "npm run build --prefix apps/web"
   },

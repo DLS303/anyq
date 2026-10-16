@@ -1,134 +1,190 @@
 import Link from "next/link";
-import { fetchMaterials, fetchModules, fetchPlots, fetchSpecialists } from "@/lib/api";
-import { MATERIAL_CAT, CATEGORY } from "@/lib/format";
-import { PlotCard } from "@/components/plots/PlotCard";
+import { fetchMaterials, fetchSpecialists } from "@/lib/api";
+import { MATERIAL_CAT, CATEGORY, money } from "@/lib/format";
 import { t } from "@/i18n/messages";
 import type { Locale } from "@/lib/types";
+import { HomeStage } from "@/components/home/HomeStage";
+import { HomeRise } from "@/components/home/HomeRise";
+import {
+  ArrowRight,
+  CheckCircle2,
+  Layers,
+  ShieldCheck,
+  Truck,
+} from "lucide-react";
 
 export default async function HomePage({ params }: { params: Promise<{ locale: string }> }) {
   const { locale: raw } = await params;
   const locale = (raw === "kk" ? "kk" : "ru") as Locale;
   const m = t(locale);
-  const plots = await fetchPlots().catch(() => []);
-  const modules = await fetchModules().catch(() => []);
   const specialists = await fetchSpecialists().catch(() => []);
   const materials = await fetchMaterials().catch(() => []);
-  const mark = locale === "kk" ? "АНЫҚ" : "ANYQ";
 
   return (
-    <div className="grid gap-16">
-      <section className="relative overflow-hidden rounded-[28px] min-h-[440px] border border-pine/15">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/design/almaty-aerial.jpg" alt="" className="absolute inset-0 h-full w-full object-cover" />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#efe8de]/90 via-[#efe8de]/55 to-transparent" />
-        <div className="relative z-10 grid md:grid-cols-[1.15fr_0.85fr] gap-8 p-8 md:p-12 items-end min-h-[440px]">
+    <div className="grid grid-cols-1">
+      <HomeStage locale={locale} />
+      <HomeRise />
+
+      <div className="home-flow relative z-20">
+        <div
+          className="home-veil pointer-events-none ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] w-screen"
+          aria-hidden
+        />
+        <div className="relative">
+          <div
+            className="pointer-events-none absolute inset-0 -z-10 ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] w-screen bg-[#f8fafc]"
+            aria-hidden
+          />
+          <div className="grid gap-12 pt-6 sm:gap-16 sm:pt-10">
+      {/* Materials Showcase with Quick Action Buttons */}
+      <section className="home-rise">
+        <div className="flex items-end justify-between mb-5">
           <div>
-            <p className="text-[12px] uppercase tracking-[0.18em] text-ink/50">
-              {locale === "kk" ? "жер → анықтық → әрекет → ақша → құрылыс" : "земля → ясность → действие → деньги → стройка"}
+            <p className="text-xs uppercase tracking-wider text-pine font-bold flex items-center gap-1.5">
+              <Truck className="h-4 w-4" />
+              <span>Прямые поставки от заводов</span>
             </p>
-            <p className="mt-3 text-sm font-semibold tracking-tight text-pine">{mark}</p>
-            <h1 className="mt-2 text-[40px] leading-[1.15] tracking-[-0.02em] font-medium md:text-5xl">{m.heroTitle}</h1>
-            <p className="mt-4 max-w-xl text-[17px] leading-7 text-ink/60">{m.heroLead}</p>
-            <div className="mt-6 flex flex-wrap gap-2 text-[12px] tracking-wide">
-              {["Земля", "Ясность", "Действие", "Деньги"].map((n) => (
-                <span key={n} className="glass rounded-full px-3 py-1.5">
-                  {n}
-                </span>
-              ))}
-              <span className="glass rounded-full px-3 py-1.5 opacity-45">Стройка</span>
-            </div>
-            <div className="mt-7 flex flex-wrap gap-3">
-              <Link href={`/${locale}/catalog`} className="btn-ice">
-                {m.ctaCatalog}
-              </Link>
-              <Link href={`/${locale}/plots/izhs-besagash-gaz`} className="btn-ghost">
-                {m.navPassport}
-              </Link>
-            </div>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 mt-1">{m.navMaterials}</h2>
           </div>
-          <div className="glass-strong rounded-frost p-6">
-            <p className="text-pine text-xs uppercase tracking-[0.16em]">{m.modules}</p>
-            <ul className="mt-4 grid gap-3 text-sm">
-              {modules.map((mod) => (
-                <li key={mod.id} className="flex justify-between gap-3 border-b border-ink/10 pb-2">
-                  <span>{mod.title}</span>
-                  <span className={mod.status === "live" ? "text-pine-2" : "text-ink/35"}>
-                    {mod.status === "live" ? m.live : m.stub}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <h2 className="text-2xl font-medium tracking-tight mb-5">{m.pillarsTitle}</h2>
-        <div className="grid md:grid-cols-3 gap-4">
-          {[
-            [m.p1, m.p1d],
-            [m.p2, m.p2d],
-            [m.p3, m.p3d],
-          ].map(([title, desc]) => (
-            <article key={title} className="glass-strong rounded-frost p-6">
-              <h3 className="text-lg font-medium text-pine">{title}</h3>
-              <p className="mt-2 text-[15px] leading-6 text-ink/60">{desc}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <div className="flex items-end justify-between mb-5">
-          <h2 className="text-2xl font-medium tracking-tight">{m.navCatalog}</h2>
-          <Link href={`/${locale}/catalog`} className="text-sm text-pine">
-            {m.ctaCatalog}
+          <Link
+            href={`/${locale}/materials`}
+            className="text-xs font-bold text-pine hover:underline flex items-center gap-1 bg-white px-3 py-1.5 rounded-full border border-slate-200 shadow-2xs"
+          >
+            <span>Все материалы</span>
+            <ArrowRight className="h-3.5 w-3.5" />
           </Link>
         </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {plots.slice(0, 3).map((plot) => (
-            <PlotCard key={plot.id} plot={plot} locale={locale} />
-          ))}
-        </div>
-      </section>
 
-      <section>
-        <div className="flex items-end justify-between mb-5">
-          <h2 className="text-2xl font-medium tracking-tight">{m.navMaterials}</h2>
-          <Link href={`/${locale}/materials`} className="text-sm text-pine">
-            {m.navMaterials}
-          </Link>
-        </div>
-        <div className="grid sm:grid-cols-3 gap-4 mb-12">
+        <div className="grid sm:grid-cols-3 gap-5">
           {materials.slice(0, 3).map((item) => (
-            <Link key={item.id} href={`/${locale}/materials/${item.slug}`} className="glass-strong rounded-frost overflow-hidden">
-              {item.photo ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={item.photo} alt="" className="h-32 w-full object-cover" />
-              ) : null}
-              <div className="p-4">
-                <p className="text-[12px] tracking-wide text-ink/45">{MATERIAL_CAT[item.category][locale]}</p>
-                <p className="text-lg font-medium mt-1">{locale === "kk" ? item.title_kk : item.title_ru}</p>
+            <div
+              key={item.id}
+              className="glass-strong rounded-3xl overflow-hidden shadow-luxury hover:shadow-luxury-lg transition-all flex flex-col justify-between group border border-slate-200/90"
+            >
+              <Link href={`/${locale}/materials/${item.slug}`} className="block">
+                {item.photo ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={item.photo} alt="" className="h-44 w-full object-cover group-hover:scale-102 transition-transform duration-300" />
+                ) : (
+                  <div className="h-44 bg-slate-100 grid place-items-center text-slate-400">
+                    <Layers className="h-10 w-10 opacity-30" />
+                  </div>
+                )}
+                <div className="p-5">
+                  <span className="pill text-[10px] text-slate-600">{MATERIAL_CAT[item.category][locale]}</span>
+                  <p className="text-lg font-bold text-slate-900 mt-2 line-clamp-1">{locale === "kk" ? item.title_kk : item.title_ru}</p>
+                  <p className="text-xl font-bold text-pine mt-1.5">
+                    {money(item.price_kzt, locale)} <span className="text-xs font-normal text-slate-500">/ {item.unit}</span>
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {item.city} · склад {item.stock} {item.unit}
+                  </p>
+                </div>
+              </Link>
+              <div className="px-5 pb-5 pt-1">
+                <Link
+                  href={`/${locale}/materials/${item.slug}`}
+                  className="btn-ice w-full text-xs font-semibold !py-2"
+                >
+                  Заказать на объект
+                </Link>
               </div>
-            </Link>
-          ))}
-        </div>
-        <div className="flex items-end justify-between mb-5">
-          <h2 className="text-2xl font-medium tracking-tight">{m.navSpecialists}</h2>
-          <Link href={`/${locale}/specialists`} className="text-sm text-pine">
-            {m.navSpecialists}
-          </Link>
-        </div>
-        <div className="grid sm:grid-cols-3 gap-4">
-          {specialists.slice(0, 3).map((s) => (
-            <Link key={s.id} href={`/${locale}/specialists/${s.slug}`} className="glass-strong rounded-frost p-5">
-              <p className="text-[12px] tracking-wide text-ink/45">{CATEGORY[s.category][locale]}</p>
-              <p className="text-lg font-medium mt-1">{locale === "kk" ? s.company_kk : s.company_ru}</p>
-              <p className="text-sm mt-1 text-ink/55">★ {s.rating || "—"}</p>
-            </Link>
+            </div>
           ))}
         </div>
       </section>
+
+      {/* Specialists Showcase with Quick Action Buttons */}
+      <section className="home-rise">
+        <div className="flex items-end justify-between mb-5">
+          <div>
+            <p className="text-xs uppercase tracking-wider text-pine font-bold flex items-center gap-1.5">
+              <ShieldCheck className="h-4 w-4 text-emerald-600" />
+              <span>Лицензированные подрядчики</span>
+            </p>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 mt-1">{m.navSpecialists}</h2>
+          </div>
+          <Link
+            href={`/${locale}/specialists`}
+            className="text-xs font-bold text-pine hover:underline flex items-center gap-1 bg-white px-3 py-1.5 rounded-full border border-slate-200 shadow-2xs"
+          >
+            <span>Весь реестр</span>
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+
+        <div className="grid sm:grid-cols-3 gap-5">
+          {specialists.slice(0, 3).map((s) => (
+            <div
+              key={s.id}
+              className="glass-strong rounded-3xl p-6 shadow-luxury hover:shadow-luxury-lg transition-all border border-slate-200/90 flex flex-col justify-between group"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="pill text-[10px] text-slate-600">{CATEGORY[s.category][locale]}</span>
+                  <span className="flex items-center gap-1 text-xs font-bold text-amber-600">
+                    ★ {s.rating || "5.0"}
+                  </span>
+                </div>
+                <h3 className="text-xl font-bold text-slate-900 group-hover:text-pine transition-colors">
+                  {locale === "kk" ? s.company_kk : s.company_ru}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">{s.city} · {s.reviews_count} завершенных заказов</p>
+                {s.license_verified ? (
+                  <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 text-[11px] font-semibold border border-emerald-200/60">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>Лицензия {s.license_cat}</span>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-slate-100 flex items-center gap-2">
+                <Link
+                  href={`/${locale}/specialists/${s.slug}`}
+                  className="btn-ice flex-1 text-xs font-semibold !py-2 text-center"
+                >
+                  Заказать услугу
+                </Link>
+                <Link
+                  href={`/${locale}/specialists/${s.slug}`}
+                  className="btn-ghost text-xs font-medium !py-2 !px-3"
+                >
+                  Профиль
+                </Link>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Enterprise Standards & Trust Banner */}
+      <section className="home-rise bg-gradient-to-br from-slate-900 to-pine text-white rounded-3xl p-8 sm:p-10 shadow-2xl">
+        <div className="grid md:grid-cols-4 gap-6 text-center sm:text-left">
+          <div>
+            <p className="text-3xl font-bold text-amber-400">100%</p>
+            <p className="text-sm font-semibold mt-1">СНиП РК и Госэкспертиза</p>
+            <p className="text-xs text-slate-400 mt-1">Все расчеты соответствуют строительным нормам РК</p>
+          </div>
+          <div>
+            <p className="text-3xl font-bold text-emerald-400">BOQ</p>
+            <p className="text-sm font-semibold mt-1">Автосмета по объекту</p>
+            <p className="text-xs text-slate-400 mt-1">Объёмы, работы, материалы и накладные в одной смете</p>
+          </div>
+          <div>
+            <p className="text-3xl font-bold text-sky-400">CRM</p>
+            <p className="text-sm font-semibold mt-1">Сделки и счета</p>
+            <p className="text-xs text-slate-400 mt-1">Лиды, подряд, поставки и акты в одной карточке</p>
+          </div>
+          <div>
+            <p className="text-3xl font-bold text-amber-300">КС-2</p>
+            <p className="text-sm font-semibold mt-1">Площадка и контроль</p>
+            <p className="text-xs text-slate-400 mt-1">Гант, журнал работ и акты КС-2/КС-3</p>
+          </div>
+        </div>
+      </section>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

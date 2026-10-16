@@ -6,23 +6,34 @@
   color-scheme: light;
   --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  --bg-canvas: #efe8de;
-  --glass-fill: rgba(255, 255, 255, 0.12);
-  --glass-border: rgba(255, 255, 255, 0.38);
-  --primary: #2f5b8a;
-  --clarity: #3e7a62;
-  --caution: #c4923a;
-  --spring: 420ms cubic-bezier(0.22, 1, 0.36, 1);
+  --bg-canvas: #f8fafc;
+  --glass-fill: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(226, 232, 240, 0.85);
+  --primary: #0f2942;
+  --clarity: #059669;
+  --caution: #b45309;
+  --gold: #d4af37;
+  --spring: 380ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 html,
 body {
   min-height: 100%;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   @apply bg-paper text-ink antialiased;
   background-color: var(--bg-canvas);
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(30, 58, 138, 0.04) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(212, 175, 55, 0.05) 0px, transparent 40%),
+    radial-gradient(at 50% 100%, rgba(15, 41, 66, 0.03) 0px, transparent 60%);
+  background-attachment: fixed;
+  padding-bottom: env(safe-area-inset-bottom);
+  -webkit-tap-highlight-color: rgba(15, 41, 66, 0.1);
 }
 
 body::before {
@@ -31,11 +42,11 @@ body::before {
   position: fixed;
   inset: 0;
   z-index: 0;
-  opacity: 0.025;
+  opacity: 0.03;
   background-image:
-    linear-gradient(to right, #2f5b8a 1px, transparent 1px),
-    linear-gradient(to bottom, #2f5b8a 1px, transparent 1px);
-  background-size: 24px 24px;
+    linear-gradient(to right, #0f2942 1px, transparent 1px),
+    linear-gradient(to bottom, #0f2942 1px, transparent 1px);
+  background-size: 32px 32px;
 }
 
 body > * {
@@ -45,76 +56,170 @@ body > * {
 
 @layer components {
   .glass {
-    background: rgba(255, 255, 255, 0.12);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(226, 232, 240, 0.85);
+    box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.02);
     transform: translateZ(0);
   }
 
   .glass-strong,
   .l2 {
-    background: rgba(255, 255, 255, 0.16);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    border: 1px solid rgba(255, 255, 255, 0.38);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 12px 32px rgba(28, 25, 21, 0.08);
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    box-shadow: 0 10px 30px -5px rgba(15, 23, 42, 0.06), 0 0 0 1px rgba(226, 232, 240, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.8);
     transform: translateZ(0);
   }
 
   .l3 {
-    background: rgba(255, 255, 255, 0.22);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(255, 255, 255, 0.42);
-    box-shadow: 0 18px 48px rgba(28, 25, 21, 0.16);
+    background: #ffffff;
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(212, 175, 55, 0.3);
+    box-shadow: 0 20px 45px -10px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(212, 175, 55, 0.15);
     transform: translateZ(0);
   }
 
   .btn-ice {
     border-radius: 9999px;
-    background: #2f5b8a;
-    color: #f4f7fa;
-    font-weight: 500;
-    padding: 0.65rem 1.25rem;
-    transition: transform var(--spring), background var(--spring);
+    background: linear-gradient(135deg, #0f2942 0%, #1e3a8a 100%);
+    color: #ffffff;
+    font-weight: 600;
+    padding: 0.65rem 1.4rem;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: 0 4px 14px -1px rgba(15, 41, 66, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    touch-action: manipulation;
+    transition: all var(--spring);
+    cursor: pointer;
   }
 
   .btn-ice:hover {
-    background: #274c74;
+    background: linear-gradient(135deg, #16385b 0%, #254baf 100%);
+    box-shadow: 0 6px 20px -2px rgba(15, 41, 66, 0.45);
+    transform: translateY(-1px);
   }
 
   .btn-ice:active {
     transform: scale(0.98);
   }
 
+  .btn-gold {
+    border-radius: 9999px;
+    background: linear-gradient(135deg, #d4af37 0%, #b89025 100%);
+    color: #0b132b;
+    font-weight: 600;
+    padding: 0.65rem 1.4rem;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 16px -1px rgba(212, 175, 55, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+    touch-action: manipulation;
+    transition: all var(--spring);
+    cursor: pointer;
+  }
+
+  .btn-gold:hover {
+    background: linear-gradient(135deg, #e0be48 0%, #c59b2b 100%);
+    box-shadow: 0 6px 22px -2px rgba(212, 175, 55, 0.5);
+    transform: translateY(-1px);
+  }
+
+  .btn-gold:active {
+    transform: scale(0.98);
+  }
+
   .btn-ghost {
     border-radius: 9999px;
-    border: 1px solid rgba(47, 91, 138, 0.28);
-    color: #2f5b8a;
-    padding: 0.65rem 1.25rem;
-    background: transparent;
+    border: 1px solid rgba(15, 41, 66, 0.16);
+    color: #0f2942;
+    padding: 0.65rem 1.4rem;
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(12px);
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-weight: 500;
+    touch-action: manipulation;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+    transition: all var(--spring);
+    cursor: pointer;
+  }
+
+  .btn-ghost:hover {
+    background: #ffffff;
+    border-color: rgba(15, 41, 66, 0.3);
+    color: #0f2942;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+  }
+
+  .btn-ghost:active {
+    transform: scale(0.98);
   }
 
   .pill {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.45rem;
     border-radius: 9999px;
-    padding: 0.25rem 0.6rem;
-    font-size: 12px;
-    letter-spacing: 0.04em;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.28);
+    padding: 0.3rem 0.75rem;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(226, 232, 240, 0.9);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
   }
 }
 
 input,
 select,
 textarea {
-  border-radius: 0.85rem;
-  background: rgba(255, 255, 255, 0.55);
-  color: #1c1915;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.92);
+  color: #0b132b;
+  font-size: 14px;
+  min-height: 44px;
+  border: 1px solid rgba(203, 213, 225, 0.8);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  transition: border-color var(--spring), box-shadow var(--spring);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #1e3a8a;
+  box-shadow: 0 0 0 3px rgba(30, 58, 138, 0.12);
+}
+
+textarea {
+  min-height: 88px;
+}
+
+.tab-scroll {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+.tab-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .leaflet-container {
@@ -133,3 +238,146 @@ textarea {
 .leaflet-popup-tip {
   background: rgba(255, 255, 255, 0.88);
 }
+
+/* The veil overlaps the pinned scene. A negative margin under
+   prefers-reduced-motion would cover the hero, so it stays gated. */
+.home-veil {
+  height: 5rem;
+  background: linear-gradient(to bottom, #101726, #f8fafc);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .home-flow {
+    margin-top: -46vh;
+  }
+
+  .home-veil {
+    height: 46vh;
+    background: linear-gradient(
+      to bottom,
+      transparent 0%,
+      rgba(248, 250, 252, 0) 16%,
+      rgba(248, 250, 252, 0.42) 46%,
+      #f8fafc 76%,
+      #f8fafc 100%
+    );
+  }
+
+  html.js-rise .home-rise {
+    opacity: 0;
+    transform: translateY(22px);
+    transition:
+      opacity 720ms cubic-bezier(0.16, 1, 0.3, 1),
+      transform 720ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  html.js-rise .home-rise.is-in {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.route-wash {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  background: #f8fafc;
+  animation: route-wash 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes route-wash {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* ==========================================================================
+   ANYQ LUXURY TAB & PAGE TRANSITIONS (Apple / Linear / VisionOS Level)
+   ========================================================================== */
+
+@keyframes luxuryPageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.luxury-page-enter {
+  animation: luxuryPageEnter 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.luxury-stagger-1 {
+  animation: luxuryPageEnter 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: 50ms;
+}
+
+.luxury-stagger-2 {
+  animation: luxuryPageEnter 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: 100ms;
+}
+
+.luxury-stagger-3 {
+  animation: luxuryPageEnter 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: 150ms;
+}
+
+.anyq-header {
+  view-transition-name: anyq-header;
+}
+
+.anyq-tabbar {
+  view-transition-name: anyq-tabbar;
+}
+
+.anyq-page {
+  view-transition-name: anyq-page;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root),
+  ::view-transition-new(root),
+  ::view-transition-old(anyq-header),
+  ::view-transition-new(anyq-header),
+  ::view-transition-old(anyq-tabbar),
+  ::view-transition-new(anyq-tabbar) {
+    animation: none;
+  }
+
+  ::view-transition-group(anyq-page) {
+    animation: none;
+  }
+
+  ::view-transition-old(anyq-page) {
+    animation: 320ms cubic-bezier(0.4, 0, 1, 1) both luxuryFadeOut;
+  }
+
+  ::view-transition-new(anyq-page) {
+    animation: 460ms cubic-bezier(0.16, 1, 0.3, 1) both luxuryFadeIn;
+  }
+}
+
+@keyframes luxuryFadeOut {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes luxuryFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+

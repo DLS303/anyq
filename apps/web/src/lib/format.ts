@@ -70,12 +70,13 @@ export const CATEGORY: Record<SpecCategory, { ru: string; kk: string }> = {
 };
 
 export const FUNNEL: Record<string, { ru: string; kk: string }> = {
-  land_sale: { ru: "Продажа участка", kk: "Учаске сату" },
   design: { ru: "Проектирование / ПСД", kk: "Жобалау" },
   construction: { ru: "Строительство / СМР", kk: "Құрылыс" },
   materials: { ru: "Поставка материалов", kk: "Материал жеткізу" },
   legal: { ru: "Юр. оформление / ГАСК", kk: "Заңдық рәсімдеу" },
 };
+
+export const PRODUCT_FUNNELS = ["construction", "design", "materials", "legal"] as const;
 
 export const STAGE: Record<string, { ru: string; kk: string; color?: string }> = {
   lead: { ru: "Лид / Заявка", kk: "Лид / Өтінім", color: "border-blue-500 bg-blue-50/70 text-blue-900" },
@@ -132,9 +133,9 @@ export const LEAD_STATUS: Record<string, { ru: string; kk: string; color: string
 };
 
 export const CONTACT_TYPE: Record<string, { ru: string; kk: string }> = {
-  client: { ru: "Покупатель / Заказчик", kk: "Сатып алушы / Тапсырыс беруші" },
+  client: { ru: "Заказчик", kk: "Тапсырыс беруші" },
   contractor: { ru: "Подрядчик / Проектировщик", kk: "Мердігер / Жобалаушы" },
-  landowner: { ru: "Собственник земли", kk: "Жер иесі" },
+  landowner: { ru: "Заказчик", kk: "Тапсырыс беруші" },
   supplier: { ru: "Поставщик материалов", kk: "Материал жеткізуші" },
   investor: { ru: "Инвестор / Девелопер", kk: "Инвестор / Девелопер" },
 };

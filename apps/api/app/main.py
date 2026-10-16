@@ -6,7 +6,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.routers import auth, cabinet, chat, crm, health, materials, moderation, modules, plots, site, specialists
+from app.routers import auth, cabinet, chat, crm, estimates, health, materials, moderation, modules, plots, site, specialists
 
 _this_file = Path(__file__).resolve()
 _repo_root = _this_file.parents[3] if len(_this_file.parents) > 3 else _this_file.parent.parent
@@ -34,6 +34,7 @@ app.include_router(specialists.router)
 app.include_router(crm.router)
 app.include_router(chat.router)
 app.include_router(materials.router)
+app.include_router(estimates.router)
 app.include_router(site.router)
 app.mount("/uploads", StaticFiles(directory=UPLOADS), name="uploads")
 

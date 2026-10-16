@@ -7,6 +7,8 @@ import type {
   CrmInvoice,
   Deal,
   DevCalc,
+  EstimateInput,
+  EstimateResult,
   Inquiry,
   Lead,
   ModuleInfo,
@@ -20,16 +22,11 @@ import type {
 } from "./types";
 
 export function getApiBase(): string {
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    if (host === "localhost" || host === "127.0.0.1") {
-      return "http://127.0.0.1:8010";
-    }
-  }
-  return process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8010";
+  if (typeof window !== "undefined") return "";
+  return process.env.INTERNAL_API_URL ?? "http://127.0.0.1:8010";
 }
 
-export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8010";
+export const API = getApiBase();
 
 type Envelope<T> = { ok: boolean; data: T; total?: number; detail?: string };
 
@@ -73,7 +70,7 @@ export function fetchPlots(params: Record<string, string | undefined> = {}) {
 export async function fetchPlot(id: string, email?: string) {
   const headers = new Headers();
   if (email) headers.set("x-demo-user", email);
-  const res = await fetch(`${API}/v1/plots/${id}`, { headers, cache: "no-store" });
+  const res = await fetch(`${getApiBase()}/v1/plots/${id}`, { headers, cache: "no-store" });
   const json = (await res.json()) as Envelope<Plot> & { calc?: DevCalc; favorite?: boolean };
   if (!res.ok) throw new Error(detailOf(json, res.statusText));
   return { plot: json.data, calc: json.calc, favorite: Boolean(json.favorite) };
@@ -166,7 +163,7 @@ export async function uploadPhoto(email: string, file: File) {
   headers.set("x-demo-user", email);
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch(`${API}/v1/cabinet/photos`, { method: "POST", headers, body: fd });
+  const res = await fetch(`${getApiBase()}/v1/cabinet/photos`, { method: "POST", headers, body: fd });
   const json = (await res.json()) as Envelope<{ url: string }>;
   if (!res.ok) throw new Error(detailOf(json, res.statusText));
   return json.data.url;
@@ -194,7 +191,7 @@ export function fetchSpecialists(params: Record<string, string | undefined> = {}
 }
 
 export async function fetchSpecialist(id: string) {
-  const res = await fetch(`${API}/v1/specialists/${id}`, { cache: "no-store" });
+  const res = await fetch(`${getApiBase()}/v1/specialists/${id}`, { cache: "no-store" });
   const json = (await res.json()) as Envelope<Specialist> & { reviews?: Review[] };
   if (!res.ok) throw new Error(detailOf(json, res.statusText));
   return { specialist: json.data, reviews: json.reviews ?? [] };
@@ -248,7 +245,7 @@ export async function fetchDealDetail(email: string, id: string) {
   headers.set("x-demo-user", email);
   const token = typeof window !== "undefined" ? localStorage.getItem("superapp_token") : null;
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const res = await fetch(`${API}/v1/crm/deals/${id}`, { headers, cache: "no-store" });
+  const res = await fetch(`${getApiBase()}/v1/crm/deals/${id}`, { headers, cache: "no-store" });
   const json = (await res.json()) as { ok: boolean; data: Deal; activities: CrmActivity[]; invoices: CrmInvoice[]; detail?: string };
   if (!res.ok) throw new Error(json.detail || res.statusText);
   return { deal: json.data, activities: json.activities, invoices: json.invoices };
@@ -391,7 +388,7 @@ export function fetchThreads(email: string) {
 export async function fetchMessages(email: string, tid: string) {
   const headers = new Headers();
   headers.set("x-demo-user", email);
-  const res = await fetch(`${API}/v1/chat/threads/${tid}/messages`, { headers, cache: "no-store" });
+  const res = await fetch(`${getApiBase()}/v1/chat/threads/${tid}/messages`, { headers, cache: "no-store" });
   const json = (await res.json()) as Envelope<ChatMessage[]> & { thread?: ChatThread };
   if (!res.ok) throw new Error(detailOf(json, res.statusText));
   return { messages: json.data, thread: json.thread };
@@ -409,7 +406,16 @@ export function registerRequest(body: {
   password: string;
   full_name: string;
   phone: string;
-  role: "buyer" | "owner" | "supplier";
+  company: string;
+  company_bin: string;
+  city: string;
+  role: "buyer" | "contractor" | "supplier";
+  pilot: string;
+  sku_title: string;
+  sku_category: string;
+  sku_unit: string;
+  sku_price: number;
+  sku_stock: number;
 }) {
   return request<{ user: User; token: string }>("/v1/auth/register", {
     method: "POST",
@@ -455,6 +461,13 @@ export function setMaterialOrderStatus(email: string, id: string, status: string
   return request<MaterialOrder>(`/v1/material-orders/${id}/status?status=${status}`, {
     method: "POST",
     email,
+  });
+}
+
+export function calculateEstimate(body: EstimateInput) {
+  return request<EstimateResult>("/v1/estimates/calculate", {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 

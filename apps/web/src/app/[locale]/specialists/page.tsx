@@ -8,7 +8,7 @@ export default async function SpecialistsPage({ params }: { params: Promise<{ lo
   const m = t(locale);
   return (
     <div>
-      <h1 className="font-serif text-4xl mb-4">{m.navSpecialists}</h1>
+      <h1 className="text-2xl sm:text-4xl font-medium tracking-tight mb-4">{m.navSpecialists}</h1>
       <SpecialistsClient locale={locale} />
     </div>
   );

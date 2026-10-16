@@ -31,7 +31,7 @@ export default function SiteListPage() {
   return (
     <div>
       <p className="text-[11px] uppercase tracking-wider text-sand">Procore playbook · field to office</p>
-      <h1 className="font-serif text-4xl mt-2 mb-2">{m.navSite}</h1>
+      <h1 className="text-2xl sm:text-4xl font-medium tracking-tight mt-2 mb-2">{m.navSite}</h1>
       <p className="text-ink/60 mb-6 max-w-2xl">
         Журнал, RFI, согласования, дефекты, инспекции, ТБ, актуальный комплект чертежей, график, бюджет и табель — один проект, одна правда.
       </p>

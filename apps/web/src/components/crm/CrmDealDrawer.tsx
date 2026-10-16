@@ -243,18 +243,7 @@ export function CrmDealDrawer({
                     </a>
                   )}
                 </div>
-                {currentDeal.plot_id && (
-                  <div>
-                    <span className="block text-xs text-ink/50">Привязанный участок:</span>
-                    <Link
-                      href={`/${locale}/plots/${currentDeal.plot_id}`}
-                      className="text-xs text-pine underline font-medium block mt-0.5"
-                      target="_blank"
-                    >
-                      🗺️ {currentDeal.plot_title || currentDeal.plot_id} (Кадастр)
-                    </Link>
-                  </div>
-                )}
+
                 {currentDeal.specialist_id && (
                   <div>
                     <span className="block text-xs text-ink/50">Подрядчик / Исполнитель:</span>

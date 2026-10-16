@@ -78,8 +78,13 @@ export function CrmAnalyticsView({ locale }: { locale: Locale }) {
           </h3>
 
           <div className="space-y-3">
-            {Object.entries(data.funnel_counts).map(([fn, count]) => {
-              const pct = data.total_deals > 0 ? Math.round((count / data.total_deals) * 100) : 0;
+            {Object.entries(data.funnel_counts)
+              .filter(([fn]) => fn !== "land_sale")
+              .map(([fn, count]) => {
+              const shown = Object.entries(data.funnel_counts)
+                .filter(([name]) => name !== "land_sale")
+                .reduce((sum, [, value]) => sum + value, 0);
+              const pct = shown > 0 ? Math.round((count / shown) * 100) : 0;
               const label = FUNNEL[fn]?.[locale] ?? fn;
               return (
                 <div key={fn}>
@@ -114,7 +119,7 @@ export function CrmAnalyticsView({ locale }: { locale: Locale }) {
                 <span className="font-bold text-emerald-700 font-mono text-sm">68.4%</span>
               </div>
               <p className="text-ink/55 text-[11px]">
-                Благодаря автоматической верификации участков в АИС ГЗК и скорингу KENML конверсия в 3 раза выше средних показателей досок объявлений.
+                Сделки приходят из сметы, подряда и поставок. Конверсия считается по строительной воронке.
               </p>
             </div>
 

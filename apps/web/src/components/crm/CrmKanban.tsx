@@ -29,7 +29,7 @@ export function CrmKanban({
   }, [deals, stages]);
 
   return (
-    <div className="flex gap-3 overflow-x-auto pb-6 pt-2 scrollbar-thin">
+    <div className="flex gap-3 overflow-x-auto pb-6 pt-2 -mx-4 px-4 snap-x snap-mandatory">
       {stages.map((stage, idx) => {
         const stageDeals = byStage[stage] ?? [];
         const stageTotal = stageDeals.reduce((sum, d) => sum + (d.amount_kzt || 0), 0);
@@ -38,7 +38,7 @@ export function CrmKanban({
         return (
           <div
             key={stage}
-            className="min-w-[280px] w-72 shrink-0 flex flex-col rounded-xl border border-ink/10 bg-paper/60 backdrop-blur-xs p-3.5 shadow-xs"
+            className="min-w-[min(80vw,280px)] w-72 shrink-0 snap-start flex flex-col rounded-xl border border-ink/10 bg-paper/60 backdrop-blur-xs p-3.5 shadow-xs"
           >
             {/* Column Header */}
             <div className="mb-3">

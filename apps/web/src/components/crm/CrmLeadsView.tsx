@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { convertLead, createLead, fetchLeads } from "@/lib/api";
-import { FUNNEL, LEAD_STATUS, money } from "@/lib/format";
+import { FUNNEL, LEAD_STATUS, PRODUCT_FUNNELS, money } from "@/lib/format";
 import type { Funnel, Lead, Locale } from "@/lib/types";
 
 export function CrmLeadsView({
@@ -20,7 +20,7 @@ export function CrmLeadsView({
 
   // Convert modal
   const [convertingLead, setConvertingLead] = useState<Lead | null>(null);
-  const [targetFunnel, setTargetFunnel] = useState<Funnel>("land_sale");
+  const [targetFunnel, setTargetFunnel] = useState<Funnel>("construction");
   const [dealTitle, setDealTitle] = useState("");
   const [dealAmount, setDealAmount] = useState(0);
 
@@ -30,8 +30,8 @@ export function CrmLeadsView({
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
   const [newEmail, setNewEmail] = useState("");
-  const [newSource, setNewSource] = useState("Сайт (Каталог)");
-  const [newFunnelTarget, setNewFunnelTarget] = useState<Funnel>("land_sale");
+  const [newSource, setNewSource] = useState("Сайт");
+  const [newFunnelTarget, setNewFunnelTarget] = useState<Funnel>("construction");
   const [newBudget, setNewBudget] = useState(0);
   const [newNotes, setNewNotes] = useState("");
 
@@ -189,7 +189,7 @@ export function CrmLeadsView({
                       {lead.budget_kzt ? money(lead.budget_kzt, locale) : "Не указан"}
                     </td>
                     <td className="py-3 px-3 text-ink/70">
-                      {FUNNEL[lead.funnel_target]?.[locale] ?? lead.funnel_target}
+                      {FUNNEL[lead.funnel_target === "land_sale" ? "construction" : lead.funnel_target]?.[locale] ?? lead.funnel_target}
                     </td>
                     <td className="py-3 px-3">
                       <span className="bg-ink/5 px-2 py-0.5 rounded text-[10px] text-ink/70">{lead.source}</span>
@@ -207,7 +207,11 @@ export function CrmLeadsView({
                             setConvertingLead(lead);
                             setDealTitle(lead.title);
                             setDealAmount(lead.budget_kzt || 0);
-                            setTargetFunnel(lead.funnel_target || "land_sale");
+                            setTargetFunnel(
+                              PRODUCT_FUNNELS.includes(lead.funnel_target as (typeof PRODUCT_FUNNELS)[number])
+                                ? lead.funnel_target
+                                : "construction",
+                            );
                           }}
                           className="px-2.5 py-1 bg-pine text-white text-[11px] font-medium rounded hover:bg-pine/90 transition-colors shadow-2xs"
                         >
@@ -240,9 +244,8 @@ export function CrmLeadsView({
                   onChange={(e) => setTargetFunnel(e.target.value as Funnel)}
                   className="w-full px-3 py-2 text-sm border border-ink/15 rounded-lg bg-white"
                 >
-                  <option value="land_sale">Продажа участка (Земля)</option>
-                  <option value="design">Проектирование / ПСД (Архитектура)</option>
                   <option value="construction">Строительство / СМР (Подряд)</option>
+                  <option value="design">Проектирование / ПСД (Архитектура)</option>
                   <option value="materials">Поставка материалов (Бетон/Арматура)</option>
                   <option value="legal">Юр. оформление / ГАСК</option>
                 </select>
@@ -302,7 +305,7 @@ export function CrmLeadsView({
                 <label className="block text-ink/60 font-medium mb-1">Тема / Запрос:</label>
                 <input
                   type="text"
-                  placeholder="напр. Подбор участка в предгорьях Алматы"
+                  placeholder="напр. Смета и генподряд на корпус в Алматы"
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
                   className="w-full px-3 py-2 text-sm border border-ink/15 rounded-lg bg-white"
@@ -343,9 +346,8 @@ export function CrmLeadsView({
                     onChange={(e) => setNewFunnelTarget(e.target.value as Funnel)}
                     className="w-full px-3 py-2 text-sm border border-ink/15 rounded-lg bg-white"
                   >
-                    <option value="land_sale">Продажа участка</option>
-                    <option value="design">Проектирование / ПСД</option>
                     <option value="construction">Строительство / СМР</option>
+                    <option value="design">Проектирование / ПСД</option>
                     <option value="materials">Поставка материалов</option>
                     <option value="legal">Юр. оформление</option>
                   </select>
@@ -369,11 +371,11 @@ export function CrmLeadsView({
                   onChange={(e) => setNewSource(e.target.value)}
                   className="w-full px-3 py-2 text-sm border border-ink/15 rounded-lg bg-white"
                 >
-                  <option value="Сайт (Каталог)">Сайт (Каталог)</option>
+                  <option value="Сайт">Сайт</option>
                   <option value="WhatsApp">WhatsApp</option>
                   <option value="Входящий звонок">Входящий звонок</option>
                   <option value="Рекомендация">Рекомендация</option>
-                  <option value="Kaspi / Krisha">Kaspi / Krisha</option>
+                  <option value="Заявка с объекта">Заявка с объекта</option>
                 </select>
               </div>
 
