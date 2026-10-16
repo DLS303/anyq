@@ -95,18 +95,27 @@ function mergeGeos(geos: THREE.BufferGeometry[]) {
   for (const geo of geos) verts += geo.getAttribute("position").count;
   const position = new Float32Array(verts * 3);
   const normal = new Float32Array(verts * 3);
+  const hasUv = geos.every((geo) => geo.getAttribute("uv"));
+  const uv = hasUv ? new Float32Array(verts * 2) : null;
   let cursor = 0;
+  let uvCursor = 0;
   for (const geo of geos) {
     const p = geo.getAttribute("position");
     const n = geo.getAttribute("normal");
     position.set(p.array as ArrayLike<number>, cursor);
     normal.set(n.array as ArrayLike<number>, cursor);
+    if (uv) {
+      const u = geo.getAttribute("uv");
+      uv.set(u.array as ArrayLike<number>, uvCursor);
+      uvCursor += u.count * 2;
+    }
     cursor += p.count * 3;
     geo.dispose();
   }
   const merged = new THREE.BufferGeometry();
   merged.setAttribute("position", new THREE.BufferAttribute(position, 3));
   merged.setAttribute("normal", new THREE.BufferAttribute(normal, 3));
+  if (uv) merged.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
   return merged;
 }
 
