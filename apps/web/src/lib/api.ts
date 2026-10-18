@@ -38,16 +38,18 @@ function detailOf(json: unknown, fallback: string) {
   return fallback;
 }
 
+function applyAuth(headers: Headers) {
+  if (typeof window === "undefined") return;
+  const token = localStorage.getItem("superapp_token");
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+}
+
 async function request<T>(path: string, init?: RequestInit & { email?: string }): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem("superapp_token");
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-  }
-  if (init?.email) headers.set("x-demo-user", init.email);
+  applyAuth(headers);
   const res = await fetch(`${getApiBase()}${path}`, {
     ...init,
     headers,
@@ -68,8 +70,9 @@ export function fetchPlots(params: Record<string, string | undefined> = {}) {
 }
 
 export async function fetchPlot(id: string, email?: string) {
+  void email;
   const headers = new Headers();
-  if (email) headers.set("x-demo-user", email);
+  applyAuth(headers);
   const res = await fetch(`${getApiBase()}/v1/plots/${id}`, { headers, cache: "no-store" });
   const json = (await res.json()) as Envelope<Plot> & { calc?: DevCalc; favorite?: boolean };
   if (!res.ok) throw new Error(detailOf(json, res.statusText));
@@ -159,8 +162,9 @@ export function suggestPlots(q: string) {
 }
 
 export async function uploadPhoto(email: string, file: File) {
+  void email;
   const headers = new Headers();
-  headers.set("x-demo-user", email);
+  applyAuth(headers);
   const fd = new FormData();
   fd.append("file", file);
   const res = await fetch(`${getApiBase()}/v1/cabinet/photos`, { method: "POST", headers, body: fd });
@@ -241,10 +245,9 @@ export function moveDeal(email: string, id: string, stage: string) {
 }
 
 export async function fetchDealDetail(email: string, id: string) {
+  void email;
   const headers = new Headers();
-  headers.set("x-demo-user", email);
-  const token = typeof window !== "undefined" ? localStorage.getItem("superapp_token") : null;
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  applyAuth(headers);
   const res = await fetch(`${getApiBase()}/v1/crm/deals/${id}`, { headers, cache: "no-store" });
   const json = (await res.json()) as { ok: boolean; data: Deal; activities: CrmActivity[]; invoices: CrmInvoice[]; detail?: string };
   if (!res.ok) throw new Error(json.detail || res.statusText);
@@ -386,18 +389,19 @@ export function fetchThreads(email: string) {
 }
 
 export async function fetchMessages(email: string, tid: string) {
+  void email;
   const headers = new Headers();
-  headers.set("x-demo-user", email);
+  applyAuth(headers);
   const res = await fetch(`${getApiBase()}/v1/chat/threads/${tid}/messages`, { headers, cache: "no-store" });
   const json = (await res.json()) as Envelope<ChatMessage[]> & { thread?: ChatThread };
   if (!res.ok) throw new Error(detailOf(json, res.statusText));
   return { messages: json.data, thread: json.thread };
 }
 
-export function loginRequest(email: string, password: string) {
+export function loginRequest(email: string, password: string, consentOfferPd: boolean) {
   return request<{ user: User; token: string }>("/v1/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, consent_offer_pd: consentOfferPd }),
   });
 }
 
@@ -416,6 +420,7 @@ export function registerRequest(body: {
   sku_unit: string;
   sku_price: number;
   sku_stock: number;
+  consent_offer_pd: boolean;
 }) {
   return request<{ user: User; token: string }>("/v1/auth/register", {
     method: "POST",

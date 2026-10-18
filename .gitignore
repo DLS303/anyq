@@ -19,8 +19,18 @@ env/
 .pytest_cache/
 
 # Local Environment Variables
+.env
+.env.*
+!.env.example
 .env.local
 .env.*.local
+
+# Local data
+data/db.json
+data/uploads/
+*.sqlite
+*.dump
+backups/
 
 # Logs
 npm-debug.log*

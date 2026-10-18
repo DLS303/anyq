@@ -6,6 +6,7 @@ import { PURPOSE, maskCadastral, money, titleOf } from "@/lib/format";
 import { t } from "@/i18n/messages";
 import { useCompare } from "@/lib/compare";
 import { Check, CheckCircle2, ShieldAlert, Sparkles, ArrowRight } from "lucide-react";
+import { AuthImage } from "@/components/media/AuthImage";
 
 export function PlotCard({ plot, locale }: { plot: Plot; locale: Locale }) {
   const m = t(locale);
@@ -32,9 +33,8 @@ export function PlotCard({ plot, locale }: { plot: Plot; locale: Locale }) {
   return (
     <article className="glass-strong rounded-3xl overflow-hidden shadow-luxury hover:shadow-luxury-lg transition-all duration-300 border border-slate-200/90 group flex flex-col justify-between">
       <Link href={`/${locale}/plots/${plot.slug}`} className="block">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <div className="relative overflow-hidden h-44 w-full bg-slate-100">
-          <img
+          <AuthImage
             src={cover}
             alt=""
             className="h-full w-full object-cover group-hover:scale-104 transition-transform duration-500"

@@ -339,6 +339,15 @@ function Footer({ locale }: { locale: Locale }) {
           </div>
         </div>
         <p className="mt-4 text-xs leading-relaxed text-slate-500">{m.footer}</p>
+        <p className="mt-2 text-xs">
+          <Link href={`/${locale}/legal/privacy`} className="underline text-slate-600 hover:text-slate-900">
+            {m.privacy}
+          </Link>
+          <span className="mx-2 text-slate-300">·</span>
+          <Link href={`/${locale}/legal/pd-consent`} className="underline text-slate-600 hover:text-slate-900">
+            {m.pdConsent}
+          </Link>
+        </p>
       </div>
     </footer>
   );

@@ -8,6 +8,7 @@ import { createPlot, fetchPlot, submitPlot, updatePlot, uploadPhoto } from "@/li
 import { PURPOSE, RELIEF, UTILITY } from "@/lib/format";
 import { DISTRICTS, type Locale, type Purpose, type Relief, type Utility } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { AuthImage } from "@/components/media/AuthImage";
 
 const DrawMap = dynamic(() => import("@/components/catalog/DrawMap"), { ssr: false });
 
@@ -292,8 +293,7 @@ export function PublishForm({ locale, editId }: { locale: Locale; editId?: strin
           <p className="text-xs uppercase tracking-wider text-ink/50">{m.photos}</p>
           <div className="flex flex-wrap gap-2">
             {draft.photos.map((src) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img key={src} src={src} alt="" className="h-20 w-28 object-cover border border-ink/10" />
+              <AuthImage key={src} src={src} alt="" className="h-20 w-28 object-cover border border-ink/10" />
             ))}
           </div>
           <input

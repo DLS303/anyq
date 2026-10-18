@@ -4,11 +4,12 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.deps import require_user
+from app.media import strip_image
+from app.paths import uploads_dir
 from app.schemas import PlotCreate, SavedSearchCreate, User
 from app.store import store
 
 router = APIRouter(prefix="/v1/cabinet", tags=["cabinet"])
-UPLOADS = Path(__file__).resolve().parents[3] / "data" / "uploads"
 ALLOWED = {".jpg", ".jpeg", ".png", ".webp"}
 
 
@@ -63,17 +64,20 @@ def resubmit(plot_id: str, user: User = Depends(require_user)):
 
 @router.post("/photos")
 async def upload_photo(user: User = Depends(require_user), file: UploadFile = File(...)):
-    _ = user
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED:
         raise HTTPException(status_code=400, detail="Только jpg, png, webp")
     raw = await file.read()
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Файл больше 8 МБ")
-    UPLOADS.mkdir(parents=True, exist_ok=True)
-    name = f"{uuid4().hex}{suffix}"
-    (UPLOADS / name).write_bytes(raw)
-    return {"ok": True, "data": {"url": f"/uploads/{name}"}}
+    try:
+        clean, content_type, clean_suffix = strip_image(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    name = f"{uuid4().hex}{clean_suffix}"
+    (uploads_dir() / name).write_bytes(clean)
+    stored = store.add_upload(user, name, content_type)
+    return {"ok": True, "data": {"id": stored.id, "url": f"/v1/files/{stored.id}"}}
 
 
 @router.get("/inquiries")

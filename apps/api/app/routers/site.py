@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from app.deps import require_user
 from app.schemas import User
+from app.site_models import Project
 from app.store import store
 
 router = APIRouter(prefix="/v1/site", tags=["site"])
@@ -101,30 +102,51 @@ class CoIn(BaseModel):
     reason: str = ""
 
 
-def _pid(pid: str):
-    p = store.get_project(pid)
-    if not p:
+def _project_or_404(pid: str) -> Project:
+    project = store.get_project(pid)
+    if not project:
         raise HTTPException(404, "Проект не найден")
-    return p
+    return project
+
+
+def _guard(user: User, project: Project) -> Project:
+    if not store.can_access_project(user, project):
+        raise HTTPException(403, "Недостаточно прав")
+    return project
+
+
+def _guard_pid(user: User, pid: str) -> Project:
+    return _guard(user, _project_or_404(pid))
+
+
+def _guard_item(user: User, table: dict, item_id: str) -> None:
+    item = table.get(item_id)
+    if not item:
+        raise HTTPException(404, "Не найдено")
+    project = store.get_project(getattr(item, "project_id", ""))
+    if not project or not store.can_access_project(user, project):
+        raise HTTPException(403, "Недостаточно прав")
 
 
 @router.get("/projects")
-def list_projects():
-    snaps = [store.project_snapshot(p.id) for p in store.list_projects()]
+def list_projects(user: User = Depends(require_user)):
+    visible = [p for p in store.list_projects() if store.can_access_project(user, p)]
+    snaps = [store.project_snapshot(p.id) for p in visible]
     return {"ok": True, "data": snaps}
 
 
 @router.get("/projects/{pid}")
-def get_project(pid: str):
-    snap = store.project_snapshot(pid)
+def get_project(pid: str, user: User = Depends(require_user)):
+    project = _guard_pid(user, pid)
+    snap = store.project_snapshot(project.id)
     if not snap:
         raise HTTPException(404, "Проект не найден")
     return {"ok": True, "data": snap}
 
 
 @router.get("/projects/{pid}/bundle")
-def bundle(pid: str):
-    p = _pid(pid)
+def bundle(pid: str, user: User = Depends(require_user)):
+    p = _guard_pid(user, pid)
     return {
         "ok": True,
         "data": {
@@ -148,6 +170,7 @@ def bundle(pid: str):
 
 @router.post("/projects/{pid}/daily")
 def add_daily(pid: str, body: DailyIn, user: User = Depends(require_user)):
+    _guard_pid(user, pid)
     try:
         return {"ok": True, "data": store.add_daily(pid, body.model_dump(), user.id)}
     except ValueError as e:
@@ -156,7 +179,7 @@ def add_daily(pid: str, body: DailyIn, user: User = Depends(require_user)):
 
 @router.post("/projects/{pid}/rfis")
 def add_rfi(pid: str, body: RfiIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_pid(user, pid)
     try:
         return {"ok": True, "data": store.add_rfi(pid, body.model_dump())}
     except ValueError as e:
@@ -165,7 +188,7 @@ def add_rfi(pid: str, body: RfiIn, user: User = Depends(require_user)):
 
 @router.post("/rfis/{rid}/answer")
 def answer_rfi(rid: str, body: AnswerIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_item(user, store.rfis, rid)
     try:
         return {"ok": True, "data": store.answer_rfi(rid, body.answer)}
     except ValueError as e:
@@ -174,7 +197,7 @@ def answer_rfi(rid: str, body: AnswerIn, user: User = Depends(require_user)):
 
 @router.post("/projects/{pid}/punches")
 def add_punch(pid: str, body: PunchIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_pid(user, pid)
     try:
         return {"ok": True, "data": store.add_punch(pid, body.model_dump())}
     except ValueError as e:
@@ -183,7 +206,7 @@ def add_punch(pid: str, body: PunchIn, user: User = Depends(require_user)):
 
 @router.post("/punches/{iid}/status")
 def punch_status(iid: str, body: StatusIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_item(user, store.punches, iid)
     try:
         return {"ok": True, "data": store.set_punch(iid, body.status)}
     except ValueError as e:
@@ -192,7 +215,7 @@ def punch_status(iid: str, body: StatusIn, user: User = Depends(require_user)):
 
 @router.post("/projects/{pid}/inspections")
 def add_insp(pid: str, body: InspIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_pid(user, pid)
     try:
         return {"ok": True, "data": store.add_inspection(pid, body.model_dump())}
     except ValueError as e:
@@ -201,7 +224,7 @@ def add_insp(pid: str, body: InspIn, user: User = Depends(require_user)):
 
 @router.post("/projects/{pid}/incidents")
 def add_inc(pid: str, body: IncidentIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_pid(user, pid)
     try:
         return {"ok": True, "data": store.add_incident(pid, body.model_dump())}
     except ValueError as e:
@@ -210,7 +233,7 @@ def add_inc(pid: str, body: IncidentIn, user: User = Depends(require_user)):
 
 @router.post("/incidents/{iid}/close")
 def close_inc(iid: str, user: User = Depends(require_user)):
-    _ = user
+    _guard_item(user, store.incidents, iid)
     try:
         return {"ok": True, "data": store.close_incident(iid)}
     except ValueError as e:
@@ -219,7 +242,7 @@ def close_inc(iid: str, user: User = Depends(require_user)):
 
 @router.post("/projects/{pid}/timesheets")
 def add_ts(pid: str, body: TsIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_pid(user, pid)
     try:
         return {"ok": True, "data": store.add_timesheet(pid, body.model_dump())}
     except ValueError as e:
@@ -228,7 +251,7 @@ def add_ts(pid: str, body: TsIn, user: User = Depends(require_user)):
 
 @router.post("/projects/{pid}/meetings")
 def add_mt(pid: str, body: MeetIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_pid(user, pid)
     try:
         return {"ok": True, "data": store.add_meeting(pid, body.model_dump())}
     except ValueError as e:
@@ -237,7 +260,7 @@ def add_mt(pid: str, body: MeetIn, user: User = Depends(require_user)):
 
 @router.post("/schedule/{tid}/progress")
 def task_pct(tid: str, body: PctIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_item(user, store.schedule, tid)
     try:
         return {"ok": True, "data": store.set_task_pct(tid, body.pct, body.status)}
     except ValueError as e:
@@ -246,7 +269,7 @@ def task_pct(tid: str, body: PctIn, user: User = Depends(require_user)):
 
 @router.post("/projects/{pid}/schedule")
 def add_task(pid: str, body: TaskCreateIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_pid(user, pid)
     try:
         return {"ok": True, "data": store.add_schedule_task(pid, body.model_dump())}
     except ValueError as e:
@@ -255,7 +278,7 @@ def add_task(pid: str, body: TaskCreateIn, user: User = Depends(require_user)):
 
 @router.post("/schedule/{tid}/update")
 def update_task(tid: str, body: TaskUpdateIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_item(user, store.schedule, tid)
     try:
         return {"ok": True, "data": store.update_schedule_task(tid, body.model_dump(exclude_unset=True))}
     except ValueError as e:
@@ -264,7 +287,7 @@ def update_task(tid: str, body: TaskUpdateIn, user: User = Depends(require_user)
 
 @router.post("/schedule/{tid}/delete")
 def delete_task(tid: str, user: User = Depends(require_user)):
-    _ = user
+    _guard_item(user, store.schedule, tid)
     try:
         store.delete_schedule_task(tid)
         return {"ok": True}
@@ -274,7 +297,7 @@ def delete_task(tid: str, user: User = Depends(require_user)):
 
 @router.post("/projects/{pid}/changes")
 def add_co(pid: str, body: CoIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_pid(user, pid)
     try:
         return {"ok": True, "data": store.add_change(pid, body.model_dump())}
     except ValueError as e:
@@ -283,7 +306,7 @@ def add_co(pid: str, body: CoIn, user: User = Depends(require_user)):
 
 @router.post("/changes/{cid}/status")
 def co_status(cid: str, body: StatusIn, user: User = Depends(require_user)):
-    _ = user
+    _guard_item(user, store.change_orders, cid)
     try:
         return {"ok": True, "data": store.set_change(cid, body.status)}
     except ValueError as e:

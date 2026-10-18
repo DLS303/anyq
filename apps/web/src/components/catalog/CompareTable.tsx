@@ -6,6 +6,7 @@ import { fetchPlot } from "@/lib/api";
 import { PURPOSE, RELIEF, UTILITY, money, titleOf } from "@/lib/format";
 import type { Locale, Plot } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { AuthImage } from "@/components/media/AuthImage";
 
 export function CompareTable({ locale, ids }: { locale: Locale; ids: string[] }) {
   const m = t(locale);
@@ -46,8 +47,7 @@ export function CompareTable({ locale, ids }: { locale: Locale; ids: string[] })
                   {titleOf(p, locale)}
                 </Link>
                 {p.photos?.[0] ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={p.photos[0]} alt="" className="mt-2 h-28 w-full object-cover" />
+                  <AuthImage src={p.photos[0]} alt="" className="mt-2 h-28 w-full object-cover" />
                 ) : null}
               </th>
             ))}
