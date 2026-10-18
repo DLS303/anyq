@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -29,6 +30,7 @@ from app.schemas import (
     LeadCreate,
     Material,
     RegisterBody,
+    ConsentRecord,
     MaterialCreate,
     MaterialOrder,
     MaterialOrderCreate,
@@ -39,12 +41,14 @@ from app.schemas import (
     Review,
     ReviewCreate,
     SavedSearch,
+    StoredUpload,
     ServiceOrder,
     Specialist,
     ThreadCreate,
     User,
 )
-from app.authutil import DEMO_PASSWORD, hash_password, make_token, verify_password
+from app.authutil import hash_password, make_token, verify_password
+from app.legal import PD_VERSION, pd_sha256
 from app.seed import PLOTS, USERS
 from app.seed_phase2 import DEALS, MESSAGES, ORDERS, PHASE2_USERS, REVIEWS, SPECIALISTS, THREADS
 from app.seed_crm import CRM_ACTIVITIES, CRM_CONTACTS, CRM_EXTRA_DEALS, CRM_INVOICES, CRM_LEADS
@@ -84,7 +88,18 @@ from app.site_models import (
 from app.trust import trust_score
 
 CADASTRE = re.compile(r"^\d{2}-\d{3}-\d{3}-\d{3}$")
-DB_PATH = Path(__file__).resolve().parents[3] / "data" / "db.json"
+
+
+class ConsentRequired(Exception):
+    def __init__(self) -> None:
+        super().__init__("Нужно согласие на обработку персональных данных")
+
+
+def db_file() -> Path:
+    override = os.getenv("ANYQ_DB_PATH", "").strip()
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[3] / "data" / "db.json"
 
 
 def _slugify(text: str) -> str:
@@ -132,6 +147,8 @@ class MemoryStore:
         self.crm_contacts: dict[str, CrmContact] = {}
         self.crm_activities: dict[str, CrmActivity] = {}
         self.crm_invoices: dict[str, CrmInvoice] = {}
+        self.files: dict[str, StoredUpload] = {}
+        self.consents: list[ConsentRecord] = []
         self._load()
         self._ensure_seed_users()
         self._ensure_demo_passwords()
@@ -153,10 +170,15 @@ class MemoryStore:
             self._save()
 
     def _ensure_demo_passwords(self) -> None:
+        if os.getenv("ANYQ_ENV", "development").strip().lower() == "production":
+            return
+        password = os.getenv("ANYQ_DEMO_PASSWORD", "").strip()
+        if not password:
+            return
         added = False
         for u in list(self.users_by_id.values()):
-            if u.id not in self.credentials:
-                self.credentials[u.id] = hash_password(DEMO_PASSWORD)
+            if u.email.endswith("@demo.superapp") and u.id not in self.credentials:
+                self.credentials[u.id] = hash_password(password)
                 added = True
         if added:
             self._save()
@@ -216,12 +238,13 @@ class MemoryStore:
         self.messages = {m.id: deepcopy(m) for m in MESSAGES}
 
     def _load(self) -> None:
-        if not DB_PATH.exists():
+        path = db_file()
+        if not path.exists():
             self.plots = {p.id: deepcopy(p) for p in PLOTS}
             self._seed_phase2()
             self._save_unlocked()
             return
-        raw = json.loads(DB_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
         for item in raw.get("users", []):
             user = User.model_validate(item)
             self._index_user(user)
@@ -256,6 +279,8 @@ class MemoryStore:
         self.crm_contacts = {item["id"]: CrmContact.model_validate(item) for item in raw.get("crm_contacts", [])}
         self.crm_activities = {item["id"]: CrmActivity.model_validate(item) for item in raw.get("crm_activities", [])}
         self.crm_invoices = {item["id"]: CrmInvoice.model_validate(item) for item in raw.get("crm_invoices", [])}
+        self.files = {item["id"]: StoredUpload.model_validate(item) for item in raw.get("files", [])}
+        self.consents = [ConsentRecord.model_validate(item) for item in raw.get("consents", [])]
         seed_by_id = {p.id: p for p in PLOTS}
         filled = False
         for pid, plot in self.plots.items():
@@ -273,7 +298,8 @@ class MemoryStore:
             self._save_unlocked()
 
     def _save_unlocked(self) -> None:
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        path = db_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "plots": [p.model_dump() for p in self.plots.values()],
             "inquiries": [i.model_dump() for i in self.inquiries.values()],
@@ -307,17 +333,19 @@ class MemoryStore:
             "timesheets": [x.model_dump() for x in self.timesheets.values()],
             "meetings": [x.model_dump() for x in self.meetings.values()],
             "directory": [x.model_dump() for x in self.directory.values()],
+            "files": [x.model_dump() for x in self.files.values()],
+            "consents": [x.model_dump() for x in self.consents],
         }
-        tmp = DB_PATH.with_suffix(".tmp")
+        tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(DB_PATH)
+        tmp.replace(path)
 
     def _save(self) -> None:
         with self._lock:
             self._save_unlocked()
 
     def db_path(self) -> str:
-        return str(DB_PATH)
+        return str(db_file())
 
     def get_user_by_email(self, email: str) -> User | None:
         return self.users.get(email.lower().strip())
@@ -786,23 +814,77 @@ class MemoryStore:
         sid = spec.id if spec else specialist_id
         return [r for r in self.reviews.values() if r.specialist_id == sid]
 
+    def _staff(self, user: User) -> bool:
+        return user.role in ("admin", "moderator")
+
+    def can_access_deal(self, user: User, deal: Deal) -> bool:
+        if self._staff(user):
+            return True
+        participants = {deal.client_id, deal.owner_id, deal.supplier_id, deal.responsible_id}
+        if user.id in participants:
+            return True
+        if deal.specialist_id:
+            spec = self.specialists.get(deal.specialist_id)
+            if spec and spec.user_id == user.id:
+                return True
+        return False
+
+    def can_access_lead(self, user: User, lead: Lead) -> bool:
+        if self._staff(user):
+            return True
+        if lead.responsible_id == user.id:
+            return True
+        if lead.deal_id:
+            deal = self.deals.get(lead.deal_id)
+            if deal and self.can_access_deal(user, deal):
+                return True
+        return False
+
+    def can_access_activity(self, user: User, activity: CrmActivity) -> bool:
+        if self._staff(user) or activity.author_id == user.id:
+            return True
+        if activity.deal_id:
+            deal = self.deals.get(activity.deal_id)
+            if deal and self.can_access_deal(user, deal):
+                return True
+        if activity.lead_id:
+            lead = self.leads.get(activity.lead_id)
+            if lead and self.can_access_lead(user, lead):
+                return True
+        return False
+
+    def can_access_invoice(self, user: User, invoice: CrmInvoice) -> bool:
+        deal = self.deals.get(invoice.deal_id)
+        if not deal:
+            return self._staff(user)
+        return self.can_access_deal(user, deal)
+
+    def can_access_contact(self, user: User, contact: CrmContact) -> bool:
+        if self._staff(user):
+            return True
+        return bool(contact.owner_id) and contact.owner_id == user.id
+
+    def require_deal(self, user: User, deal_id: str) -> Deal:
+        deal = self.deals.get(deal_id)
+        if not deal:
+            raise LookupError("Сделка не найдена")
+        if not self.can_access_deal(user, deal):
+            raise PermissionError("Недостаточно прав")
+        return deal
+
+    def require_lead(self, user: User, lead_id: str) -> Lead:
+        lead = self.leads.get(lead_id)
+        if not lead:
+            raise LookupError("Лид не найден")
+        if not self.can_access_lead(user, lead):
+            raise PermissionError("Недостаточно прав")
+        return lead
+
     def list_deals(self, user: User, funnel: str | None = None) -> list[Deal]:
-        items = list(self.deals.values())
+        items = [deal for deal in self.deals.values() if self.can_access_deal(user, deal)]
         if funnel:
-            items = [d for d in items if d.funnel == funnel]
-        if user.role in ("admin", "moderator"):
-            pass
-        elif user.role == "supplier":
-            items = [d for d in items if d.supplier_id == user.id or d.client_id == user.id]
-        elif user.role == "owner":
-            items = [d for d in items if d.owner_id == user.id or d.client_id == user.id or d.funnel == "land_sale"]
-        else:
-            spec = next((s for s in self.specialists.values() if s.user_id == user.id), None)
-            if spec:
-                items = [d for d in items if d.specialist_id == spec.id or d.client_id == user.id]
-            else:
-                items = [d for d in items if d.client_id == user.id or user.role in ("admin", "moderator")]
-        return sorted(items, key=lambda d: d.created_at, reverse=True)
+            items = [deal for deal in items if deal.funnel == funnel]
+        return sorted(items, key=lambda deal: deal.created_at, reverse=True)
 
     def get_deal(self, deal_id: str) -> Deal | None:
         return self.deals.get(deal_id)
@@ -844,9 +926,7 @@ class MemoryStore:
             return deal
 
     def move_deal(self, user: User, deal_id: str, body: DealMove) -> Deal:
-        deal = self.deals.get(deal_id)
-        if not deal:
-            raise ValueError("Сделка не найдена")
+        deal = self.require_deal(user, deal_id)
         stages = FUNNEL_STAGES.get(deal.funnel, [])
         if body.stage not in stages:
             raise ValueError("Неизвестный этап воронки")
@@ -903,6 +983,7 @@ class MemoryStore:
                 budget_kzt=plot.price_kzt if plot else 0,
                 plot_id=inquiry.plot_id,
                 notes=inquiry.message,
+                responsible_id=plot.owner_id if plot else None,
                 deal_id=did,
                 created_at=_now(),
             )
@@ -921,12 +1002,12 @@ class MemoryStore:
             return deal
 
     def list_leads(self, user: User, status: str | None = None) -> list[Lead]:
-        items = list(self.leads.values())
+        items = [lead for lead in self.leads.values() if self.can_access_lead(user, lead)]
         if status:
-            items = [l for l in items if l.status == status]
-        return sorted(items, key=lambda l: l.created_at, reverse=True)
+            items = [lead for lead in items if lead.status == status]
+        return sorted(items, key=lambda lead: lead.created_at, reverse=True)
 
-    def create_lead(self, body: LeadCreate) -> Lead:
+    def create_lead(self, user: User, body: LeadCreate) -> Lead:
         with self._lock:
             lid = f"lead-{uuid4().hex[:8]}"
             lead = Lead(
@@ -940,6 +1021,7 @@ class MemoryStore:
                 budget_kzt=body.budget_kzt,
                 plot_id=body.plot_id,
                 notes=body.notes,
+                responsible_id=user.id,
                 created_at=_now(),
             )
             self.leads[lid] = lead
@@ -958,9 +1040,7 @@ class MemoryStore:
             return lead
 
     def convert_lead(self, user: User, lead_id: str, body: LeadConvert) -> Deal:
-        lead = self.leads.get(lead_id)
-        if not lead:
-            raise ValueError("Лид не найден")
+        lead = self.require_lead(user, lead_id)
         with self._lock:
             did = f"deal-{uuid4().hex[:8]}"
             deal = Deal(
@@ -973,7 +1053,9 @@ class MemoryStore:
                 amount_kzt=body.amount_kzt or lead.budget_kzt,
                 plot_id=lead.plot_id,
                 source=lead.source,
-                responsible_name="Асет Сагинтаев",
+                owner_id=user.id,
+                responsible_id=user.id,
+                responsible_name=user.full_name,
                 created_at=_now(),
             )
             self.deals[did] = deal
@@ -997,8 +1079,8 @@ class MemoryStore:
             self._save_unlocked()
             return deal
 
-    def list_crm_contacts(self, q: str | None = None, ctype: str | None = None) -> list[CrmContact]:
-        items = list(self.crm_contacts.values())
+    def list_crm_contacts(self, user: User, q: str | None = None, ctype: str | None = None) -> list[CrmContact]:
+        items = [contact for contact in self.crm_contacts.values() if self.can_access_contact(user, contact)]
         if ctype:
             items = [c for c in items if c.contact_type == ctype]
         if q:
@@ -1009,7 +1091,7 @@ class MemoryStore:
             ]
         return sorted(items, key=lambda c: c.created_at, reverse=True)
 
-    def create_crm_contact(self, body: CrmContactCreate) -> CrmContact:
+    def create_crm_contact(self, user: User, body: CrmContactCreate) -> CrmContact:
         with self._lock:
             cid = f"cnt-{uuid4().hex[:8]}"
             contact = CrmContact(
@@ -1022,21 +1104,29 @@ class MemoryStore:
                 city=body.city or "Алматы",
                 contact_type=body.contact_type,
                 notes=body.notes,
+                owner_id=user.id,
                 created_at=_now(),
             )
             self.crm_contacts[cid] = contact
             self._save_unlocked()
             return contact
 
-    def list_crm_activities(self, deal_id: str | None = None, lead_id: str | None = None) -> list[CrmActivity]:
-        items = list(self.crm_activities.values())
+    def list_crm_activities(self, user: User, deal_id: str | None = None, lead_id: str | None = None) -> list[CrmActivity]:
         if deal_id:
-            items = [a for a in items if a.deal_id == deal_id]
+            self.require_deal(user, deal_id)
+            items = [item for item in self.crm_activities.values() if item.deal_id == deal_id]
         elif lead_id:
-            items = [a for a in items if a.lead_id == lead_id]
-        return sorted(items, key=lambda a: a.created_at, reverse=True)
+            self.require_lead(user, lead_id)
+            items = [item for item in self.crm_activities.values() if item.lead_id == lead_id]
+        else:
+            items = [item for item in self.crm_activities.values() if self.can_access_activity(user, item)]
+        return sorted(items, key=lambda item: item.created_at, reverse=True)
 
     def create_crm_activity(self, user: User, body: CrmActivityCreate) -> CrmActivity:
+        if body.deal_id:
+            self.require_deal(user, body.deal_id)
+        if body.lead_id:
+            self.require_lead(user, body.lead_id)
         with self._lock:
             aid = f"act-{uuid4().hex[:8]}"
             activity = CrmActivity(
@@ -1055,10 +1145,12 @@ class MemoryStore:
             self._save_unlocked()
             return activity
 
-    def toggle_crm_activity(self, activity_id: str, completed: bool) -> CrmActivity:
+    def toggle_crm_activity(self, user: User, activity_id: str, completed: bool) -> CrmActivity:
         act = self.crm_activities.get(activity_id)
         if not act:
-            raise ValueError("Дело/задача не найдена")
+            raise LookupError("Дело/задача не найдена")
+        if not self.can_access_activity(user, act):
+            raise PermissionError("Недостаточно прав")
         with self._lock:
             act.completed = completed
             act.completed_at = _now() if completed else ""
@@ -1066,13 +1158,16 @@ class MemoryStore:
             self._save_unlocked()
             return act
 
-    def list_crm_invoices(self, deal_id: str | None = None) -> list[CrmInvoice]:
-        items = list(self.crm_invoices.values())
+    def list_crm_invoices(self, user: User, deal_id: str | None = None) -> list[CrmInvoice]:
         if deal_id:
-            items = [i for i in items if i.deal_id == deal_id]
-        return sorted(items, key=lambda i: i.created_at, reverse=True)
+            self.require_deal(user, deal_id)
+        items = [item for item in self.crm_invoices.values() if self.can_access_invoice(user, item)]
+        if deal_id:
+            items = [item for item in items if item.deal_id == deal_id]
+        return sorted(items, key=lambda item: item.created_at, reverse=True)
 
-    def create_crm_invoice(self, body: CrmInvoiceCreate) -> CrmInvoice:
+    def create_crm_invoice(self, user: User, body: CrmInvoiceCreate) -> CrmInvoice:
+        self.require_deal(user, body.deal_id)
         with self._lock:
             inv_id = f"inv-{uuid4().hex[:8]}"
             num = f"ANYQ-INV-{len(self.crm_invoices) + 1:03d}"
@@ -1105,10 +1200,12 @@ class MemoryStore:
             self._save_unlocked()
             return invoice
 
-    def pay_crm_invoice(self, invoice_id: str) -> CrmInvoice:
+    def pay_crm_invoice(self, user: User, invoice_id: str) -> CrmInvoice:
         inv = self.crm_invoices.get(invoice_id)
         if not inv:
-            raise ValueError("Счет не найден")
+            raise LookupError("Счет не найден")
+        if not self.can_access_invoice(user, inv):
+            raise PermissionError("Недостаточно прав")
         with self._lock:
             inv.status = "paid"
             inv.paid_at = _now()
@@ -1132,9 +1229,7 @@ class MemoryStore:
             return inv
 
     def deal_to_project(self, user: User, deal_id: str) -> Project:
-        deal = self.deals.get(deal_id)
-        if not deal:
-            raise ValueError("Сделка не найдена")
+        deal = self.require_deal(user, deal_id)
         with self._lock:
             pid = f"prj-{deal.id[-8:]}"
             slug = f"project-{deal.id[-8:]}"
@@ -1178,7 +1273,10 @@ class MemoryStore:
             return project
 
     def crm_analytics(self, user: User) -> dict:
-        deals = list(self.deals.values())
+        deals = self.list_deals(user)
+        leads = self.list_leads(user)
+        activities = [item for item in self.crm_activities.values() if self.can_access_activity(user, item)]
+        contacts = self.list_crm_contacts(user)
         total_pipeline_kzt = sum(d.amount_kzt for d in deals if d.stage not in ("lost", "won"))
         won_deals = [d for d in deals if d.stage == "won" or d.stage in ("handover", "acceptance", "accepted", "registered")]
         won_sum_kzt = sum(d.amount_kzt for d in won_deals)
@@ -1189,17 +1287,17 @@ class MemoryStore:
             key = f"{d.funnel}:{d.stage}"
             stage_counts[key] = stage_counts.get(key, 0) + 1
 
-        active_leads = [l for l in self.leads.values() if l.status != "junk"]
-        pending_activities = [a for a in self.crm_activities.values() if not a.completed]
+        active_leads = [lead for lead in leads if lead.status != "junk"]
+        pending_activities = [item for item in activities if not item.completed]
         return {
             "total_deals": len(deals),
             "open_pipeline_kzt": total_pipeline_kzt,
             "won_deals_count": len(won_deals),
             "won_deals_kzt": won_sum_kzt,
-            "total_leads": len(self.leads),
+            "total_leads": len(leads),
             "active_leads_count": len(active_leads),
             "pending_activities_count": len(pending_activities),
-            "total_contacts": len(self.crm_contacts),
+            "total_contacts": len(contacts),
             "funnel_counts": funnel_counts,
             "stage_counts": stage_counts,
         }
@@ -1263,7 +1361,72 @@ class MemoryStore:
             self._save_unlocked()
             return msg
 
-    def register(self, body: RegisterBody) -> tuple[User, str]:
+    def can_access_project(self, user: User, project: Project) -> bool:
+        if user.role == "admin":
+            return True
+        if project.owner_id and project.owner_id == user.id:
+            return True
+        if project.contractor_id and project.contractor_id == user.id:
+            return True
+        return any(row.project_id == project.id and row.user_id == user.id for row in self.directory.values())
+
+    def add_upload(self, user: User, name: str, content_type: str, project_id: str | None = None) -> StoredUpload:
+        item = StoredUpload(
+            id=f"f-{uuid4().hex[:12]}",
+            owner_id=user.id,
+            name=name,
+            content_type=content_type,
+            created_at=_now(),
+            project_id=project_id,
+        )
+        with self._lock:
+            self.files[item.id] = item
+            self._save_unlocked()
+            return item
+
+    def get_upload(self, file_id: str) -> StoredUpload | None:
+        return self.files.get(file_id)
+
+    def get_upload_by_name(self, name: str) -> StoredUpload | None:
+        for item in self.files.values():
+            if item.name == name:
+                return item
+        return None
+
+    def can_access_upload(self, user: User, item: StoredUpload) -> bool:
+        if user.role == "admin" or user.id == item.owner_id:
+            return True
+        if item.project_id:
+            project = self.get_project(item.project_id)
+            if project and self.can_access_project(user, project):
+                return True
+        return False
+
+    def consents_for(self, user_id: str) -> list[ConsentRecord]:
+        return [item for item in self.consents if item.user_id == user_id]
+
+    def has_current_pd_consent(self, user_id: str) -> bool:
+        return any(
+            item.user_id == user_id and item.type == "offer_pd" and item.text_version == PD_VERSION
+            for item in self.consents
+        )
+
+    def _append_consent_unlocked(self, user: User, ip: str, user_agent: str) -> ConsentRecord:
+        record = ConsentRecord(
+            id=f"c-{uuid4().hex[:12]}",
+            user_id=user.id,
+            type="offer_pd",
+            text_version=PD_VERSION,
+            text_sha256=pd_sha256(),
+            granted_at=_now(),
+            ip=ip,
+            user_agent=user_agent,
+            login=user.email,
+        )
+        self.consents.append(record)
+        return record
+
+    def register(self, body: RegisterBody, *, ip: str = "", user_agent: str = "") -> tuple[User, str]:
         email = body.email.lower().strip()
         company = body.company.strip()
         bin_no = re.sub(r"\D", "", body.company_bin)
@@ -1283,6 +1446,8 @@ class MemoryStore:
             raise ValueError("Укажите телефон")
         if body.role not in ("buyer", "contractor", "supplier"):
             raise ValueError("Роль: заказчик, подрядчик или поставщик")
+        if not body.consent_offer_pd:
+            raise ValueError("Нужно согласие на обработку персональных данных")
         if body.role == "supplier":
             if len(body.sku_title.strip()) < 2:
                 raise ValueError("Укажите первую позицию для каталога")
@@ -1329,16 +1494,31 @@ class MemoryStore:
                     published=True,
                 )
                 self.materials[mid] = item
+            self._append_consent_unlocked(user, ip, user_agent)
             self._save_unlocked()
             return user, make_token(uid)
 
-    def login(self, email: str, password: str) -> tuple[User, str]:
+    def login(
+        self,
+        email: str,
+        password: str,
+        *,
+        consent: bool = False,
+        ip: str = "",
+        user_agent: str = "",
+    ) -> tuple[User, str]:
         user = self.get_user_by_email(email)
         if not user:
             raise ValueError("Неверный email или пароль")
         stored = self.credentials.get(user.id, "")
         if not stored or not verify_password(password, stored):
             raise ValueError("Неверный email или пароль")
+        if not self.has_current_pd_consent(user.id):
+            if not consent:
+                raise ConsentRequired()
+            with self._lock:
+                self._append_consent_unlocked(user, ip, user_agent)
+                self._save_unlocked()
         return user, make_token(user.id)
 
     def list_materials(self, category: str | None = None, q: str | None = None) -> list[Material]:

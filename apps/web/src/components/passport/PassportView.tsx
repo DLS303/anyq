@@ -8,6 +8,7 @@ import { sendInquiry, toggleFavorite } from "@/lib/api";
 import type { DevCalc, Locale, Plot, Utility } from "@/lib/types";
 import { PURPOSE, RELIEF, STATUS, UTILITY, descOf, maskCadastral, money, titleOf } from "@/lib/format";
 import { t } from "@/i18n/messages";
+import { AuthImage } from "@/components/media/AuthImage";
 
 const PlotMap = dynamic(() => import("@/components/catalog/PlotMap"), { ssr: false });
 const CadastralGeoPlanner = dynamic(
@@ -111,8 +112,7 @@ export function PassportView({
       {plot.photos?.length ? (
         <div className="grid sm:grid-cols-2 gap-2">
           {plot.photos.map((src) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img key={src} src={src} alt="" className="h-56 w-full object-cover border border-ink/10" />
+            <AuthImage key={src} src={src} alt="" className="h-56 w-full object-cover border border-ink/10" />
           ))}
         </div>
       ) : null}

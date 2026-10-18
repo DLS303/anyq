@@ -6,8 +6,29 @@ import os
 import secrets
 import time
 
-SECRET = os.getenv("SUPERAPP_SECRET", "superapp-dev-secret-change-me")
-DEMO_PASSWORD = "demo123"
+_cached_secret: str | None = None
+
+
+def reset_secret_cache() -> None:
+    global _cached_secret
+    _cached_secret = None
+
+
+def load_secret() -> str:
+    global _cached_secret
+    if _cached_secret:
+        return _cached_secret
+    env = os.getenv("ANYQ_ENV", "development").strip().lower()
+    secret = (os.getenv("JWT_SECRET") or os.getenv("SUPERAPP_SECRET") or "").strip()
+    if env == "production":
+        if len(secret) < 32:
+            raise RuntimeError("JWT_SECRET must be set to at least 32 characters when ANYQ_ENV=production")
+        _cached_secret = secret
+        return _cached_secret
+    if len(secret) < 16:
+        secret = secrets.token_urlsafe(32)
+    _cached_secret = secret
+    return _cached_secret
 
 
 def hash_password(password: str, salt: str | None = None) -> str:
@@ -26,14 +47,14 @@ def verify_password(password: str, stored: str) -> bool:
 def make_token(user_id: str, ttl: int = 60 * 60 * 24 * 14) -> str:
     payload = {"sub": user_id, "exp": int(time.time()) + ttl}
     body = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
-    sig = hmac.new(SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()[:32]
+    sig = hmac.new(load_secret().encode(), body.encode(), hashlib.sha256).hexdigest()[:32]
     return f"{body}.{sig}"
 
 
 def read_token(token: str) -> str | None:
     try:
         body, sig = token.split(".", 1)
-        expect = hmac.new(SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()[:32]
+        expect = hmac.new(load_secret().encode(), body.encode(), hashlib.sha256).hexdigest()[:32]
         if not hmac.compare_digest(expect, sig):
             return None
         pad = "=" * (-len(body) % 4)

@@ -1,7 +1,7 @@
 import { ControlPanel, type ControlSection } from "@/components/control/ControlPanel";
 import type { Locale } from "@/lib/types";
 
-const SECTIONS: ControlSection[] = ["legal", "estimates", "ai", "crm"];
+const SECTIONS: ControlSection[] = ["legal", "estimates", "crm"];
 
 export default async function ControlPage({
   params,

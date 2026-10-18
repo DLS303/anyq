@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { loginRequest, registerRequest } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -40,9 +41,11 @@ export function LoginView({
   const [skuStock, setSkuStock] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pdConsent, setPdConsent] = useState(false);
 
   useEffect(() => {
     setMode(initialMode);
+    setPdConsent(false);
   }, [initialMode]);
 
   function toast(message: string) {
@@ -55,7 +58,12 @@ export function LoginView({
     setError("");
     setBusy(true);
     try {
-      const res = await loginRequest(email, password);
+      if (!pdConsent) {
+        setError(locale === "kk" ? "Дербес деректерді өңдеуге келісім керек" : "Нужно согласие на обработку персональных данных");
+        setBusy(false);
+        return;
+      }
+      const res = await loginRequest(email, password, true);
       login(res.user, res.token);
       toast(`Добро пожаловать в ANYQ, ${res.user.full_name}`);
       router.push(`/${locale}/cabinet`);
@@ -97,6 +105,10 @@ export function LoginView({
         return;
       }
     }
+    if (!pdConsent) {
+      setError(locale === "kk" ? "Дербес деректерді өңдеуге келісім керек" : "Нужно согласие на обработку персональных данных");
+      return;
+    }
     setBusy(true);
     try {
       const res = await registerRequest({
@@ -114,6 +126,7 @@ export function LoginView({
         sku_unit: skuUnit.trim() || "т",
         sku_price: role === "supplier" ? price : 0,
         sku_stock: role === "supplier" ? Number(skuStock) || 0 : 0,
+        consent_offer_pd: true,
       });
       login(res.user, res.token);
       if (role === "supplier") {
@@ -140,7 +153,10 @@ export function LoginView({
               className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                 mode === "register" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-900"
               }`}
-              onClick={() => setMode("register")}
+              onClick={() => {
+                setMode("register");
+                setPdConsent(false);
+              }}
             >
               {m.register}
             </button>
@@ -149,7 +165,10 @@ export function LoginView({
               className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                 mode === "login" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-900"
               }`}
-              onClick={() => setMode("login")}
+              onClick={() => {
+                setMode("login");
+                setPdConsent(false);
+              }}
             >
               {m.navLogin}
             </button>
@@ -196,10 +215,12 @@ export function LoginView({
                 </div>
               </div>
 
+              <ConsentField locale={locale} checked={pdConsent} onChange={setPdConsent} />
+
               <button
                 type="submit"
-                disabled={busy}
-                className="btn-ice w-full font-bold text-sm shadow-navy justify-center mt-2"
+                disabled={busy || !pdConsent}
+                className="btn-ice w-full font-bold text-sm shadow-navy justify-center mt-2 disabled:opacity-50"
               >
                 {busy ? "Авторизация..." : m.navLogin}
               </button>
@@ -382,7 +403,9 @@ export function LoginView({
                 <span>Пилот Engicon. Компания участвует в пилотном проекте.</span>
               </label>
 
-              <button type="submit" disabled={busy} className="btn-ice w-full font-bold text-sm shadow-navy justify-center mt-1">
+              <ConsentField locale={locale} checked={pdConsent} onChange={setPdConsent} />
+
+              <button type="submit" disabled={busy || !pdConsent} className="btn-ice w-full font-bold text-sm shadow-navy justify-center mt-1 disabled:opacity-50">
                 {busy ? "Регистрация..." : role === "supplier" ? "Зарегистрировать и открыть каталог" : m.register}
               </button>
             </form>
@@ -419,5 +442,53 @@ export function LoginView({
         </aside>
       </div>
     </div>
+  );
+}
+
+function ConsentField({
+  locale,
+  checked,
+  onChange,
+}: {
+  locale: Locale;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="flex items-start gap-2.5 text-sm text-slate-700">
+      <input
+        type="checkbox"
+        className="mt-1 h-4 w-4 accent-[#2F5B8A]"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span>
+        {locale === "kk" ? (
+          <>
+            Мен{" "}
+            <Link href={`/${locale}/legal/privacy`} className="underline text-pine" target="_blank" rel="noopener noreferrer">
+              Құпиялылық саясатын
+            </Link>{" "}
+            қабылдаймын және{" "}
+            <Link href={`/${locale}/legal/pd-consent`} className="underline text-pine" target="_blank" rel="noopener noreferrer">
+              дербес деректерді өңдеуге келісім
+            </Link>{" "}
+            беремін.
+          </>
+        ) : (
+          <>
+            Я принимаю{" "}
+            <Link href={`/${locale}/legal/privacy`} className="underline text-pine" target="_blank" rel="noopener noreferrer">
+              Политику конфиденциальности
+            </Link>{" "}
+            и даю{" "}
+            <Link href={`/${locale}/legal/pd-consent`} className="underline text-pine" target="_blank" rel="noopener noreferrer">
+              согласие на обработку персональных данных
+            </Link>
+            .
+          </>
+        )}
+      </span>
+    </label>
   );
 }

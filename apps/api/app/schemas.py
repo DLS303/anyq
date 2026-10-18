@@ -312,6 +312,7 @@ class CrmContact(BaseModel):
     contact_type: ContactType = "client"
     trust_score: int = 85
     notes: str = ""
+    owner_id: str = ""
     total_deals_count: int = 0
     total_turnover_kzt: int = 0
     created_at: str
@@ -534,8 +535,31 @@ class RegisterBody(BaseModel):
     sku_unit: str = "т"
     sku_price: int = 0
     sku_stock: float = 0
+    consent_offer_pd: bool = False
 
 
 class LoginBody(BaseModel):
     email: str
     password: str
+    consent_offer_pd: bool = False
+
+
+class ConsentRecord(BaseModel):
+    id: str
+    user_id: str
+    type: Literal["offer_pd"] = "offer_pd"
+    text_version: str
+    text_sha256: str
+    granted_at: str
+    ip: str = ""
+    user_agent: str = ""
+    login: str = ""
+
+
+class StoredUpload(BaseModel):
+    id: str
+    owner_id: str
+    name: str
+    content_type: str
+    created_at: str
+    project_id: str | None = None
