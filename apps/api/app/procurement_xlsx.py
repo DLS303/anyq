@@ -361,7 +361,7 @@ def offers_template() -> bytes:
     return _bytes(wb)
 
 
-def comparison_workbook(sheet: dict, title: str) -> bytes:
+def comparison_workbook(sheet: dict, title: str, savings: dict | None = None) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Сравнение"
@@ -412,5 +412,40 @@ def comparison_workbook(sheet: dict, title: str) -> bytes:
         ws.column_dimensions[get_column_letter(col)].width = 18 if col > 1 else 12
     ws.column_dimensions["B"].width = 36
     ws.freeze_panes = "B2"
+    if savings:
+        _savings_sheet(wb, savings)
     wb.properties.title = title[:80]
     return _bytes(wb)
+
+
+def _savings_sheet(wb: Workbook, savings: dict) -> None:
+    ws = wb.create_sheet("Экономия")
+    headers = ["Позиция", "Кол-во", "Ед.", "Выбрано", "Второе предложение", "Экономия, ₸", "Причина"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.fill = _HEADER
+        cell.font = _HEADER_FONT
+    for row in savings.get("lines") or []:
+        selected = row.get("selected") or {}
+        second = row.get("second") or {}
+        ws.append(
+            [
+                row.get("title") or "",
+                row.get("qty"),
+                row.get("unit") or "",
+                selected.get("price_kzt"),
+                second.get("price_kzt"),
+                row.get("saving_kzt") or 0,
+                row.get("reason") or "",
+            ]
+        )
+    ws.append([])
+    ws.append(["Итого экономия, ₸", savings.get("savings_kzt") or 0])
+    ws.append(["База, ₸", savings.get("base_kzt") or 0])
+    pct = savings.get("savings_pct") or 0
+    ws.append(["Процент", round(float(pct) * 100)])
+    for item in savings.get("overprice") or []:
+        ws.append(["Выше рынка", item.get("title") or "", item.get("supplier") or "", item.get("total_kzt")])
+    for col in range(1, len(headers) + 1):
+        ws.column_dimensions[get_column_letter(col)].width = 22
+    ws.column_dimensions["A"].width = 36

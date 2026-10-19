@@ -10,6 +10,7 @@ import { canEditProject, PILOT_MODE } from "@/lib/pilot";
 import { siteRoleLabel, statusLabel } from "@/lib/report";
 import { ErrorRetry, LoadingSkeleton, isMissing, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { AuthImage } from "@/components/media/AuthImage";
+import { ObjectBudgetCard } from "./ObjectBudgetCard";
 import { DailyReport, type DailyEntry } from "./DailyReport";
 import { InspectionForm } from "./InspectionForm";
 import { MeetingForm } from "./MeetingForm";
@@ -648,16 +649,13 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       ) : null}
 
       {tab === "money" ? (
-        pilot && budget.length === 0 && changes.length === 0 && !showExtra ? (
-          <EmptyLine
-            text={m.hubMoneyEmpty}
-            action={
-              <button type="button" className={primaryBtn} onClick={() => (canEdit ? setShowExtra(true) : goLogin())}>
-                {canEdit ? m.hubMoneyAction : m.hubLogin}
-              </button>
-            }
-          />
-        ) : (
+        <div className="grid gap-4">
+          <ObjectBudgetCard locale={locale} projectId={p.id} />
+          {pilot && budget.length === 0 && changes.length === 0 && !showExtra ? (
+            <button type="button" className="min-h-12 w-fit text-sm underline" onClick={() => setShowExtra(true)}>
+              {m.tabMore}
+            </button>
+          ) : (
           <div className="grid gap-6">
             {budget.length > 0 || !pilot ? (
               <Tool
@@ -734,7 +732,8 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
               </Tool>
             ) : null}
           </div>
-        )
+          )}
+        </div>
       ) : null}
 
       {tab === "crew" ? (

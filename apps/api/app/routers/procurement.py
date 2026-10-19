@@ -30,6 +30,7 @@ from app.procurement_xlsx import (
 )
 from app.schemas import User
 from app.store import store
+from app.store_budget import company_savings, project_savings, savings_for_request
 from app.store_procurement import (
     access_flags,
     add_document,
@@ -330,11 +331,28 @@ def get_sheet(rid: str, user: User = Depends(require_user)):
     return {"ok": True, "data": data}
 
 
+@router.get("/requests/{rid}/savings")
+def get_savings(rid: str, user: User = Depends(require_user)):
+    req, _project = _request(user, rid)
+    return {"ok": True, "data": savings_for_request(store, req)}
+
+
+@router.get("/projects/{pid}/savings")
+def get_project_savings(pid: str, user: User = Depends(require_user)):
+    project = _member_project(user, pid)
+    return {"ok": True, "data": project_savings(store, project.id)}
+
+
+@router.get("/company-savings")
+def get_company_savings(user: User = Depends(require_user)):
+    return {"ok": True, "data": company_savings(store, user)}
+
+
 @router.get("/requests/{rid}/export.xlsx")
 def export_sheet(rid: str, user: User = Depends(require_user)):
     req, _project = _request(user, rid)
     data = sheet_for(store, req)
-    content = comparison_workbook(data, req.title)
+    content = comparison_workbook(data, req.title, savings_for_request(store, req))
     filename = f"comparison-{req.number}.xlsx"
     return Response(
         content=content,
