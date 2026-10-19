@@ -7,6 +7,10 @@
 Алерты приходят в любое время. Шаги человека выполняют в рабочие часы
 (Asia/Almaty, UTC+5). Срок уровня считают в рабочих часах.
 
+Команды рассчитаны на образ и роли после задачи DevOps по базе.
+До неё администратор кластера — `anyq`, `pgbackrest` не установлен,
+восстановление — только из логического дампа.
+
 Команды ниже запускает IT/MLOps или SQL-разработчик из `/opt/anyq`
 под пользователем `deploy`. Координатор до этого записывает уровень
 и метку времени восстановления, если дошли до pgBackRest.
@@ -126,37 +130,50 @@ tar -tzf /var/backups/anyq/anyq-pgvolume-<штамп>.tar.gz >/dev/null
 Кластер в UTC, смещение в `--target` обязательно. Для повреждённого
 шага migrate это момент непосредственно до шага.
 
-`pgbackrest` на хосте нет. Его запускают одноразовым контейнером
-сервиса `postgres`, пока сами `api` и `postgres` остановлены.
-Том при этом не меняет образ. Репозиторий за пределами Казахстана
-не используют.
+`pgbackrest` на хосте нет. `run --rm` — только пока `postgres`
+остановлен: так запускают `info`, `restore` и `verify`, они читают
+репозиторий. `check` и `backup` выполняют через `exec`, когда
+`postgres` уже работает. Одноразовый контейнер сокет этой базы
+не видит. Том при этом не меняет образ. Репозиторий за пределами
+Казахстана не используют.
+
+Пароль шифрования в команду, карточку, чат и git не пишут.
+Файл `deploy/.env.pgbackrest` лежит только на сервере, права `600`,
+в репозиторий его не добавляют. Внутри одна переменная
+`PGBACKREST_REPO2_CIPHER_PASS`, значение из `<офлайн-хранилище>`.
+Одноразовый контейнер получает файл через `--env-file`. Рабочий
+контейнер должен видеть ту же переменную с момента запуска
+(задача DevOps): иначе архивация в зашифрованный репозиторий не идёт.
 
 ```bash
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml stop api postgres
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres postgres \
+  --user postgres \
+  --env-file deploy/.env.pgbackrest \
+  postgres \
   pgbackrest --stanza=anyq info
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres postgres \
+  --user postgres \
+  --env-file deploy/.env.pgbackrest \
+  postgres \
   pgbackrest --stanza=anyq restore --delta --type=time \
   --target='<YYYY-MM-DD HH:MM:SS+05>' --target-action=promote
 ```
 
-Затем тот же образ из файла compose, проверка и полная копия:
+Затем тот же образ из файла compose. `check` и полную копию
+выполняют в уже запущенном контейнере:
 
 ```bash
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml up -d postgres
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres postgres \
+  -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
   pgbackrest --stanza=anyq check
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres postgres \
+  -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
   pgbackrest --stanza=anyq backup --type=full
 ```
 
@@ -215,8 +232,8 @@ gunzip -c /var/backups/anyq/anyq-postgres-<штамп>.sql.gz \
 ```
 
 После загрузки права заново применяет роль `postgres`. Если рядом
-с дампом лежит `<скрипт-прав>`, берут его: в нём должен быть тот же
-`REVOKE` на `audit_log` и `consents`. Иначе минимум такой:
+с дампом лежит `<скрипт-прав>`, берут его. `REVOKE` в нём — отдельные
+команды, по одной таблице. Иначе минимум такой:
 
 ```sql
 -- выполняет роль postgres
@@ -225,8 +242,21 @@ GRANT USAGE ON SCHEMA public TO anyq_app;
 GRANT SELECT, INSERT, UPDATE, DELETE
   ON ALL TABLES IN SCHEMA public TO anyq_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anyq_app;
-REVOKE UPDATE, DELETE, TRUNCATE ON audit_log, consents FROM anyq_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE anyq IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anyq_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE anyq IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO anyq_app;
+REVOKE UPDATE, DELETE, TRUNCATE ON consent_events FROM anyq_app;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+Строку журнала аудита выполняют отдельной командой и только после
+миграции журнала аудита. Пока таблицы `audit_log` нет, эту команду
+пропускают. Так `REVOKE` для `consent_events` применяется сам по себе.
+
+```sql
+-- выполняет роль postgres, после миграции журнала аудита
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM anyq_app;
 ```
 
 Том загрузок `anyq-data` этими командами не трогают.
@@ -255,7 +285,9 @@ docker compose --env-file deploy/.env \
   'SELECT max(created_at) AS newest FROM records;'
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres postgres \
+  --user postgres \
+  --env-file deploy/.env.pgbackrest \
+  postgres \
   pgbackrest --stanza=anyq verify
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
@@ -264,6 +296,11 @@ docker compose --env-file deploy/.env \
 ```
 
 `pg_amcheck` выполняет роль `postgres`. Флаг `--all` не ставят.
+
+Если точка восстановления — момент до migrate, к запуску API теги
+`anyq-api:current` и `anyq-web:current` уже стоят с образов отката.
+Как их вернуть — в [`docs/runbooks/bad-deploy.md`](bad-deploy.md).
+Иначе старт API снова выполнит этот migrate.
 
 После этого поднимают API и смотрят готовность внутри контейнера,
 на `127.0.0.1`, порт процесса API:

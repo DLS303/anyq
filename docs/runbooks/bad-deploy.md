@@ -96,8 +96,14 @@ docker compose --env-file deploy/.env \
 `--target` обязательно. Пароль шифрования берут только из
 офлайн-хранилища `<офлайн-хранилище>`. В команду его не вставляют.
 
-`pgbackrest` на хосте нет. Его запускают одноразовым контейнером
-сервиса `postgres`, пока сами `api` и `postgres` остановлены.
+Команды базы рассчитаны на образ и роли после задачи DevOps по базе.
+До неё `pgbackrest` не установлен, восстановление — только из
+логического дампа, администратор кластера — `anyq`.
+
+`pgbackrest` на хосте нет. Пока `postgres` остановлен, `info` и
+`restore` запускают одноразовым контейнером (`run --rm`). Пароль
+шифрования контейнер берёт из `deploy/.env.pgbackrest` (`--env-file`),
+как в [`docs/runbooks/db-down.md`](db-down.md): файла в git нет.
 Существующий том всегда запускают тем образом, которым он создан.
 Восстановление на месте делают при SEV1, когда координатор записал
 решение. Иначе ждут `deploy/restore.sh` (будет добавлено): он
@@ -109,18 +115,33 @@ docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml stop api postgres
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres postgres \
+  --user postgres \
+  --env-file deploy/.env.pgbackrest \
+  postgres \
   pgbackrest --stanza=anyq info
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres postgres \
+  --user postgres \
+  --env-file deploy/.env.pgbackrest \
+  postgres \
   pgbackrest --stanza=anyq restore --delta --type=time \
   --target='<YYYY-MM-DD HH:MM:SS+05>' --target-action=promote
 ```
 
-Дальше запуск того же образа, `pgbackrest --stanza=anyq check` и
-`pgbackrest --stanza=anyq backup --type=full` — как в
-[`docs/runbooks/db-down.md`](db-down.md). Образ
+Перед `up -d` верните теги отката. Иначе точка входа API снова
+выполнит migrate и повторит шаг, на момент до которого базу
+только что восстановили.
+
+```bash
+docker tag anyq-api:rollback anyq-api:current
+docker tag anyq-web:rollback anyq-web:current
+```
+
+Дальше запускают postgres тем же образом. `pgbackrest --stanza=anyq check`
+и `pgbackrest --stanza=anyq backup --type=full` выполняют через
+`exec` в работающем контейнере — как в
+[`docs/runbooks/db-down.md`](db-down.md). API поднимают после этого,
+уже с тегами отката. Образ
 `postgis/postgis:16-3.4` — после миграции на этот образ
 (задача DevOps). Перенос локального стенда с Alpine на PostGIS —
 только дамп в новый пустой том.

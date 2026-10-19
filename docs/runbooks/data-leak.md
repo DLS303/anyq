@@ -183,16 +183,23 @@ openssl rand -base64 48
 Образ Postgres читает `POSTGRES_PASSWORD` при первом создании тома
 и сам пароль роли при смене файла не обновляет. Сначала роль, потом файл.
 
+До задачи DevOps по базе сессию открывают ролью `anyq` и меняют
+пароль этой роли. После задачи приложение ходит как `anyq_app`:
+сессию открывают ролью `postgres` и меняют пароль `anyq_app`.
+
 ```bash
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec postgres \
   psql --username anyq --dbname postgres
 ```
 
-В сессии `psql` выполните `\password anyq` и выйдите.
-Затем впишите тот же пароль в `POSTGRES_PASSWORD` и в пароль внутри
-`DATABASE_URL`. Сгенерировать его можно так (вывод сразу в файл,
-не на экран чата):
+После задачи DevOps та же команда с `--username postgres`.
+В сессии `psql` выполните `\password anyq` до задачи DevOps
+и `\password anyq_app` после неё, затем выйдите.
+Тот же пароль впишите в `POSTGRES_PASSWORD`, пока роль приложения —
+`anyq`, и в пароль внутри `DATABASE_URL`. После задачи DevOps
+в `DATABASE_URL` стоит пароль `anyq_app`. Сгенерировать его можно
+так (вывод сразу в файл, не на экран чата):
 
 ```bash
 openssl rand -base64 32
