@@ -1,7 +1,6 @@
 """SQL tables for designer questions.
 
-Kept off the store metadata. Revision 0005 creates them with op.create_table,
-and startup create_all would otherwise ignore them.
+Kept off the store metadata. Revision 0005 creates them with op.create_table.
 """
 
 from __future__ import annotations
@@ -22,6 +21,8 @@ external_contacts = Table(
     Column("phone_hash", String(64)),
     Column("email", String(200)),
     Column("organization", String(200)),
+    Column("created_by", String(80), nullable=False),
+    Column("updated_by", String(80), nullable=False),
     Column("created_at", String(40), nullable=False),
     Column("updated_at", String(40), nullable=False),
     Column("row_version", Integer, nullable=False),
@@ -46,6 +47,8 @@ rfis = Table(
     Column("drawing_revision_id", String(80)),
     Column("attachments", Text, nullable=False),
     Column("author_id", String(80), nullable=False),
+    Column("created_by", String(80), nullable=False),
+    Column("updated_by", String(80), nullable=False),
     Column("answered_at", String(40)),
     Column("answered_via_token_id", String(36)),
     Column("created_at", String(40), nullable=False),
@@ -75,6 +78,7 @@ access_tokens = Table(
     Column("expires_at", String(40), nullable=False),
     Column("used_at", String(40)),
     Column("created_by", String(80), nullable=False),
+    Column("updated_by", String(80), nullable=False),
     Column("created_at", String(40), nullable=False),
     Column("updated_at", String(40), nullable=False),
     Column("row_version", Integer, nullable=False),
@@ -83,6 +87,24 @@ access_tokens = Table(
     Index("ix_access_tokens_company_updated", "company_id", "updated_at"),
 )
 
-
-def ensure_rfi_tables(bind) -> None:
-    metadata.create_all(bind)
+rfi_files = Table(
+    "rfi_files",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("file_id", String(36), nullable=False),
+    Column("company_id", String(180), nullable=False),
+    Column("project_id", String(80), nullable=False),
+    Column("rfi_id", String(36), nullable=False),
+    Column("storage_key", String(80), nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("size", Integer, nullable=False),
+    Column("content_type", String(120), nullable=False),
+    Column("created_by", String(80), nullable=False),
+    Column("updated_by", String(80), nullable=False),
+    Column("created_at", String(40), nullable=False),
+    Column("updated_at", String(40), nullable=False),
+    Column("row_version", Integer, nullable=False),
+    Column("deleted_at", String(40)),
+    Index("ix_rfi_files_file_id", "file_id"),
+    Index("ix_rfi_files_company_updated", "company_id", "updated_at"),
+)

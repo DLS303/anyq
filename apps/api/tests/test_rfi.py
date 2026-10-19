@@ -16,9 +16,10 @@ from sqlalchemy import select, update
 from app.audit import _mask
 from app.company_features import company_id_of
 from app.main import app
+from app.paths import uploads_dir
 from app.pf0_tables import AuditLog
 from app.rfi_service import add_business_days
-from app.rfi_tables import access_tokens
+from app.rfi_tables import access_tokens, rfi_files
 from app.schemas import User
 from app.store import store
 
@@ -405,6 +406,96 @@ def test_default_due_date_and_fresh_token_expiry(monkeypatch):
     assert missing.status_code == 404
 
 
+def _jpeg_color(color: str) -> bytes:
+    image = Image.new("RGB", (24, 24), color)
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def test_reused_file_id_does_not_replace_bytes(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    owner_token, _owner_user = _owner("rfi-bytes-a@example.com", "888888888888")
+    foreign_token, _foreign = _owner("rfi-bytes-b@example.com", "999999999999")
+    pid = _project(owner_token, "West Yard")
+    other = _project(foreign_token, "East Lot")
+    _flag(owner_token, True, 0)
+    _flag(foreign_token, True, 0)
+    shared_id = str(uuid4())
+    first = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": str(uuid4()), "question": "Keep the first photo"},
+        headers=_auth(owner_token),
+    )
+    assert first.status_code == 200, first.text
+    first_id = first.json()["data"]["id"]
+    original = _jpeg_color("red")
+    uploaded = client.post(
+        f"/v1/site/projects/{pid}/rfis/{first_id}/files",
+        files={"file": ("a.jpg", original, "image/jpeg")},
+        data={"id": shared_id, "row_version": "1"},
+        headers=_auth(owner_token),
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    saved = client.get(
+        f"/v1/site/projects/{pid}/rfis/{first_id}/files/{shared_id}",
+        headers=_auth(owner_token),
+    )
+    assert saved.status_code == 200, saved.text
+    original_bytes = saved.content
+    with store._sql.factory() as session:
+        stored = session.execute(select(rfi_files).where(rfi_files.c.file_id == shared_id)).mappings().one()
+    assert shared_id not in stored.storage_key
+    assert "/" not in stored.storage_key
+    on_disk = uploads_dir() / stored.storage_key
+    assert on_disk.read_bytes() == original_bytes
+
+    second = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": str(uuid4()), "question": "A later photo"},
+        headers=_auth(owner_token),
+    )
+    assert second.status_code == 200, second.text
+    later = client.post(
+        f"/v1/site/projects/{pid}/rfis/{second.json()['data']['id']}/files",
+        files={"file": ("b.jpg", _jpeg_color("blue"), "image/jpeg")},
+        data={"id": shared_id, "row_version": "1"},
+        headers=_auth(owner_token),
+    )
+    assert later.status_code == 200, later.text
+    assert on_disk.read_bytes() == original_bytes
+
+    foreign_rfi = client.post(
+        f"/v1/site/projects/{other}/rfis",
+        json={"id": str(uuid4()), "question": "Other company photo"},
+        headers=_auth(foreign_token),
+    )
+    assert foreign_rfi.status_code == 200, foreign_rfi.text
+    foreign_up = client.post(
+        f"/v1/site/projects/{other}/rfis/{foreign_rfi.json()['data']['id']}/files",
+        files={"file": ("c.jpg", _jpeg_color("green"), "image/jpeg")},
+        data={"id": shared_id, "row_version": "1"},
+        headers=_auth(foreign_token),
+    )
+    assert foreign_up.status_code == 200, foreign_up.text
+    assert on_disk.read_bytes() == original_bytes
+    again = client.get(
+        f"/v1/site/projects/{pid}/rfis/{first_id}/files/{shared_id}",
+        headers=_auth(owner_token),
+    )
+    assert again.content == original_bytes
+
+    conflict = client.post(
+        f"/v1/site/projects/{pid}/rfis/{first_id}/files",
+        files={"file": ("d.jpg", _jpeg_color("black"), "image/jpeg")},
+        data={"id": shared_id, "row_version": "1"},
+        headers=_auth(owner_token),
+    )
+    assert conflict.status_code == 409
+    assert on_disk.read_bytes() == original_bytes
+    assert list(uploads_dir().glob(".tmp-*")) == []
+
+
 def test_alembic_rfi_revision_roundtrip(tmp_path):
     db = tmp_path / "rfi.sqlite"
     env = os.environ.copy()
@@ -418,10 +509,13 @@ def test_alembic_rfi_revision_roundtrip(tmp_path):
     subprocess.check_call([sys.executable, "-m", "alembic", "check"], cwd=api, env=env)
     connection = sqlite3.connect(db)
     tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"rfis", "external_contacts", "access_tokens", "audit_log"} <= tables
+    assert {"rfis", "external_contacts", "access_tokens", "rfi_files", "audit_log"} <= tables
     indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert "ix_rfis_project_status_due" in indexes
     assert "ix_rfis_company_updated" in indexes
+    assert "ix_rfi_files_file_id" in indexes
+    file_columns = {row[1] for row in connection.execute("PRAGMA table_info(rfi_files)")}
+    assert {"file_id", "storage_key", "created_by", "updated_by"} <= file_columns
     columns = {row[1] for row in connection.execute("PRAGMA table_info(audit_log)")}
     assert {"entity_type", "entity_id", "project_id", "changes"} <= columns
     connection.close()

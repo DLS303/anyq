@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from uuid import uuid4
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -48,3 +49,48 @@ def write_stored_file(kind: str, name: str, data: bytes) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return path
+
+
+def write_exclusive_temp(kind: str, data: bytes) -> Path:
+    """Write bytes to a new temp file. The name is a server uuid, never a client id."""
+    root = kind_root(kind)
+    path = root / f".tmp-{uuid4().hex}"
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+    except Exception:
+        os.close(fd)
+        os.unlink(path)
+        raise
+    os.close(fd)
+    return path
+
+
+def discard_temp(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        return
+
+
+def publish_exclusive(kind: str, tmp: Path, storage_key: str) -> Path:
+    """Publish a temp file after commit. An existing object is left unchanged."""
+    if not storage_key or storage_key.startswith(".") or "/" in storage_key or "\\" in storage_key:
+        discard_temp(tmp)
+        raise ValueError("bad storage key")
+    final = resolve_stored_file(kind, storage_key)
+    final.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        reserved = os.open(final, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        discard_temp(tmp)
+        return final
+    os.close(reserved)
+    os.unlink(final)
+    os.rename(tmp, final)
+    return final

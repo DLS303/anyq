@@ -29,6 +29,8 @@ def upgrade() -> None:
         sa.Column("phone_hash", sa.String(length=64), nullable=True),
         sa.Column("email", sa.String(length=200), nullable=True),
         sa.Column("organization", sa.String(length=200), nullable=True),
+        sa.Column("created_by", sa.String(length=80), nullable=False),
+        sa.Column("updated_by", sa.String(length=80), nullable=False),
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("updated_at", sa.String(length=40), nullable=False),
         sa.Column("row_version", sa.Integer(), nullable=False),
@@ -55,6 +57,8 @@ def upgrade() -> None:
         sa.Column("drawing_revision_id", sa.String(length=80), nullable=True),
         sa.Column("attachments", sa.Text(), nullable=False),
         sa.Column("author_id", sa.String(length=80), nullable=False),
+        sa.Column("created_by", sa.String(length=80), nullable=False),
+        sa.Column("updated_by", sa.String(length=80), nullable=False),
         sa.Column("answered_at", sa.String(length=40), nullable=True),
         sa.Column("answered_via_token_id", sa.String(length=36), nullable=True),
         sa.Column("created_at", sa.String(length=40), nullable=False),
@@ -81,6 +85,7 @@ def upgrade() -> None:
         sa.Column("expires_at", sa.String(length=40), nullable=False),
         sa.Column("used_at", sa.String(length=40), nullable=True),
         sa.Column("created_by", sa.String(length=80), nullable=False),
+        sa.Column("updated_by", sa.String(length=80), nullable=False),
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("updated_at", sa.String(length=40), nullable=False),
         sa.Column("row_version", sa.Integer(), nullable=False),
@@ -88,9 +93,32 @@ def upgrade() -> None:
     )
     op.create_index("ix_access_tokens_token_sha256", "access_tokens", ["token_sha256"], unique=True)
     op.create_index("ix_access_tokens_company_updated", "access_tokens", ["company_id", "updated_at"])
+    op.create_table(
+        "rfi_files",
+        sa.Column("id", sa.String(length=36), primary_key=True),
+        sa.Column("file_id", sa.String(length=36), nullable=False),
+        sa.Column("company_id", sa.String(length=180), nullable=False),
+        sa.Column("project_id", sa.String(length=80), nullable=False),
+        sa.Column("rfi_id", sa.String(length=36), nullable=False),
+        sa.Column("storage_key", sa.String(length=80), nullable=False),
+        sa.Column("sha256", sa.String(length=64), nullable=False),
+        sa.Column("size", sa.Integer(), nullable=False),
+        sa.Column("content_type", sa.String(length=120), nullable=False),
+        sa.Column("created_by", sa.String(length=80), nullable=False),
+        sa.Column("updated_by", sa.String(length=80), nullable=False),
+        sa.Column("created_at", sa.String(length=40), nullable=False),
+        sa.Column("updated_at", sa.String(length=40), nullable=False),
+        sa.Column("row_version", sa.Integer(), nullable=False),
+        sa.Column("deleted_at", sa.String(length=40), nullable=True),
+    )
+    op.create_index("ix_rfi_files_file_id", "rfi_files", ["file_id"])
+    op.create_index("ix_rfi_files_company_updated", "rfi_files", ["company_id", "updated_at"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_rfi_files_company_updated", table_name="rfi_files")
+    op.drop_index("ix_rfi_files_file_id", table_name="rfi_files")
+    op.drop_table("rfi_files")
     op.drop_index("ix_access_tokens_company_updated", table_name="access_tokens")
     op.drop_index("ix_access_tokens_token_sha256", table_name="access_tokens")
     op.drop_table("access_tokens")

@@ -11,6 +11,7 @@ import io
 import json
 import re
 from datetime import UTC, date, datetime, timedelta
+from uuid import uuid4
 
 from fastapi import HTTPException
 from PIL import Image, ImageDraw, ImageFont
@@ -20,8 +21,13 @@ from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from app import audit
 from app.company_features import project_company_id
 from app.media import strip_image, strip_pdf_author
-from app.paths import resolve_stored_file, write_stored_file
-from app.rfi_tables import access_tokens, external_contacts, rfis
+from app.paths import (
+    discard_temp,
+    publish_exclusive,
+    resolve_stored_file,
+    write_exclusive_temp,
+)
+from app.rfi_tables import access_tokens, external_contacts, rfi_files, rfis
 from app.shares import hashes_match, new_share_token, parse_expiry, token_hash
 from app.store import store
 
@@ -259,6 +265,8 @@ def create_rfi(user, access: dict, body: dict) -> dict:
                     phone_hash=_phone_hash(phone),
                     email=str(contact_body.get("email") or "").strip()[:200] or None,
                     organization=str(contact_body.get("organization") or "").strip()[:200] or None,
+                    created_by=user.id,
+                    updated_by=user.id,
                     created_at=stamp,
                     updated_at=stamp,
                     row_version=1,
@@ -284,6 +292,8 @@ def create_rfi(user, access: dict, body: dict) -> dict:
                 drawing_revision_id=revision,
                 attachments="[]",
                 author_id=user.id,
+                created_by=user.id,
+                updated_by=user.id,
                 answered_at=None,
                 answered_via_token_id=None,
                 created_at=stamp,
@@ -319,11 +329,11 @@ def _conflict():
     raise HTTPException(status_code=409, detail="Изменено другим")
 
 
-def _cas(session, rfi_id: str, version: int, values: dict) -> None:
+def _cas(session, rfi_id: str, version: int, values: dict, *, updated_by: str) -> None:
     result = session.execute(
         update(rfis)
         .where(rfis.c.id == rfi_id, rfis.c.row_version == version, rfis.c.deleted_at.is_(None))
-        .values(**values, row_version=version + 1, updated_at=_now())
+        .values(**values, updated_by=updated_by, row_version=version + 1, updated_at=_now())
     )
     if result.rowcount != 1:
         session.rollback()
@@ -367,6 +377,7 @@ def answer_rfi(
                 "answered_at": stamp,
                 "answered_via_token_id": token_id,
             },
+            updated_by="" if user is None else user.id,
         )
         if token_id is not None:
             spent = session.execute(
@@ -376,7 +387,12 @@ def answer_rfi(
                     access_tokens.c.used_at.is_(None),
                     access_tokens.c.row_version == int(token_version or 0),
                 )
-                .values(used_at=stamp, row_version=int(token_version or 0) + 1, updated_at=stamp)
+                .values(
+                    used_at=stamp,
+                    updated_by="",
+                    row_version=int(token_version or 0) + 1,
+                    updated_at=stamp,
+                )
             )
             if spent.rowcount != 1:
                 session.rollback()
@@ -418,7 +434,7 @@ def set_status(user, rfi_id: str, status: str, row_version: int) -> dict:
             session.rollback()
             _conflict()
         previous = row.status
-        _cas(session, rfi_id, int(row_version), {"status": "closed"})
+        _cas(session, rfi_id, int(row_version), {"status": "closed"}, updated_by=user.id)
         _audit(
             session,
             "rfi.status_change",
@@ -447,7 +463,7 @@ def tombstone(user, rfi_id: str, row_version: int) -> dict:
             session.rollback()
             _conflict()
         stamp = _now()
-        _cas(session, rfi_id, int(row_version), {"deleted_at": stamp})
+        _cas(session, rfi_id, int(row_version), {"deleted_at": stamp}, updated_by=user.id)
         _audit(
             session,
             "rfi.delete",
@@ -478,35 +494,55 @@ def attach_file(user, access: dict, rfi_id: str, file_id: str, raw: bytes, conte
     if raw.startswith(b"%PDF") or declared == "application/pdf":
         cleaned = strip_pdf_author(raw)
         media_type = "application/pdf"
-        suffix = "pdf"
     else:
-        cleaned, media_type, suffix = strip_image(raw)
-        suffix = suffix.lstrip(".")
+        cleaned, media_type, _suffix = strip_image(raw)
     digest = hashlib.sha256(cleaned).hexdigest()
-    stored_name = f"{access['project_id']}/{record_file}.{suffix}"
-    write_stored_file("upload", stored_name, cleaned)
-    store.add_upload(
-        user,
-        stored_name,
-        media_type,
-        access["project_id"],
-        kind="upload",
-        file_id=record_file,
-        size=len(cleaned),
-        sha256=digest,
-    )
+    storage_key = uuid4().hex
+    tmp = write_exclusive_temp("upload", cleaned)
+    published = False
     session = store._sql.factory()
     try:
         row = _load(session, rfi_id)
-        if row is None or row.deleted_at or row.project_id != access["project_id"]:
+        if (
+            row is None
+            or row.deleted_at
+            or row.project_id != access["project_id"]
+            or row.company_id != access["company_id"]
+        ):
             raise HTTPException(status_code=404, detail="Не найдено")
         if int(row.row_version) != int(row_version):
             session.rollback()
             _conflict()
+        stamp = _now()
+        session.execute(
+            rfi_files.insert().values(
+                id=str(uuid4()),
+                file_id=record_file,
+                company_id=row.company_id,
+                project_id=row.project_id,
+                rfi_id=rfi_id,
+                storage_key=storage_key,
+                sha256=digest,
+                size=len(cleaned),
+                content_type=media_type,
+                created_by=user.id,
+                updated_by=user.id,
+                created_at=stamp,
+                updated_at=stamp,
+                row_version=1,
+                deleted_at=None,
+            )
+        )
         files = _attachments(row.attachments)
         if record_file not in files:
             files.append(record_file)
-        _cas(session, rfi_id, int(row_version), {"attachments": json.dumps(files)})
+        _cas(
+            session,
+            rfi_id,
+            int(row_version),
+            {"attachments": json.dumps(files)},
+            updated_by=user.id,
+        )
         _audit(
             session,
             "rfi.file",
@@ -517,7 +553,14 @@ def attach_file(user, access: dict, rfi_id: str, file_id: str, raw: bytes, conte
             actor_user_id=user.id,
         )
         session.commit()
+        publish_exclusive("upload", tmp, storage_key)
+        published = True
+    except Exception:
+        session.rollback()
+        raise
     finally:
+        if not published:
+            discard_temp(tmp)
         session.close()
     with store._sql.factory() as session:
         saved = _load(session, rfi_id)
@@ -527,18 +570,29 @@ def attach_file(user, access: dict, rfi_id: str, file_id: str, raw: bytes, conte
     return data
 
 
+def _stored_file(session, rfi_id: str, company_id: str, file_id: str):
+    return session.execute(
+        select(rfi_files)
+        .where(
+            rfi_files.c.rfi_id == rfi_id,
+            rfi_files.c.company_id == company_id,
+            rfi_files.c.file_id == file_id,
+            rfi_files.c.deleted_at.is_(None),
+        )
+        .order_by(rfi_files.c.created_at)
+    ).mappings().first()
+
+
 def read_file(project_id: str, rfi_id: str, file_id: str) -> tuple[str, str]:
     with store._sql.factory() as session:
         row = _load(session, rfi_id)
-    if row is None or row.deleted_at or row.project_id != project_id:
+        stored = None if row is None else _stored_file(session, rfi_id, row.company_id, file_id)
+    if row is None or row.deleted_at or row.project_id != project_id or stored is None:
         raise HTTPException(status_code=404, detail="Не найдено")
-    if file_id not in _attachments(row.attachments):
-        raise HTTPException(status_code=404, detail="Не найдено")
-    stored = store.get_upload(file_id)
-    if stored is None or stored.project_id != project_id:
+    if file_id in str(stored.storage_key):
         raise HTTPException(status_code=404, detail="Не найдено")
     try:
-        path = resolve_stored_file(stored.kind, stored.name)
+        path = resolve_stored_file("upload", stored.storage_key)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Не найдено") from exc
     if not path.is_file():
@@ -557,7 +611,12 @@ def create_link(user, access: dict, rfi_id: str, body: dict) -> dict:
     session = store._sql.factory()
     try:
         row = _load(session, rfi_id)
-        if row is None or row.deleted_at or row.project_id != access["project_id"]:
+        if (
+            row is None
+            or row.deleted_at
+            or row.project_id != access["project_id"]
+            or row.company_id != access["company_id"]
+        ):
             raise HTTPException(status_code=404, detail="Не найдено")
         if row.status != "open":
             raise HTTPException(status_code=409, detail="Этот переход статуса недоступен")
@@ -572,6 +631,7 @@ def create_link(user, access: dict, rfi_id: str, body: dict) -> dict:
                 expires_at=expires.isoformat(timespec="seconds"),
                 used_at=None,
                 created_by=user.id,
+                updated_by=user.id,
                 created_at=stamp,
                 updated_at=stamp,
                 row_version=1,

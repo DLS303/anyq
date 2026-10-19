@@ -1016,9 +1016,6 @@ class SqlRuntime:
                 with self.factory() as session:
                     copy_legacy_consents(session)
                     session.commit()
-                from app.rfi_tables import ensure_rfi_tables
-
-                ensure_rfi_tables(self.engine)
                 return
             except (OperationalError, ProgrammingError, IntegrityError) as exc:
                 last = exc
