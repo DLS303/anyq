@@ -463,6 +463,8 @@ export type ProcOfferCell = {
   is_best: boolean;
   is_selected: boolean;
   short: boolean;
+  unapproved_brand?: boolean;
+  offered_brand?: string;
 };
 
 export type ProcSheetLine = {
@@ -482,6 +484,7 @@ export type ProcSheetLine = {
   short_need: number | null;
   offers: ProcOfferCell[];
   cells: Record<string, ProcOfferCell | null>;
+  needs_approval?: boolean;
 };
 
 export type ProcDocumentRow = {

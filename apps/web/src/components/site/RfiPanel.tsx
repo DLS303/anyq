@@ -51,12 +51,16 @@ export function RfiPanel({
   canWrite,
   members,
   onChange,
+  embedded = false,
+  onOverdue,
 }: {
   locale: Locale;
   projectId: string;
   canWrite: boolean;
   members: Member[];
   onChange: () => void;
+  embedded?: boolean;
+  onOverdue?: (count: number) => void;
 }) {
   const m = t(locale);
   const [items, setItems] = useState<RfiItem[]>([]);
@@ -69,7 +73,8 @@ export function RfiPanel({
     if (!res.ok) return;
     const data = await readJson<RfiItem[]>(res);
     setItems(data);
-  }, [projectId]);
+    onOverdue?.(data.filter((item) => item.overdue).length);
+  }, [onOverdue, projectId]);
 
   useEffect(() => {
     void load();
@@ -172,7 +177,7 @@ export function RfiPanel({
 
   return (
     <section className="grid gap-4">
-      <h2 className="text-xl font-medium">{m.tabRfi}</h2>
+      {embedded ? null : <h2 className="text-xl font-medium">{m.tabRfi}</h2>}
       {error ? (
         <p className="text-sm text-red-700" role="alert">
           {error}

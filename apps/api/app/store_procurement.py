@@ -187,6 +187,12 @@ def repeat_request(store, source: ProcRequest, user) -> dict:
         )
         copied: list[ProcLine] = []
         for line in sorted(_lines(store, source.id), key=lambda item: (item.pos_no, item.id)):
+            approval_id = line.approval_id
+            if line.requires_approval and approval_id:
+                from app.submittal_service import approval_still_valid
+
+                if not approval_still_valid(approval_id, source.project_id, line.brand):
+                    approval_id = None
             clone = ProcLine(
                 id=uuid4().hex,
                 request_id=req.id,
@@ -195,6 +201,9 @@ def repeat_request(store, source: ProcRequest, user) -> dict:
                 unit=line.unit,
                 qty=line.qty,
                 note=line.note,
+                requires_approval=line.requires_approval,
+                approval_id=approval_id,
+                brand=line.brand,
             )
             store.proc_lines[clone.id] = clone
             copied.append(clone)
@@ -236,6 +245,15 @@ def material_picker(store, project, query: str) -> dict:
     return {"recent": recent, "catalog": catalog}
 
 
+def _order_blocked(store, request: ProcRequest, line: ProcLine) -> bool:
+    from app.submittal_service import line_order_blocked
+
+    project = store.get_project(request.project_id)
+    if project is None:
+        return False
+    return line_order_blocked(project, line)
+
+
 def supplier_can_bid(user, request: ProcRequest) -> bool:
     return user.role == "supplier" and bool(request.shared) and request.status == "collecting"
 
@@ -251,7 +269,10 @@ def supplier_inbox(store, user) -> list[dict]:
         lines = [
             {"id": line.id, "title": line.title, "unit": line.unit, "qty": line.qty}
             for line in _lines(store, req.id)
+            if not _order_blocked(store, req, line)
         ]
+        if not lines:
+            continue
         rows.append(
             {
                 "id": req.id,
@@ -277,7 +298,49 @@ def sheet_for(store, request: ProcRequest) -> dict:
     body = build_sheet(lines, offers)
     body["request"] = request.model_dump()
     body["documents"] = [item.model_dump() for item in sorted(_docs(store, request.id), key=lambda item: item.uploaded_at)]
-    return body
+    from app.submittal_service import annotate_sheet
+
+    return annotate_sheet(store, request, body)
+
+
+def request_from_approval(store, project, user, approval: dict) -> dict:
+    """Copy an approved material into a shared request. Price is omitted without a file."""
+    specs = "; ".join(f"{item['param']}={item['value']}" for item in approval.get("specs") or [])
+    analogs = ", ".join(item["brand"] for item in approval.get("analogs") or [] if item.get("brand"))
+    note = clean_note(" ".join(part for part in (specs, analogs) if part), 500)
+    with store._lock:
+        number = max((item.number for item in store.proc_requests.values() if item.project_id == project.id), default=0) + 1
+        req = ProcRequest(
+            id=uuid4().hex,
+            project_id=project.id,
+            number=number,
+            title=approval["name"],
+            status="collecting",
+            created_at=_now(),
+            created_by=user.id,
+            shared=True,
+        )
+        line = ProcLine(
+            id=uuid4().hex,
+            request_id=req.id,
+            pos_no="1",
+            title=approval["name"],
+            unit=approval["unit"],
+            qty=float(approval["qty"]),
+            note=note,
+            requires_approval=True,
+            approval_id=approval["id"],
+            brand=approval["brand"],
+        )
+        store.proc_requests[req.id] = req
+        store.proc_lines[line.id] = line
+        store._save_unlocked()
+        view = line.model_dump()
+        view["specs"] = approval.get("specs") or []
+        view["analogs"] = approval.get("analogs") or []
+        if approval.get("indicative_price") is None or not approval.get("price_file_id"):
+            view["indicative_price"] = None
+        return {"request": req.model_dump(), "line": view}
 
 
 def _warn(rows: list[dict]) -> list[dict]:
@@ -479,6 +542,11 @@ def _request_of_line(store, line: ProcLine) -> ProcRequest:
 
 
 def add_offer(store, line: ProcLine, payload: dict) -> dict:
+    req = _request_of_line(store, line)
+    if _order_blocked(store, req, line):
+        from app.submittal_service import StatusConflict
+
+        raise StatusConflict()
     supplier = assert_org_name(payload["supplier_name"])
     price = float(payload["price_kzt"])
     if price <= 0:
@@ -503,6 +571,7 @@ def add_offer(store, line: ProcLine, payload: dict) -> dict:
             confirmed=bool(payload.get("confirmed", True)),
             note=clean_note(payload.get("note") or ""),
             delivery_term=clean_note(payload.get("delivery_term") or "", 120),
+            offered_brand=clean_note(payload.get("offered_brand") or "", 200),
         )
         store.proc_offers[offer.id] = offer
         _refresh(_request_of_line(store, line), _lines(store, line.request_id))
@@ -580,6 +649,23 @@ def patch_line(store, line: ProcLine, payload: dict) -> dict:
             line.reference_vat_included = payload["reference_vat_included"]
         if "reference_source" in payload:
             line.reference_source = clean_note(payload["reference_source"] or "", 200)
+        if any(key in payload for key in ("requires_approval", "approval_id", "brand")):
+            project = store.get_project(_request_of_line(store, line).project_id)
+            from app.company_features import feature_open_for_company, project_company_id
+
+            if project is not None and feature_open_for_company(project_company_id(project), "submittals"):
+                if "requires_approval" in payload:
+                    line.requires_approval = bool(payload["requires_approval"])
+                if "brand" in payload and payload["brand"] is not None:
+                    line.brand = clean_note(payload["brand"] or "", 200)
+                if "approval_id" in payload:
+                    approval_id = payload["approval_id"] or None
+                    if approval_id:
+                        from app.submittal_service import approval_on_project
+
+                        if not approval_on_project(approval_id, project.id):
+                            raise LookupError("Не найдено")
+                    line.approval_id = approval_id
         _refresh(_request_of_line(store, line), _lines(store, line.request_id))
         store._save_unlocked()
         return line.model_dump()

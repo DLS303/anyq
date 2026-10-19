@@ -16,7 +16,7 @@ import { loadWithin } from "@/lib/loadWithin";
 import { ErrorRetry, LoadingSkeleton, isMissing, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { AuthImage } from "@/components/media/AuthImage";
 import { InvitePanel } from "@/components/invites/InvitePanel";
-import { RfiPanel } from "./RfiPanel";
+import { QuestionsPanel } from "./QuestionsPanel";
 import { ObjectBudgetCard } from "./ObjectBudgetCard";
 import { DailyReport, type DailyEntry } from "./DailyReport";
 import { InspectionForm } from "./InspectionForm";
@@ -333,12 +333,14 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         />
       ) : null}
 
-      {tab === "rfi" && org.rfi ? (
-        <RfiPanel
+      {tab === "rfi" && (org.rfi || org.submittals) ? (
+        <QuestionsPanel
           locale={locale}
           projectId={p.id}
           canWrite={Boolean(user)}
           members={(bundle.members as { user_id: string; name: string; role: string }[]) || []}
+          showQuestions={org.rfi}
+          showMaterials={org.submittals}
           onChange={load}
         />
       ) : null}

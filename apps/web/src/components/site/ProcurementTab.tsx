@@ -20,8 +20,10 @@ import {
   selectProcBest,
   setProcDocumentActual,
   uploadProcDocument,
+  apiFetch,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useFeature } from "@/lib/useFeature";
 import { ErrorRetry, LoadingSkeleton, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { toast } from "@/lib/toast";
 import { t } from "@/i18n/messages";
@@ -210,6 +212,7 @@ export function ProcurementTab({
 }) {
   const m = t(locale);
   const { user } = useAuth();
+  const materialsOn = useFeature("submittals");
   const [screen, setScreen] = useState<Screen>({ kind: "ask", step: 1 });
   const [query, setQuery] = useState("");
   const [needle, setNeedle] = useState("");
@@ -345,6 +348,7 @@ export function ProcurementTab({
           {offer.is_selected ? " · ✓" : ""}
         </span>
         {warn ? <span className="mt-1 block text-xs text-rose-700">{aboveMarket(warn)}</span> : null}
+        {offer.unapproved_brand ? <span className="mt-1 block text-xs text-amber-800">{m.matNotApproved}</span> : null}
         {offer.short && offer.qty_available != null ? (
           <span className="mt-1 block text-xs text-ink/60">{fill(m.procShort, { n: offer.qty_available, m: lineQty })}</span>
         ) : null}
@@ -608,6 +612,9 @@ export function ProcurementTab({
                           <span className="text-xs text-ink/60">
                             {line.qty} {line.unit} · {statusText(line.status_code, m)}
                           </span>
+                          {materialsOn && line.needs_approval ? (
+                            <span className="mt-1 block text-xs text-amber-800">{m.matNotApproved}</span>
+                          ) : null}
                         </th>
                         {sheet.suppliers.map((item) => {
                           const offer = line.cells[item.name] || null;
@@ -618,6 +625,32 @@ export function ProcurementTab({
                               className={`px-3 py-3 align-top ${offer?.is_best ? "bg-emerald-100" : ""} ${warn ? "ring-1 ring-inset ring-rose-600" : ""}`}
                             >
                               {priceCell(offer, line.qty, warn)}
+                              {materialsOn && offer?.unapproved_brand ? (
+                                <button
+                                  type="button"
+                                  className="mt-1 block text-xs underline"
+                                  onClick={() =>
+                                    void run(async () => {
+                                      if (!user) return;
+                                      const res = await apiFetch(`/v1/site/projects/${projectId}/material-approvals`, {
+                                        method: "POST",
+                                        body: JSON.stringify({
+                                          id: crypto.randomUUID(),
+                                          name: line.title,
+                                          brand: offer.offered_brand || line.title,
+                                          unit: line.unit,
+                                          qty: line.qty,
+                                          approver_ids: [user.id],
+                                        }),
+                                      });
+                                      if (!res.ok) throw new Error(m.featureSaveError);
+                                      toast(m.matReplace);
+                                    })
+                                  }
+                                >
+                                  {m.matReplace}
+                                </button>
+                              ) : null}
                             </td>
                           );
                         })}

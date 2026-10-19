@@ -101,8 +101,15 @@ export function objectMenus(flags: CompanyFlags | null | undefined, options?: { 
   };
 }
 
+export function referrerPolicyFor(pathname: string): string | null {
+  const rest = pathname.replace(/^\/(ru|kk)/, "") || "/";
+  if (rest.startsWith("/r/")) return "no-referrer";
+  return null;
+}
+
 export function menuTabVisible(tab: string, flags: CompanyFlags | null | undefined, demo = DEMO_MODE) {
   if (tab === "ks") return demo;
+  if (tab === "rfi") return featureOn("rfi", flags, demo) || featureOn("submittals", flags, demo);
   const key = TAB_FEATURE[tab];
   if (!key) return true;
   return featureOn(key, flags, demo);

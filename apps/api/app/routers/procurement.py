@@ -84,6 +84,7 @@ class OfferIn(BaseModel):
     source_label: str = ""
     source_doc_id: str | None = None
     offer_date: str = ""
+    offered_brand: str = ""
 
 
 class OfferPatch(BaseModel):
@@ -107,6 +108,9 @@ class LinePatch(BaseModel):
     reference_price_kzt: float | None = None
     reference_vat_included: bool | None = None
     reference_source: str | None = None
+    requires_approval: bool | None = None
+    approval_id: str | None = None
+    brand: str | None = None
 
 
 class SelectIn(BaseModel):
@@ -118,6 +122,10 @@ class DocPatch(BaseModel):
 
 
 def _fail(exc: Exception) -> None:
+    from app.submittal_service import StatusConflict
+
+    if isinstance(exc, StatusConflict):
+        raise HTTPException(409, "Этот переход статуса недоступен") from exc
     if isinstance(exc, IdempotencyConflict):
         raise HTTPException(409, "Этот запрос уже отправлен с другими данными") from exc
     if isinstance(exc, PermissionError):
@@ -130,16 +138,20 @@ def _fail(exc: Exception) -> None:
 
 
 def _run(fn):
+    from app.submittal_service import StatusConflict
+
     try:
         return fn()
-    except (IdempotencyConflict, PermissionError, LookupError, ValueError) as exc:
+    except (IdempotencyConflict, PermissionError, LookupError, ValueError, StatusConflict) as exc:
         _fail(exc)
 
 
 def _idem(user: User, key: str | None, fingerprint: str, fn):
+    from app.submittal_service import StatusConflict
+
     try:
         return run_idempotent(user.id, key, fingerprint, fn)
-    except (IdempotencyConflict, PermissionError, LookupError, ValueError) as exc:
+    except (IdempotencyConflict, PermissionError, LookupError, ValueError, StatusConflict) as exc:
         _fail(exc)
 
 

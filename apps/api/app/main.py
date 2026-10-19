@@ -25,6 +25,7 @@ from app.routers import (
     public,
     rfi,
     site,
+    submittals,
     specialists,
 )
 from app.security import PublicRobotsMiddleware, SecurityHeadersMiddleware
@@ -65,6 +66,8 @@ app.include_router(procurement.router)
 app.include_router(public.router)
 app.include_router(rfi.router)
 app.include_router(rfi.public)
+app.include_router(submittals.router)
+app.include_router(submittals.public)
 app.include_router(files.router)
 
 

@@ -1,0 +1,537 @@
+{
+  "_meta": {
+    "note": "ВСЕ данные выдуманные: компании, БИН, телефоны, цены и документы ненастоящие. Только для тестов и стенда.",
+    "author": "Снабжение",
+    "date": "2026-10-19",
+    "currency": "KZT",
+    "vat_rate_default": 16
+  },
+  "companies": [
+    {
+      "id": "demo-co",
+      "name": "ТОО «Демо Стройкомпания»",
+      "bin": "000000000099",
+      "city": "Алматы"
+    }
+  ],
+  "users": [
+    {
+      "id": "usr-demo-tehnadzor",
+      "company_id": "demo-co",
+      "name": "Тест Технадзор",
+      "role": "tehnadzor",
+      "phone": "+7 700 000 00 06"
+    },
+    {
+      "id": "usr-demo-zakazchik",
+      "company_id": "demo-co",
+      "name": "Тест Заказчик",
+      "role": "customer",
+      "phone": "+7 700 000 00 07"
+    },
+    {
+      "id": "usr-demo-snab",
+      "company_id": "demo-co",
+      "name": "Тест Снабженец",
+      "role": "procurement",
+      "phone": "+7 700 000 00 08"
+    }
+  ],
+  "objects": [
+    {
+      "id": "obj-demo-1",
+      "company_id": "demo-co",
+      "name": "Демо-объект: склад 24×48",
+      "address": "Алматы, тестовый адрес"
+    }
+  ],
+  "requests": [
+    {
+      "id": "req-demo-1",
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "created_by": "usr-demo-snab",
+      "status": "draft",
+      "created_at": "2026-10-19"
+    }
+  ],
+  "suppliers": [
+    {
+      "id": "sup-1",
+      "company_id": "demo-co",
+      "name": "ТОО «Тест Металл»",
+      "bin": "000000000001",
+      "category": "Металлопрокат",
+      "city": "Алматы",
+      "site": "https://example.com/sup-1",
+      "phone": "+7 700 000 00 01",
+      "type": "опт",
+      "nomenclature": "арматура, профтруба, швеллер",
+      "vat_payer": true,
+      "esf": "известно",
+      "delivery": true,
+      "source": "тестовые данные",
+      "checked_at": "2026-10-19",
+      "notes": "выдуманная запись"
+    },
+    {
+      "id": "sup-2",
+      "company_id": "demo-co",
+      "name": "ТОО «Пример Панель»",
+      "bin": "000000000002",
+      "category": "Сэндвич-панели",
+      "city": "Алматы",
+      "site": "https://example.com/sup-2",
+      "phone": "+7 700 000 00 02",
+      "type": "производитель",
+      "nomenclature": "сэндвич-панели стеновые и кровельные",
+      "vat_payer": true,
+      "esf": "известно",
+      "delivery": true,
+      "source": "тестовые данные",
+      "checked_at": "2026-10-19",
+      "notes": "выдуманная запись"
+    },
+    {
+      "id": "sup-3",
+      "company_id": "demo-co",
+      "name": "ИП «Демо Крепёж»",
+      "bin": "000000000003",
+      "category": "Крепёж",
+      "city": "Алматы",
+      "site": "https://example.com/sup-3",
+      "phone": "+7 700 000 00 03",
+      "type": "опт+розница",
+      "nomenclature": "саморезы, анкеры, болты",
+      "vat_payer": false,
+      "esf": "не проверено",
+      "delivery": false,
+      "source": "тестовые данные",
+      "checked_at": "2026-10-19",
+      "notes": "выдуманная запись"
+    },
+    {
+      "id": "sup-4",
+      "company_id": "demo-co",
+      "name": "ТОО «Образец Утепление»",
+      "bin": "000000000004",
+      "category": "Утеплитель",
+      "city": "Алматы",
+      "site": "https://example.com/sup-4",
+      "phone": "+7 700 000 00 04",
+      "type": "опт",
+      "nomenclature": "минвата, пенополистирол",
+      "vat_payer": true,
+      "esf": "известно",
+      "delivery": true,
+      "source": "тестовые данные",
+      "checked_at": "2026-10-19",
+      "notes": "выдуманная запись"
+    },
+    {
+      "id": "sup-5",
+      "company_id": "demo-co",
+      "name": "ИП «Фиктив Строй»",
+      "bin": "000000000005",
+      "category": "Металлопрокат",
+      "city": "Алматы",
+      "site": "https://example.com/sup-5",
+      "phone": "+7 700 000 00 05",
+      "type": "опт+розница",
+      "nomenclature": "профтруба, уголок",
+      "vat_payer": false,
+      "esf": "не проверено",
+      "delivery": true,
+      "source": "тестовые данные",
+      "checked_at": "2026-10-19",
+      "notes": "выдуманная запись"
+    }
+  ],
+  "items": [
+    {
+      "id": "it-1",
+      "name": "Профтруба 60×40×2",
+      "brand": "ГОСТ 30245-2003",
+      "unit": "м",
+      "qty": 120,
+      "requires_approval": false,
+      "approval_id": null,
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "request_id": "req-demo-1"
+    },
+    {
+      "id": "it-2",
+      "name": "Сэндвич-панель стеновая 100 мм, минвата",
+      "brand": "ПП-СТ-100-МВ RAL9003",
+      "unit": "м²",
+      "qty": 340,
+      "requires_approval": true,
+      "approval_id": "ap-1",
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "request_id": "req-demo-1"
+    },
+    {
+      "id": "it-3",
+      "name": "Саморез кровельный 5,5×25",
+      "brand": "DIN 7504K",
+      "unit": "шт",
+      "qty": 5000,
+      "requires_approval": false,
+      "approval_id": null,
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "request_id": "req-demo-1"
+    },
+    {
+      "id": "it-4",
+      "name": "Минвата плита 50 мм",
+      "brand": "ПЛ-50-плотн.45",
+      "unit": "м³",
+      "qty": 12,
+      "requires_approval": true,
+      "approval_id": "ap-2",
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "request_id": "req-demo-1"
+    },
+    {
+      "id": "it-5",
+      "name": "Анкер клиновой М10×100",
+      "brand": "М10×100 оцинк.",
+      "unit": "шт",
+      "qty": 400,
+      "requires_approval": false,
+      "approval_id": null,
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "request_id": "req-demo-1"
+    }
+  ],
+  "approvals": [
+    {
+      "id": "ap-1",
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "request_item_id": "it-2",
+      "name": "Сэндвич-панель стеновая",
+      "brand": "ПП-СТ-100-МВ RAL9003",
+      "manufacturer": "ТОО «Пример Панель»",
+      "unit": "м²",
+      "qty": 340,
+      "need_by": "2026-10-25",
+      "status": "approved",
+      "version": 1,
+      "specs": [
+        {
+          "param": "толщина",
+          "value": "100 мм"
+        },
+        {
+          "param": "утеплитель",
+          "value": "минвата"
+        },
+        {
+          "param": "цвет",
+          "value": "RAL 9003"
+        }
+      ],
+      "files": [
+        {
+          "kind": "cert",
+          "file": "fixtures/cert_demo.pdf"
+        }
+      ],
+      "analogs": [
+        {
+          "brand": "ПП-СТ-100-МВ RAL9010",
+          "manufacturer": "ТОО «Пример Панель»"
+        }
+      ],
+      "steps": [
+        {
+          "order": 1,
+          "decision": "approved",
+          "comment": null,
+          "decided_at": "2026-10-16",
+          "approver_id": "usr-demo-tehnadzor"
+        }
+      ]
+    },
+    {
+      "id": "ap-2",
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "request_item_id": "it-4",
+      "name": "Минвата плита 50 мм",
+      "brand": "ПЛ-50-плотн.45",
+      "manufacturer": "ТОО «Образец Утепление»",
+      "unit": "м³",
+      "qty": 12,
+      "need_by": "2026-10-24",
+      "status": "in_review",
+      "version": 1,
+      "specs": [
+        {
+          "param": "плотность",
+          "value": "45 кг/м³"
+        }
+      ],
+      "files": [
+        {
+          "kind": "passport",
+          "file": "fixtures/pass_demo.pdf"
+        }
+      ],
+      "analogs": [],
+      "steps": [
+        {
+          "order": 1,
+          "decision": null,
+          "comment": null,
+          "decided_at": null,
+          "approver_id": "usr-demo-zakazchik"
+        }
+      ],
+      "test_case": "не согласовано — позицию it-4 нельзя отправить поставщикам"
+    }
+  ],
+  "prices": [
+    {
+      "id": "pr-1",
+      "company_id": "demo-co",
+      "item_id": "it-1",
+      "supplier_id": "sup-1",
+      "unit_price": 2450,
+      "currency": "KZT",
+      "vat_included": true,
+      "vat_rate": 16,
+      "source": "fixtures/kp_sup-1_2026-10-10.pdf",
+      "date": "2026-10-10",
+      "offered_brand": null,
+      "source_kind": "file"
+    },
+    {
+      "id": "pr-2",
+      "company_id": "demo-co",
+      "item_id": "it-1",
+      "supplier_id": "sup-5",
+      "unit_price": 2290,
+      "currency": "KZT",
+      "vat_included": false,
+      "vat_rate": 0,
+      "source": "https://example.com/sup-5/price",
+      "date": "2026-10-12",
+      "offered_brand": null,
+      "source_kind": "url"
+    },
+    {
+      "id": "pr-3",
+      "company_id": "demo-co",
+      "item_id": "it-1",
+      "supplier_id": "sup-1",
+      "unit_price": 2600,
+      "currency": "KZT",
+      "vat_included": true,
+      "vat_rate": 16,
+      "source": "fixtures/kp_sup-1_2026-10-17.pdf",
+      "date": "2026-10-17",
+      "offered_brand": null,
+      "test_case": "история цен: новая запись, pr-1 не перезаписывается",
+      "source_kind": "file"
+    },
+    {
+      "id": "pr-4",
+      "company_id": "demo-co",
+      "item_id": "it-2",
+      "supplier_id": "sup-2",
+      "unit_price": 8900,
+      "currency": "KZT",
+      "vat_included": true,
+      "vat_rate": 16,
+      "source": "fixtures/kp_sup-2_2026-10-15.pdf",
+      "date": "2026-10-15",
+      "offered_brand": "ПП-СТ-100-МВ RAL9003",
+      "source_kind": "file"
+    },
+    {
+      "id": "pr-5",
+      "company_id": "demo-co",
+      "item_id": "it-2",
+      "supplier_id": "sup-2",
+      "unit_price": 7400,
+      "currency": "KZT",
+      "vat_included": true,
+      "vat_rate": 16,
+      "source": "fixtures/kp_sup-2_2026-10-15.pdf",
+      "date": "2026-10-15",
+      "offered_brand": "ПП-СТ-100-ППС RAL9003",
+      "test_case": "марка не согласована (ППС вместо МВ) — значок и кнопка «Согласовать замену»",
+      "source_kind": "file"
+    },
+    {
+      "id": "pr-6",
+      "company_id": "demo-co",
+      "item_id": "it-3",
+      "supplier_id": "sup-3",
+      "unit_price": 18,
+      "currency": "KZT",
+      "vat_included": false,
+      "vat_rate": 0,
+      "source": "https://example.com/sup-3/catalog",
+      "date": "2026-10-14",
+      "offered_brand": null,
+      "source_kind": "url"
+    },
+    {
+      "id": "pr-7",
+      "company_id": "demo-co",
+      "item_id": "it-4",
+      "supplier_id": "sup-4",
+      "unit_price": 21500,
+      "currency": "KZT",
+      "vat_included": true,
+      "vat_rate": 16,
+      "source": "fixtures/kp_sup-4_2026-10-13.pdf",
+      "date": "2026-10-13",
+      "offered_brand": "ПЛ-50-плотн.45",
+      "source_kind": "file"
+    },
+    {
+      "id": "pr-8",
+      "company_id": "demo-co",
+      "item_id": "it-5",
+      "supplier_id": "sup-3",
+      "unit_price": 95,
+      "currency": "KZT",
+      "vat_included": false,
+      "vat_rate": 0,
+      "source": "https://example.com/sup-3/catalog",
+      "date": "2026-10-14",
+      "offered_brand": null,
+      "source_kind": "url"
+    },
+    {
+      "id": "pr-9",
+      "company_id": "demo-co",
+      "item_id": "it-5",
+      "supplier_id": "sup-1",
+      "unit_price": 88,
+      "currency": "KZT",
+      "vat_included": true,
+      "vat_rate": 16,
+      "source": "https://example.com/sup-1/price",
+      "date": "2026-10-16",
+      "offered_brand": null,
+      "source_kind": "url"
+    }
+  ],
+  "invalid_prices": [
+    {
+      "id": "pr-bad-1",
+      "company_id": "demo-co",
+      "item_id": "it-3",
+      "supplier_id": "sup-1",
+      "unit_price": 16,
+      "currency": "KZT",
+      "vat_included": true,
+      "vat_rate": 16,
+      "source": null,
+      "date": "2026-10-18",
+      "offered_brand": null,
+      "test_case": "цена без источника — сохранение должно быть отклонено",
+      "source_kind": null
+    }
+  ],
+  "invoices": [
+    {
+      "id": "inv-1",
+      "number": "СФ-0001",
+      "supplier_id": "sup-1",
+      "date": "2026-10-18",
+      "lines": [
+        {
+          "item_id": "it-1",
+          "qty": 120,
+          "unit_price": 2950,
+          "vat_included": true,
+          "vat_rate": 16
+        }
+      ],
+      "file": "fixtures/inv_sup-1_0001.pdf",
+      "test_case": "счёт выше прайса: 2950 против последней цены 2600 (pr-3) — предупреждение",
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "total": 354000
+    },
+    {
+      "id": "inv-2",
+      "number": "СФ-0001",
+      "supplier_id": "sup-1",
+      "date": "2026-10-18",
+      "lines": [
+        {
+          "item_id": "it-1",
+          "qty": 120,
+          "unit_price": 2950,
+          "vat_included": true,
+          "vat_rate": 16
+        }
+      ],
+      "file": "fixtures/inv_sup-1_0001_copy.pdf",
+      "test_case": "точный дубль inv-1 (поставщик, номер, дата, сумма) — блокировка 409",
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "total": 354000
+    },
+    {
+      "id": "inv-3",
+      "number": "45",
+      "supplier_id": "sup-3",
+      "date": "2026-10-18",
+      "lines": [
+        {
+          "item_id": "it-3",
+          "qty": 5000,
+          "unit_price": 18,
+          "vat_included": false,
+          "vat_rate": 0
+        },
+        {
+          "item_id": "it-5",
+          "qty": 400,
+          "unit_price": 95,
+          "vat_included": false,
+          "vat_rate": 0
+        }
+      ],
+      "file": "fixtures/inv_sup-3_45.pdf",
+      "test_case": "поставщик не плательщик НДС, ЭСФ не проверено — пометка",
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "total": 128000
+    },
+    {
+      "id": "inv-4",
+      "number": "СФ-0112",
+      "supplier_id": "sup-2",
+      "date": "2026-10-19",
+      "lines": [
+        {
+          "item_id": "it-2",
+          "qty": 340,
+          "unit_price": 7400,
+          "vat_included": true,
+          "vat_rate": 16,
+          "brand": "ПП-СТ-100-ППС RAL9003"
+        }
+      ],
+      "file": "fixtures/inv_sup-2_0112.pdf",
+      "test_case": "в счёте несогласованная марка — блок оплаты/приёмки до согласования замены",
+      "company_id": "demo-co",
+      "object_id": "obj-demo-1",
+      "total": 2516000
+    }
+  ]
+}

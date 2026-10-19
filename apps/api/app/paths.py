@@ -79,7 +79,7 @@ def discard_temp(path: Path | None) -> None:
 
 
 def publish_exclusive(kind: str, tmp: Path, storage_key: str) -> Path:
-    """Publish a temp file after commit. An existing object is left unchanged."""
+    """Publish a temp file after commit. An existing object is left unchanged and the call fails."""
     if not storage_key or storage_key.startswith(".") or "/" in storage_key or "\\" in storage_key:
         discard_temp(tmp)
         raise ValueError("bad storage key")
@@ -89,7 +89,7 @@ def publish_exclusive(kind: str, tmp: Path, storage_key: str) -> Path:
         reserved = os.open(final, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
         discard_temp(tmp)
-        return final
+        raise
     os.close(reserved)
     os.unlink(final)
     os.rename(tmp, final)

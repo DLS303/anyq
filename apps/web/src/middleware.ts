@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { DEMO_MODE } from "./lib/features";
+import { DEMO_MODE, referrerPolicyFor } from "./lib/features";
 
 const LOCALES = ["ru", "kk"];
 /** Finished areas kept out of the release navigation. */
@@ -30,7 +30,10 @@ export function middleware(request: NextRequest) {
     url.pathname = `/${locale}`;
     return NextResponse.redirect(url);
   }
-  return NextResponse.next();
+  const response = NextResponse.next();
+  const policy = referrerPolicyFor(pathname);
+  if (policy) response.headers.set("Referrer-Policy", policy);
+  return response;
 }
 
 export const config = {

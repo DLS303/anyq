@@ -31,6 +31,9 @@ class ProcLine(BaseModel):
     reference_price_kzt: float | None = None
     reference_vat_included: bool | None = None
     reference_source: str = ""
+    requires_approval: bool = False
+    approval_id: str | None = None
+    brand: str = ""
 
 
 class ProcOffer(BaseModel):
@@ -46,6 +49,7 @@ class ProcOffer(BaseModel):
     confirmed: bool = False
     note: str = ""
     delivery_term: str = ""
+    offered_brand: str = ""
 
 
 class ProcDocument(BaseModel):

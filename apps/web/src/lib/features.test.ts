@@ -57,6 +57,8 @@ describe("release visibility", () => {
     expect(menuTabVisible("rfi", {}, false)).toBe(false);
     expect(menuTabVisible("draw", {}, false)).toBe(false);
     expect(menuTabVisible("rfi", { rfi: true }, false)).toBe(true);
+    expect(menuTabVisible("rfi", { submittals: true }, false)).toBe(true);
+    expect(menuTabVisible("sub", { submittals: true }, false)).toBe(true);
     expect(menuTabVisible("procurement", {}, false)).toBe(true);
     expect(menuTabVisible("today", {}, false)).toBe(true);
     expect(menuTabVisible("money", {}, false)).toBe(true);

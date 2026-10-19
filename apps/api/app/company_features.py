@@ -366,6 +366,8 @@ def resolve_path_company(collection: str, doc_id: str, user: User) -> str | None
         found = session.execute(stmt).first()
         if found is None and collection == "rfis":
             found = _sql_rfi_company(session, doc_id, user)
+        if found is None and collection == "submittals":
+            found = _sql_material_company(session, doc_id, user)
     if found is None:
         return None
     owner = store.get_user(str(found[0] or ""))
@@ -403,6 +405,40 @@ def _sql_rfi_company(session, doc_id: str, user: User):
             ),
         )
         .where(rfis.c.id == doc_id, rfis.c.deleted_at.is_(None), access)
+        .limit(1)
+    )
+    try:
+        return session.execute(stmt).first()
+    except (OperationalError, ProgrammingError):
+        return None
+
+
+def _sql_material_company(session, doc_id: str, user: User):
+    """Approvals live in their own table. One join: approval, project, membership."""
+    from app.submittal_tables import material_approvals
+
+    project = aliased(Record)
+    member = aliased(Record)
+    access = or_(
+        member.user_id == user.id,
+        project.owner_id == user.id,
+        project.company_key == company_key(user),
+    )
+    if user.role == "admin":
+        access = true()
+    stmt = (
+        select(project.owner_id)
+        .select_from(material_approvals)
+        .join(project, and_(project.collection == "projects", project.doc_id == material_approvals.c.project_id))
+        .outerjoin(
+            member,
+            and_(
+                member.collection == "directory",
+                member.project_id == project.doc_id,
+                member.user_id == user.id,
+            ),
+        )
+        .where(material_approvals.c.id == doc_id, material_approvals.c.deleted_at.is_(None), access)
         .limit(1)
     )
     try:
