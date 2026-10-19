@@ -11,6 +11,7 @@ from app.routers import (
     cabinet,
     chat,
     crm,
+    drawings,
     estimates,
     files,
     health,
@@ -55,6 +56,7 @@ app.include_router(materials.router)
 app.include_router(estimates.router)
 app.include_router(acts.router)
 app.include_router(site.router)
+app.include_router(drawings.router)
 app.include_router(org_features.router)
 app.include_router(invitations.router)
 app.include_router(budget.router)

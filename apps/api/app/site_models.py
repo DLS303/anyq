@@ -145,6 +145,40 @@ class Drawing(BaseModel):
     revision: str = "A"
     current: bool = True
     file: str = ""
+    company_id: str = ""
+    set_id: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+    row_version: int = 1
+    deleted_at: str | None = None
+
+
+class DrawingSet(BaseModel):
+    id: str
+    company_id: str
+    project_id: str
+    title: str
+    discipline: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    row_version: int = 1
+    deleted_at: str | None = None
+
+
+class DrawingRevision(BaseModel):
+    id: str
+    company_id: str
+    project_id: str
+    drawing_id: str
+    rev: str
+    file_id: str
+    is_current: bool = True
+    uploaded_by: str = ""
+    uploaded_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    row_version: int = 1
+    deleted_at: str | None = None
 
 
 class ScheduleTask(BaseModel):
