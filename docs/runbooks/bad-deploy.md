@@ -102,8 +102,9 @@ docker compose --env-file deploy/.env \
 
 `pgbackrest` на хосте нет. Пока `postgres` остановлен, `info` и
 `restore` запускают одноразовым контейнером (`run --rm`). Пароль
-шифрования контейнер берёт из `deploy/.env.pgbackrest` (`--env-file`),
-как в [`docs/runbooks/db-down.md`](db-down.md): файла в git нет.
+репозитория 2 сервис `postgres` берёт из `env_file: .env.pgbackrest`
+в compose (задача DevOps), как в [`docs/runbooks/db-down.md`](db-down.md).
+Файла в git нет. У `docker compose run` флага `--env-file` нет.
 Существующий том всегда запускают тем образом, которым он создан.
 Восстановление на месте делают при SEV1, когда координатор записал
 решение. Иначе ждут `deploy/restore.sh` (будет добавлено): он
@@ -115,15 +116,11 @@ docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml stop api postgres
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres \
-  --env-file deploy/.env.pgbackrest \
-  postgres \
+  --user postgres postgres \
   pgbackrest --stanza=anyq info
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres \
-  --env-file deploy/.env.pgbackrest \
-  postgres \
+  --user postgres postgres \
   pgbackrest --stanza=anyq restore --delta --type=time \
   --target='<YYYY-MM-DD HH:MM:SS+05>' --target-action=promote
 ```
@@ -135,13 +132,22 @@ docker compose --env-file deploy/.env \
 ```bash
 docker tag anyq-api:rollback anyq-api:current
 docker tag anyq-web:rollback anyq-web:current
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml up -d postgres
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
+  pgbackrest --stanza=anyq check
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
+  pgbackrest --stanza=anyq backup --type=full
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
+  pgbackrest --stanza=anyq --repo=2 backup --type=full
 ```
 
-Дальше запускают postgres тем же образом. `pgbackrest --stanza=anyq check`
-и `pgbackrest --stanza=anyq backup --type=full` выполняют через
-`exec` в работающем контейнере — как в
-[`docs/runbooks/db-down.md`](db-down.md). API поднимают после этого,
-уже с тегами отката. Образ
+`backup` без `--repo` пишет в первый репозиторий. Команда с
+`--repo=2` пишет во вторую точку в Казахстане. API поднимают после
+этого, уже с тегами отката. Образ
 `postgis/postgis:16-3.4` — после миграции на этот образ
 (задача DevOps). Перенос локального стенда с Alpine на PostGIS —
 только дамп в новый пустой том.

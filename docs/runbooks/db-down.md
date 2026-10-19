@@ -130,41 +130,41 @@ tar -tzf /var/backups/anyq/anyq-pgvolume-<штамп>.tar.gz >/dev/null
 Кластер в UTC, смещение в `--target` обязательно. Для повреждённого
 шага migrate это момент непосредственно до шага.
 
-`pgbackrest` на хосте нет. `run --rm` — только пока `postgres`
-остановлен: так запускают `info`, `restore` и `verify`, они читают
-репозиторий. `check` и `backup` выполняют через `exec`, когда
-`postgres` уже работает. Одноразовый контейнер сокет этой базы
-не видит. Том при этом не меняет образ. Репозиторий за пределами
-Казахстана не используют.
+`pgbackrest` на хосте нет. `info` и `restore` запускают через
+`run --rm`, пока `postgres` остановлен. `verify` тоже запускают
+через `run --rm`: команда читает только репозиторий и подходит
+и при работающей базе. `check` и `backup` выполняют через `exec`,
+когда `postgres` уже работает. Одноразовый контейнер сокет этой
+базы не видит. Том при этом не меняет образ. Репозиторий за
+пределами Казахстана не используют.
 
 Пароль шифрования в команду, карточку, чат и git не пишут.
 Файл `deploy/.env.pgbackrest` лежит только на сервере, права `600`,
 в репозиторий его не добавляют. Внутри одна переменная
 `PGBACKREST_REPO2_CIPHER_PASS`, значение из `<офлайн-хранилище>`.
-Одноразовый контейнер получает файл через `--env-file`. Рабочий
-контейнер должен видеть ту же переменную с момента запуска
-(задача DevOps): иначе архивация в зашифрованный репозиторий не идёт.
+Задача DevOps по базе прописывает сервису `postgres` в compose
+`env_file: .env.pgbackrest`. Тогда пароль репозитория 2 видят
+`run`, `exec` и архиватор. У `docker compose run` флага `--env-file`
+нет, в команды его не ставят.
 
 ```bash
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml stop api postgres
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres \
-  --env-file deploy/.env.pgbackrest \
-  postgres \
+  --user postgres postgres \
   pgbackrest --stanza=anyq info
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres \
-  --env-file deploy/.env.pgbackrest \
-  postgres \
+  --user postgres postgres \
   pgbackrest --stanza=anyq restore --delta --type=time \
   --target='<YYYY-MM-DD HH:MM:SS+05>' --target-action=promote
 ```
 
-Затем тот же образ из файла compose. `check` и полную копию
-выполняют в уже запущенном контейнере:
+Затем тот же образ из файла compose. `check` и полные копии
+выполняют в уже запущенном контейнере. `backup` без `--repo`
+пишет только в первый репозиторий. Вторая точка в Казахстане —
+отдельная команда с `--repo=2`:
 
 ```bash
 docker compose --env-file deploy/.env \
@@ -175,6 +175,9 @@ docker compose --env-file deploy/.env \
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
   pgbackrest --stanza=anyq backup --type=full
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
+  pgbackrest --stanza=anyq --repo=2 backup --type=full
 ```
 
 ### Логический дамп
@@ -231,12 +234,15 @@ gunzip -c /var/backups/anyq/anyq-postgres-<штамп>.sql.gz \
     psql --username anyq --dbname anyq -v ON_ERROR_STOP=1
 ```
 
-После загрузки права заново применяет роль `postgres`. Если рядом
-с дампом лежит `<скрипт-прав>`, берут его. `REVOKE` в нём — отдельные
-команды, по одной таблице. Иначе минимум такой:
+После загрузки права заново применяет роль `postgres` в базе `anyq`.
+Сессия выше открыта в базе `postgres`, поэтому перед блоком прав
+выполняют `\connect anyq`. Если рядом с дампом лежит `<скрипт-прав>`,
+берут его. `REVOKE` в нём — отдельные команды, по одной таблице.
+Иначе минимум такой:
 
 ```sql
--- выполняет роль postgres
+-- выполняет роль postgres в базе anyq
+\connect anyq
 GRANT CONNECT ON DATABASE anyq TO anyq_app;
 GRANT USAGE ON SCHEMA public TO anyq_app;
 GRANT SELECT, INSERT, UPDATE, DELETE
@@ -255,7 +261,8 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 пропускают. Так `REVOKE` для `consent_events` применяется сам по себе.
 
 ```sql
--- выполняет роль postgres, после миграции журнала аудита
+-- выполняет роль postgres в базе anyq, после миграции журнала аудита
+\connect anyq
 REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM anyq_app;
 ```
 
@@ -285,9 +292,7 @@ docker compose --env-file deploy/.env \
   'SELECT max(created_at) AS newest FROM records;'
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres \
-  --env-file deploy/.env.pgbackrest \
-  postgres \
+  --user postgres postgres \
   pgbackrest --stanza=anyq verify
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
@@ -331,6 +336,6 @@ docker compose --env-file deploy/.env \
 ## После инцидента
 
 1. Допишите хронологию в закрытой карточке.
-2. Если было восстановление, полная копия уже снята командой `pgbackrest --stanza=anyq backup --type=full`. Её вторая точка — в Казахстане. Логический дамп `deploy/backup.sh` эту копию не заменяет.
+2. Если было восстановление, сняты две полные копии: `pgbackrest --stanza=anyq backup --type=full` в первый репозиторий и `pgbackrest --stanza=anyq --repo=2 backup --type=full` во вторую точку в Казахстане. Логический дамп `deploy/backup.sh` эти копии не заменяет.
 3. Для SEV1 и SEV2 назначьте разбор по [`docs/incidents/POSTMORTEM.md`](../incidents/POSTMORTEM.md) в рабочие часы.
 4. Образы и тома, которые не стирали, не удаляйте до конца разбора.

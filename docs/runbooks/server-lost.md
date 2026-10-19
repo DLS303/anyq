@@ -107,21 +107,26 @@ git checkout <ветка>
 Шаг migrate — отдельно и только если ревизия в `alembic_version`
 старше ожидаемой. `alembic downgrade` в бою запрещён.
 
-`pgbackrest` на хосте нет. `run --rm` — только пока `postgres`
-остановлен (`info`, `restore`, `verify`). `check`, `backup` и
-`stanza-create` выполняют через `exec` в уже запущенном контейнере:
-одноразовый контейнер сокет базы не видит. У `check` нет опции
-`--repo`. Пароль шифрования в команду не подставляют. Файл
+`pgbackrest` на хосте нет. `info` и `restore` запускают через
+`run --rm`, пока `postgres` остановлен. `verify` тоже запускают
+через `run --rm`: команда читает только репозиторий и подходит
+и при работающей базе. `check`, `backup` и `stanza-create`
+выполняют через `exec` в уже запущенном контейнере: одноразовый
+контейнер сокет базы не видит. У `check` и у `stanza-create` нет
+опции `--repo`. Пароль шифрования в команду не подставляют. Файл
 `deploy/.env.pgbackrest` (права `600`, в git его нет) содержит
-`PGBACKREST_REPO2_CIPHER_PASS` из `<офлайн-хранилище>` и передаётся
-одноразовому контейнеру через `--env-file`. Рабочий контейнер
-получает ту же переменную при запуске (задача DevOps).
-Метку пишут в карточку как `<YYYY-MM-DD HH:MM:SS+05>`
+`PGBACKREST_REPO2_CIPHER_PASS` из `<офлайн-хранилище>`. Задача
+DevOps по базе прописывает сервису `postgres` в compose
+`env_file: .env.pgbackrest`. Тогда пароль репозитория 2 видят
+`run`, `exec` и архиватор. У `docker compose run` флага `--env-file`
+нет. Метку пишут в карточку как `<YYYY-MM-DD HH:MM:SS+05>`
 (пример `2026-10-24 10:15:00+05`). Кластер в UTC, смещение в
 `--target` обязательно. Читают репозиторий `--repo=2`.
 
 Сначала тот же образ один раз создаёт каталог данных, затем его
-останавливают и восстанавливают поверх.
+останавливают и восстанавливают поверх. В журнале до restore
+возможны ошибки archive-push: первый репозиторий ещё пуст. Эти
+строки ожидаемы.
 
 ```bash
 cd /opt/anyq
@@ -131,15 +136,11 @@ docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml stop postgres
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres \
-  --env-file deploy/.env.pgbackrest \
-  postgres \
+  --user postgres postgres \
   pgbackrest --stanza=anyq --repo=2 info
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres \
-  --env-file deploy/.env.pgbackrest \
-  postgres \
+  --user postgres postgres \
   pgbackrest --stanza=anyq restore --delta --type=time \
   --target='<YYYY-MM-DD HH:MM:SS+05>' --target-action=promote \
   --repo=2
@@ -147,20 +148,26 @@ docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml up -d postgres
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
-  pgbackrest --stanza=anyq --repo=1 stanza-create
+  pgbackrest --stanza=anyq stanza-create
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
   pgbackrest --stanza=anyq check
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
   pgbackrest --stanza=anyq backup --type=full
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
+  pgbackrest --stanza=anyq --repo=2 backup --type=full
 ```
 
-На новом сервере первый репозиторий пустой. `stanza-create` с
-`--repo=1` создаёт в нём stanza. Второй репозиторий уже содержит
-stanza, его этой командой не создают заново. Без stanza в первом
-репозитории `archive-push` не пишет WAL, и каталог `pg_wal` растёт.
-`check` после этого идёт без `--repo`: такой опции у команды нет.
+`stanza-create` создаёт stanza в каждом настроенном репозитории и
+пропускает ту, что уже есть. После restore вторая stanza уже
+существует, первая ещё пустая: команда заполняет её. Без stanza
+в первом репозитории `archive-push` не пишет WAL, и каталог
+`pg_wal` растёт. `check` идёт без `--repo`: такой опции у команды
+нет. `backup` без `--repo` пишет только в первый репозиторий.
+Копия во второй репозиторий в Казахстане — отдельная команда
+с `--repo=2`.
 
 `deploy/restore.sh` — будет добавлено.
 
@@ -168,8 +175,10 @@ stanza, его этой командой не создают заново. Бе�
 (`pg_dump --no-owner --no-privileges`), его грузят в пустую базу
 тем же образом, как в [`docs/runbooks/db-down.md`](db-down.md).
 Роль `postgres` (`POSTGRES_USER`) создаёт роли и базу. Роль `anyq`
-грузит дамп. Права заново выдают роли `anyq_app`, включая отдельные
-команды `REVOKE UPDATE, DELETE, TRUNCATE ON consent_events FROM anyq_app`
+грузит дамп. Права заново выдают в базе `anyq`: в сессии `psql`
+под ролью `postgres` перед GRANT, ALTER DEFAULT PRIVILEGES и REVOKE
+выполняют `\connect anyq`. Дальше отдельные команды
+`REVOKE UPDATE, DELETE, TRUNCATE ON consent_events FROM anyq_app`
 и, после миграции журнала аудита,
 `REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM anyq_app`.
 `ALTER ROLE anyq ... NOSUPERUSER` не выполняют. Базу, если её ещё нет,
@@ -184,7 +193,13 @@ CREATE DATABASE anyq OWNER anyq
   ICU_LOCALE 'ru-KZ';
 ```
 
-Дамп владельцев и прав не содержит.
+Дамп владельцев и прав не содержит. Перед блоком прав в той же
+сессии:
+
+```sql
+-- выполняет роль postgres, дальше команды в базе anyq
+\connect anyq
+```
 
 Файлы тома `anyq-data` — не база. Перед любым tar останавливают
 PostgreSQL и API. Каталог внутри тома очищают по записи координатора.
@@ -245,9 +260,7 @@ docker compose --env-file deploy/.env \
   'SELECT max(created_at) AS newest FROM records;'
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres \
-  --env-file deploy/.env.pgbackrest \
-  postgres \
+  --user postgres postgres \
   pgbackrest --stanza=anyq verify
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
@@ -278,8 +291,9 @@ curl -fsS -o /dev/null -w '%{http_code}\n' "https://<домен>/ru"
 Ожидание: в ответе DNS адрес нового сервера, в `/health` и
 `/healthz` есть `"ok":true`, у страницы код `200`, сертификат
 выдан на это имя. Флаг `-k` для боевого домена не используют.
-Полная копия `pgbackrest --stanza=anyq backup --type=full`
-уже снята выше, в том числе во второй репозиторий в Казахстане.
+Выше сняты две полные копии: `pgbackrest --stanza=anyq backup --type=full`
+в первый репозиторий и `pgbackrest --stanza=anyq --repo=2 backup --type=full`
+во второй репозиторий в Казахстане.
 
 ## Коммуникации
 
