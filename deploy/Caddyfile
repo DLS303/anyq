@@ -24,6 +24,17 @@ http://127.0.0.1:8080 {
 		-Server
 	}
 
+	# The token is the next path segment. Access logs keep the route and drop the secret.
+	log {
+		format filter {
+			request>uri regexp "^(/v1/public/rfi/)[^/?]+" "${1}REDACTED"
+			request>headers>Referer delete
+		}
+	}
+
+	# Deferred so this replaces the site policy and the upstream header.
+	header /v1/public/rfi* >Referrer-Policy no-referrer
+
 	handle /v1/* {
 		reverse_proxy api:8010 {
 			transport http {
