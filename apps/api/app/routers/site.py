@@ -5,6 +5,12 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
+from app.company_features import (
+    apply_bundle_flags,
+    feature_open_for_company,
+    project_company_id,
+    require_feature,
+)
 from app.deps import require_user
 from app.idempotency import IdempotencyConflict, run_idempotent
 from app.paths import write_stored_file
@@ -311,28 +317,45 @@ def get_project(pid: str, user: User = Depends(require_user)):
 @router.get("/projects/{pid}/bundle")
 def bundle(pid: str, user: User = Depends(require_user)):
     p = _guard_pid(user, pid)
-    return {
-        "ok": True,
-        "data": {
-            "snapshot": store.project_snapshot(p.id),
-            "daily": [member_daily(item) for item in store._by_project(store.daily_logs, p.id)],
-            "rfis": store._by_project(store.rfis, p.id),
-            "submittals": store._by_project(store.submittals, p.id),
-            "punches": store._by_project(store.punches, p.id),
-            "inspections": store._by_project(store.inspections, p.id),
-            "incidents": store._by_project(store.incidents, p.id),
-            "drawings": store._by_project(store.drawings, p.id),
-            "schedule": store._by_project(store.schedule, p.id),
-            "budget": store._by_project(store.budget_lines, p.id),
-            "changes": store._by_project(store.change_orders, p.id),
-            "timesheets": store._by_project(store.timesheets, p.id),
-            "meetings": store._by_project(store.meetings, p.id),
-            "directory": store._by_project(store.directory, p.id),
-            "members": store.list_project_members(p),
-            "can_manage_members": store.can_manage_project(user, p),
-            "can_approve_changes": store.is_assigned_supervisor(user, p),
-        },
+    data = {
+        "snapshot": store.project_snapshot(p.id),
+        "daily": [member_daily(item) for item in store._by_project(store.daily_logs, p.id)],
+        "rfis": store._by_project(store.rfis, p.id),
+        "submittals": store._by_project(store.submittals, p.id),
+        "punches": store._by_project(store.punches, p.id),
+        "inspections": store._by_project(store.inspections, p.id),
+        "incidents": store._by_project(store.incidents, p.id),
+        "drawings": store._by_project(store.drawings, p.id),
+        "schedule": store._by_project(store.schedule, p.id),
+        "budget": store._by_project(store.budget_lines, p.id),
+        "changes": store._by_project(store.change_orders, p.id),
+        "timesheets": store._by_project(store.timesheets, p.id),
+        "meetings": store._by_project(store.meetings, p.id),
+        "directory": store._by_project(store.directory, p.id),
+        "members": store.list_project_members(p),
+        "can_manage_members": store.can_manage_project(user, p),
+        "can_approve_changes": store.is_assigned_supervisor(user, p),
     }
+    return {"ok": True, "data": apply_bundle_flags(p, data)}
+
+
+def _member_or_404(user: User, pid: str) -> Project:
+    project = _project_or_404(pid)
+    if not store.can_access_project(user, project):
+        raise HTTPException(404, "Не найдено")
+    return project
+
+
+@router.get("/projects/{pid}/drawings")
+def list_drawings(pid: str, user: User = Depends(require_feature("drawings"))):
+    project = _member_or_404(user, pid)
+    return {"ok": True, "data": store._by_project(store.drawings, project.id)}
+
+
+@router.get("/projects/{pid}/submittals")
+def list_submittals(pid: str, user: User = Depends(require_feature("submittals"))):
+    project = _member_or_404(user, pid)
+    return {"ok": True, "data": store._by_project(store.submittals, project.id)}
 
 
 @router.get("/projects/{pid}/members")
@@ -550,7 +573,7 @@ def revoke_share(log_id: str, user: User = Depends(require_user)):
 def add_rfi(
     pid: str,
     body: RfiIn,
-    user: User = Depends(require_user),
+    user: User = Depends(require_feature("rfi")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _guard_pid(user, pid)
@@ -558,7 +581,7 @@ def add_rfi(
 
 
 @router.post("/rfis/{rid}/answer")
-def answer_rfi(rid: str, body: AnswerIn, user: User = Depends(require_user)):
+def answer_rfi(rid: str, body: AnswerIn, user: User = Depends(require_feature("rfi"))):
     _guard_item(user, store.rfis, rid)
     try:
         return {"ok": True, "data": store.answer_rfi(rid, body.answer)}
@@ -573,7 +596,9 @@ def add_punch(
     user: User = Depends(require_user),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    _guard_pid(user, pid)
+    project = _guard_pid(user, pid)
+    if body.photo.strip() and not feature_open_for_company(project_company_id(project), "punch_photos"):
+        raise HTTPException(404, "Не найдено")
     return _saved(user, idempotency_key, body, lambda: store.add_punch(pid, body.model_dump()))
 
 
@@ -590,7 +615,7 @@ def punch_status(iid: str, body: StatusIn, user: User = Depends(require_user)):
 def add_insp(
     pid: str,
     body: InspIn,
-    user: User = Depends(require_user),
+    user: User = Depends(require_feature("checklists")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _guard_pid(user, pid)
@@ -635,7 +660,7 @@ def add_ts(
 def add_mt(
     pid: str,
     body: MeetIn,
-    user: User = Depends(require_user),
+    user: User = Depends(require_feature("meetings")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _guard_pid(user, pid)
@@ -643,7 +668,7 @@ def add_mt(
 
 
 @router.post("/schedule/{tid}/progress")
-def task_pct(tid: str, body: PctIn, user: User = Depends(require_user)):
+def task_pct(tid: str, body: PctIn, user: User = Depends(require_feature("gantt"))):
     _guard_item(user, store.schedule, tid)
     try:
         return {"ok": True, "data": store.set_task_pct(tid, body.pct, body.status)}
@@ -655,7 +680,7 @@ def task_pct(tid: str, body: PctIn, user: User = Depends(require_user)):
 def add_task(
     pid: str,
     body: TaskCreateIn,
-    user: User = Depends(require_user),
+    user: User = Depends(require_feature("gantt")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _guard_pid(user, pid)
@@ -663,7 +688,7 @@ def add_task(
 
 
 @router.post("/schedule/{tid}/update")
-def update_task(tid: str, body: TaskUpdateIn, user: User = Depends(require_user)):
+def update_task(tid: str, body: TaskUpdateIn, user: User = Depends(require_feature("gantt"))):
     _guard_item(user, store.schedule, tid)
     try:
         return {"ok": True, "data": store.update_schedule_task(tid, body.model_dump(exclude_unset=True))}
@@ -672,7 +697,7 @@ def update_task(tid: str, body: TaskUpdateIn, user: User = Depends(require_user)
 
 
 @router.post("/schedule/{tid}/delete")
-def delete_task(tid: str, user: User = Depends(require_user)):
+def delete_task(tid: str, user: User = Depends(require_feature("gantt"))):
     _guard_item(user, store.schedule, tid)
     try:
         store.delete_schedule_task(tid)
@@ -685,7 +710,7 @@ def delete_task(tid: str, user: User = Depends(require_user)):
 def add_co(
     pid: str,
     body: CoIn,
-    user: User = Depends(require_user),
+    user: User = Depends(require_feature("changes")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     _guard_pid(user, pid)
@@ -693,7 +718,7 @@ def add_co(
 
 
 @router.post("/changes/{cid}/status")
-def co_status(cid: str, body: StatusIn, user: User = Depends(require_user)):
+def co_status(cid: str, body: StatusIn, user: User = Depends(require_feature("changes"))):
     _guard_item(user, store.change_orders, cid)
     if body.status not in {"draft", "submitted", "approved", "rejected"}:
         raise HTTPException(400, "Неизвестный статус")

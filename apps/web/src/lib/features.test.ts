@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { features } from "./features";
+import {
+  buildFeatures,
+  featureOn,
+  features,
+  menuTabVisible,
+  objectUsesPilotLayout,
+  ORG_FEATURE_KEYS,
+} from "./features";
 
 describe("release visibility", () => {
   it("keeps illustrations behind demo mode", () => {
@@ -12,5 +19,36 @@ describe("release visibility", () => {
     expect(features.submittals).toBe(demo);
     expect(features.demoHouse).toBe(demo);
     expect(features.land).toBe(demo);
+  });
+
+  it("opens a section from demo mode or the company flag", () => {
+    expect(ORG_FEATURE_KEYS).toContain("drawings");
+    expect(featureOn("rfi", {}, false)).toBe(false);
+    expect(featureOn("rfi", { rfi: true }, false)).toBe(true);
+    expect(featureOn("rfi", {}, true)).toBe(true);
+    const flagged = buildFeatures({ drawings: true }, false);
+    expect(flagged.drawings).toBe(true);
+    expect(flagged.rfi).toBe(false);
+    expect(flagged.ksActs).toBe(false);
+    expect(buildFeatures(null, true).ksActs).toBe(true);
+  });
+
+  it("keeps the pilot object layout unless demo mode or a company flag is on", () => {
+    expect(objectUsesPilotLayout(null, { demo: false })).toBe(true);
+    expect(objectUsesPilotLayout({}, { demo: false })).toBe(true);
+    expect(objectUsesPilotLayout({ meetings: true }, { demo: false })).toBe(false);
+    expect(objectUsesPilotLayout({}, { demo: true })).toBe(false);
+  });
+
+  it("hides a menu item while its flag is off", () => {
+    expect(menuTabVisible("rfi", {}, false)).toBe(false);
+    expect(menuTabVisible("draw", {}, false)).toBe(false);
+    expect(menuTabVisible("rfi", { rfi: true }, false)).toBe(true);
+    expect(menuTabVisible("procurement", {}, false)).toBe(true);
+    expect(menuTabVisible("today", {}, false)).toBe(true);
+    expect(menuTabVisible("money", {}, false)).toBe(true);
+    expect(menuTabVisible("ks", { rfi: true }, false)).toBe(false);
+    expect(menuTabVisible("ks", {}, true)).toBe(true);
+    expect(menuTabVisible("sub", {}, true)).toBe(true);
   });
 });
