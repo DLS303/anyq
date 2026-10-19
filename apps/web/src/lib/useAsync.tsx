@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError } from "@/lib/api";
+import { ApiError, isAbortError } from "@/lib/api";
 import { toast } from "@/lib/toast";
 
 type Status = "loading" | "error" | "ready";
@@ -10,7 +10,7 @@ export function isMissing(error: unknown) {
   return error instanceof ApiError && (error.status === 404 || error.status === 403);
 }
 
-export function useAsync<T>(loader: () => Promise<T>, deps: readonly unknown[]) {
+export function useAsync<T>(loader: (signal: AbortSignal) => Promise<T>, deps: readonly unknown[]) {
   const depKey = JSON.stringify(deps);
   const [epoch, setEpoch] = useState(depKey);
   const [status, setStatus] = useState<Status>("loading");
@@ -18,6 +18,7 @@ export function useAsync<T>(loader: () => Promise<T>, deps: readonly unknown[]) 
   const [error, setError] = useState<unknown>(null);
   const loaderRef = useRef(loader);
   const seq = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
   loaderRef.current = loader;
   if (epoch !== depKey) {
     setEpoch(depKey);
@@ -27,19 +28,22 @@ export function useAsync<T>(loader: () => Promise<T>, deps: readonly unknown[]) 
   }
 
   const reload = useCallback(() => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     const id = ++seq.current;
     const requestKey = depKey;
     setError(null);
     setStatus((prev) => (prev === "ready" ? prev : "loading"));
     loaderRef
-      .current()
+      .current(controller.signal)
       .then((value) => {
-        if (seq.current !== id || requestKey !== depKey) return;
+        if (seq.current !== id || requestKey !== depKey || controller.signal.aborted) return;
         setData(value);
         setStatus("ready");
       })
       .catch((err: unknown) => {
-        if (seq.current !== id || requestKey !== depKey) return;
+        if (seq.current !== id || requestKey !== depKey || controller.signal.aborted || isAbortError(err)) return;
         setError(err);
         setStatus("error");
       });
@@ -47,6 +51,9 @@ export function useAsync<T>(loader: () => Promise<T>, deps: readonly unknown[]) 
 
   useEffect(() => {
     reload();
+    return () => {
+      abortRef.current?.abort();
+    };
   }, [reload]);
 
   return {
@@ -87,6 +94,25 @@ export function useGuardedSubmit(success: string, failure: string, onDone: () =>
   }
 
   return { submitting, submit };
+}
+
+export function useSubmitLock() {
+  const lock = useRef(false);
+  const [pending, setPending] = useState(false);
+
+  async function run<T>(task: () => Promise<T>): Promise<T | undefined> {
+    if (lock.current) return undefined;
+    lock.current = true;
+    setPending(true);
+    try {
+      return await task();
+    } finally {
+      lock.current = false;
+      setPending(false);
+    }
+  }
+
+  return { pending, run };
 }
 
 export function LoadingSkeleton({ label }: { label: string }) {

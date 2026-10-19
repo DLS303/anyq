@@ -8,6 +8,9 @@ import { addProjectMember, fetchSiteBundle, postSite, removeProjectMember } from
 import { money } from "@/lib/format";
 import { canEditProject, PILOT_MODE } from "@/lib/pilot";
 import { siteRoleLabel, statusLabel } from "@/lib/report";
+import { ChunkFallback } from "@/components/ui/ChunkFallback";
+import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
+import { loadWithin } from "@/lib/loadWithin";
 import { ErrorRetry, LoadingSkeleton, isMissing, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { AuthImage } from "@/components/media/AuthImage";
 import { DailyReport, type DailyEntry } from "./DailyReport";
@@ -19,42 +22,18 @@ import dynamic from "next/dynamic";
 import type { Locale, ScheduleTask } from "@/lib/types";
 
 const InteractiveGantt = dynamic(
-  () => import("./InteractiveGantt").then((m) => m.InteractiveGantt),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center p-12 text-ink/50 glass rounded-2xl">
-        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-pine mr-3" />
-        Загрузка интерактивного графика Ганта...
-      </div>
-    ),
-  }
+  () => loadWithin(import("./InteractiveGantt").then((m) => m.InteractiveGantt)),
+  { ssr: false, loading: () => <ChunkFallback /> },
 );
 
 const Bim3dViewer = dynamic(
-  () => import("./Bim3dViewer").then((m) => m.Bim3dViewer),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center p-12 text-ink/50 glass rounded-2xl">
-        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-pine mr-3" />
-        Загрузка 3D модели (демо / иллюстративная модель)...
-      </div>
-    ),
-  }
+  () => loadWithin(import("./Bim3dViewer").then((m) => m.Bim3dViewer)),
+  { ssr: false, loading: () => <ChunkFallback /> },
 );
 
 const KsActGenerator = dynamic(
-  () => import("./KsActGenerator").then((m) => m.KsActGenerator),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center p-12 text-ink/50 glass rounded-2xl">
-        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-pine mr-3" />
-        Загрузка генератора актов КС-2 / КС-3...
-      </div>
-    ),
-  }
+  () => loadWithin(import("./KsActGenerator").then((m) => m.KsActGenerator)),
+  { ssr: false, loading: () => <ChunkFallback /> },
 );
 
 type Tab =
@@ -156,7 +135,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const [showPunch, setShowPunch] = useState(false);
   const [showExtra, setShowExtra] = useState(false);
   const email = user?.email || "";
-  const bundleQuery = useAsync(() => fetchSiteBundle(id), [id]);
+  const bundleQuery = useAsync((signal) => fetchSiteBundle(id, signal), [id]);
   const bundle = bundleQuery.data;
   const load = bundleQuery.reload;
   const forms = useGuardedSubmit(m.hubSaved, m.hubSaveError, load);
@@ -610,37 +589,41 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       ) : null}
 
       {tab === "draw" ? (
-        <Bim3dViewer
-          locale={locale}
-          drawings={
-            (bundle.drawings as {
-              id: string;
-              code: string;
-              title: string;
-              revision: string;
-              current: boolean;
-              file?: string;
-            }[]) || []
-          }
-          projectId={p.id}
-          projectTitle={p.title}
-        />
+        <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+          <Bim3dViewer
+            locale={locale}
+            drawings={
+              (bundle.drawings as {
+                id: string;
+                code: string;
+                title: string;
+                revision: string;
+                current: boolean;
+                file?: string;
+              }[]) || []
+            }
+            projectId={p.id}
+            projectTitle={p.title}
+          />
+        </WidgetBoundary>
       ) : null}
 
       {tab === "gantt" ? (
         <div className="min-w-0 max-w-full">
-          <InteractiveGantt
-            locale={locale}
-            projectId={p.id}
-            schedule={(bundle.schedule as ScheduleTask[]) || []}
-            email={email}
-            canEdit={canEdit}
-            pilotEmpty={pilot}
-            emptyText={m.hubGanttEmpty}
-            emptyAction={m.hubGanttAction}
-            onNeedLogin={goLogin}
-            onReload={load}
-          />
+          <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+            <InteractiveGantt
+              locale={locale}
+              projectId={p.id}
+              schedule={(bundle.schedule as ScheduleTask[]) || []}
+              email={email}
+              canEdit={canEdit}
+              pilotEmpty={pilot}
+              emptyText={m.hubGanttEmpty}
+              emptyAction={m.hubGanttAction}
+              onNeedLogin={goLogin}
+              onReload={load}
+            />
+          </WidgetBoundary>
         </div>
       ) : null}
 
@@ -899,13 +882,15 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       ) : null}
 
       {tab === "ks" ? (
-        <KsActGenerator
-          locale={locale}
-          projectId={p.id}
-          projectTitle={p.title}
-          projectAddress={p.address}
-          budget={budget}
-        />
+        <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+          <KsActGenerator
+            locale={locale}
+            projectId={p.id}
+            projectTitle={p.title}
+            projectAddress={p.address}
+            budget={budget}
+          />
+        </WidgetBoundary>
       ) : null}
     </div>
   );

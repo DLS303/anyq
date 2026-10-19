@@ -1,24 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchPlot } from "@/lib/api";
 import { PURPOSE, RELIEF, UTILITY, money, titleOf } from "@/lib/format";
+import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
 import type { Locale, Plot } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { AuthImage } from "@/components/media/AuthImage";
 
 export function CompareTable({ locale, ids }: { locale: Locale; ids: string[] }) {
   const m = t(locale);
-  const [plots, setPlots] = useState<Plot[]>([]);
-
-  useEffect(() => {
-    Promise.all(ids.map((id) => fetchPlot(id).then((r) => r.plot)))
-      .then(setPlots)
-      .catch(() => setPlots([]));
-  }, [ids]);
+  const query = useAsync(
+    (signal) => Promise.all(ids.map((id) => fetchPlot(id, undefined, signal).then((row) => row.plot))),
+    [ids.join(",")],
+  );
+  const plots = query.data ?? [];
 
   if (ids.length === 0) return <p className="text-ink/60">{m.empty}</p>;
+  if (query.loading) return <LoadingSkeleton label={m.hubLoading} />;
+  if (query.status === "error") {
+    return <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />;
+  }
+  if (plots.length === 0) return <p className="text-ink/60">{m.empty}</p>;
 
   const rows: { label: string; value: (p: Plot) => string }[] = [
     { label: m.cadastral, value: (p) => p.cadastral_no },

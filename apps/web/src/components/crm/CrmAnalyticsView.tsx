@@ -10,7 +10,10 @@ import type { CrmAnalytics, Locale } from "@/lib/types";
 export function CrmAnalyticsView({ locale }: { locale: Locale }) {
   const { user } = useAuth();
   const m = t(locale);
-  const query = useAsync(() => (user ? fetchCrmAnalytics(user.email) : Promise.resolve(null)), [user?.email]);
+  const query = useAsync(
+    (signal) => (user ? fetchCrmAnalytics(user.email, signal) : Promise.resolve(null)),
+    [user?.email],
+  );
   const data = query.data;
 
   if (query.loading) {

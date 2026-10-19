@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import Link from "next/link";
 import type { Locale, Plot } from "@/lib/types";
 import { PURPOSE, maskCadastral, money, titleOf } from "@/lib/format";
@@ -8,7 +9,7 @@ import { useCompare } from "@/lib/compare";
 import { Check, CheckCircle2, ShieldAlert, Sparkles, ArrowRight } from "lucide-react";
 import { AuthImage } from "@/components/media/AuthImage";
 
-export function PlotCard({ plot, locale }: { plot: Plot; locale: Locale }) {
+export const PlotCard = memo(function PlotCard({ plot, locale }: { plot: Plot; locale: Locale }) {
   const m = t(locale);
   const compare = useCompare();
   const cover = plot.photos?.[0] || "/design/plot-parcel.jpg";
@@ -110,4 +111,4 @@ export function PlotCard({ plot, locale }: { plot: Plot; locale: Locale }) {
       </div>
     </article>
   );
-}
+});

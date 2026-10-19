@@ -4,6 +4,7 @@ import { MATERIAL_CAT, CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/
 import { t } from "@/i18n/messages";
 import type { Locale } from "@/lib/types";
 import { PILOT_MODE } from "@/lib/pilot";
+import { PhotoView } from "@/components/media/PhotoView";
 import { HomeStage } from "@/components/home/HomeStage";
 import { HomeRise } from "@/components/home/HomeRise";
 import {
@@ -66,8 +67,12 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
             >
               <Link href={`/${locale}/materials/${item.slug}`} className="block">
                 {item.photo ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={item.photo} alt="" className="h-44 w-full object-cover group-hover:scale-102 transition-transform duration-300" />
+                  <PhotoView
+                    src={item.photo}
+                    alt=""
+                    sizes="(max-width: 640px) 100vw, 33vw"
+                    className="h-44 w-full object-cover transition-transform duration-300 group-hover:scale-102"
+                  />
                 ) : (
                   <div className="h-44 bg-slate-100 grid place-items-center text-slate-400">
                     <Layers className="h-10 w-10 opacity-30" />

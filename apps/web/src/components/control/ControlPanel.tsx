@@ -1,12 +1,25 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Briefcase, Calculator, Scale } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Locale } from "@/lib/types";
-import { CrmBoard } from "@/components/crm/CrmBoard";
-import { EstimateClient } from "@/components/estimates/EstimateClient";
+import { ChunkFallback } from "@/components/ui/ChunkFallback";
+import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
+import { t } from "@/i18n/messages";
+import { loadWithin } from "@/lib/loadWithin";
 import { LegalPanel } from "./LegalPanel";
+
+const EstimateClient = dynamic(
+  () => loadWithin(import("@/components/estimates/EstimateClient").then((m) => m.EstimateClient)),
+  { loading: () => <ChunkFallback /> },
+);
+
+const CrmBoard = dynamic(
+  () => loadWithin(import("@/components/crm/CrmBoard").then((m) => m.CrmBoard)),
+  { loading: () => <ChunkFallback /> },
+);
 
 export const CONTROL_SECTIONS = ["legal", "estimates", "crm"] as const;
 export type ControlSection = (typeof CONTROL_SECTIONS)[number];
@@ -18,6 +31,7 @@ const ITEMS: { id: ControlSection; label: string; icon: LucideIcon }[] = [
 ];
 
 export function ControlPanel({ locale, section }: { locale: Locale; section: ControlSection }) {
+  const m = t(locale);
   return (
     <div>
       <div className="mb-4 lg:hidden">
@@ -42,14 +56,20 @@ export function ControlPanel({ locale, section }: { locale: Locale; section: Con
 
         <div className="min-w-0">
           {section === "legal" ? <LegalPanel locale={locale} /> : null}
-          {section === "estimates" ? <EstimateClient locale={locale} embedded /> : null}
+          {section === "estimates" ? (
+            <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+              <EstimateClient locale={locale} embedded />
+            </WidgetBoundary>
+          ) : null}
           {section === "crm" ? (
             <div className="space-y-4">
               <div>
                 <h2 className="text-2xl font-semibold tracking-tight text-slate-950">CRM</h2>
                 <p className="mt-1 text-sm text-slate-500">Сделки, лиды, счета и шахматка.</p>
               </div>
-              <CrmBoard locale={locale} />
+              <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+                <CrmBoard locale={locale} />
+              </WidgetBoundary>
             </div>
           ) : null}
         </div>

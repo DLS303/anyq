@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { PageNav, usePaged } from "@/components/ui/PagedList";
 import { FUNNEL, STAGE, money } from "@/lib/format";
+import { useDebounced } from "@/lib/useDebounced";
+import { t } from "@/i18n/messages";
 import type { Deal, Locale } from "@/lib/types";
 
 export function CrmListView({
@@ -17,11 +20,13 @@ export function CrmListView({
   onSelectDeal: (deal: Deal) => void;
   onMoveDeal: (dealId: string, stage: string) => void;
 }) {
+  const m = t(locale);
   const [search, setSearch] = useState("");
+  const debounced = useDebounced(search, 300);
 
   const filtered = deals.filter((d) => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
+    if (!debounced.trim()) return true;
+    const q = debounced.toLowerCase();
     return (
       d.title.toLowerCase().includes(q) ||
       (d.client_name && d.client_name.toLowerCase().includes(q)) ||
@@ -29,6 +34,7 @@ export function CrmListView({
       (d.plot_title && d.plot_title.toLowerCase().includes(q))
     );
   });
+  const paged = usePaged(filtered, debounced);
 
   return (
     <div className="bg-white rounded-xl border border-ink/10 shadow-xs overflow-hidden">
@@ -70,7 +76,7 @@ export function CrmListView({
                 </td>
               </tr>
             ) : (
-              filtered.map((d) => {
+              paged.slice.map((d) => {
                 const stageList = stages[d.funnel] ?? [];
                 return (
                   <tr
@@ -126,6 +132,16 @@ export function CrmListView({
             )}
           </tbody>
         </table>
+      </div>
+      <div className="px-3 pb-3">
+        <PageNav
+          page={paged.page}
+          pages={paged.pages}
+          status={m.pageStatus.replace("{page}", String(paged.page + 1)).replace("{pages}", String(paged.pages))}
+          prevLabel={m.pagePrev}
+          nextLabel={m.pageNext}
+          onPage={paged.setPage}
+        />
       </div>
     </div>
   );

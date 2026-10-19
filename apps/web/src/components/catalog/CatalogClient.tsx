@@ -3,13 +3,22 @@
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { PlotCard } from "@/components/plots/PlotCard";
+import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
+import { PageNav, usePaged } from "@/components/ui/PagedList";
 import { fetchPlots, saveSearch, suggestPlots } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { PURPOSE } from "@/lib/format";
-import { DISTRICTS, type Locale, type Plot, type Purpose } from "@/lib/types";
+import { useDebounced } from "@/lib/useDebounced";
+import { ErrorRetry, LoadingSkeleton, useAsync, useSubmitLock } from "@/lib/useAsync";
+import { DISTRICTS, type Locale, type Purpose } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { loadWithin } from "@/lib/loadWithin";
+import { ChunkFallback } from "@/components/ui/ChunkFallback";
 
-const PlotMap = dynamic(() => import("./PlotMap"), { ssr: false });
+const PlotMap = dynamic(() => loadWithin(import("./PlotMap")), {
+  ssr: false,
+  loading: () => <ChunkFallback />,
+});
 
 const PURPOSES = Object.keys(PURPOSE) as Purpose[];
 const RADII = [0, 5, 10, 25, 50];
@@ -18,6 +27,7 @@ export function CatalogClient({ locale }: { locale: Locale }) {
   const m = t(locale);
   const { user } = useAuth();
   const [q, setQ] = useState("");
+  const debouncedQ = useDebounced(q, 300);
   const [purpose, setPurpose] = useState("");
   const [district, setDistrict] = useState("");
   const [verified, setVerified] = useState(false);
@@ -26,14 +36,13 @@ export function CatalogClient({ locale }: { locale: Locale }) {
   const [water, setWater] = useState(false);
   const [radius, setRadius] = useState(0);
   const [pick, setPick] = useState<[number, number] | null>(null);
-  const [plots, setPlots] = useState<Plot[]>([]);
   const [hints, setHints] = useState<{ kind: string; value: string; slug: string }[]>([]);
-  const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const saveLock = useSubmitLock();
 
   const params = useMemo(
     () => ({
-      q: q || undefined,
+      q: debouncedQ || undefined,
       purpose: purpose || undefined,
       district: district || undefined,
       verified: verified ? "true" : undefined,
@@ -44,35 +53,31 @@ export function CatalogClient({ locale }: { locale: Locale }) {
       lng: radius && pick ? String(pick[1]) : undefined,
       radius_km: radius && pick ? String(radius) : undefined,
     }),
-    [q, purpose, district, verified, gas, electricity, water, radius, pick],
+    [debouncedQ, purpose, district, verified, gas, electricity, water, radius, pick],
   );
-
-  useEffect(() => {
-    let live = true;
-    fetchPlots(params)
-      .then((data) => {
-        if (live) {
-          setPlots(data);
-          setError("");
-        }
-      })
-      .catch((err: Error) => {
-        if (live) setError(err.message);
-      });
-    return () => {
-      live = false;
-    };
-  }, [params]);
+  const query = useAsync((signal) => fetchPlots(params, signal), [params]);
+  const plots = query.data ?? [];
+  const paged = usePaged(plots, JSON.stringify(params));
 
   useEffect(() => {
     if (q.trim().length < 2) {
       setHints([]);
       return;
     }
-    const tmr = setTimeout(() => {
-      suggestPlots(q).then(setHints).catch(() => setHints([]));
-    }, 200);
-    return () => clearTimeout(tmr);
+    const controller = new AbortController();
+    const tmr = window.setTimeout(() => {
+      suggestPlots(q, controller.signal)
+        .then((rows) => {
+          if (!controller.signal.aborted) setHints(rows);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setHints([]);
+        });
+    }, 300);
+    return () => {
+      window.clearTimeout(tmr);
+      controller.abort();
+    };
   }, [q]);
 
   return (
@@ -179,30 +184,47 @@ export function CatalogClient({ locale }: { locale: Locale }) {
         {user ? (
           <button
             type="button"
-            className="mt-3 block text-sm underline"
-            onClick={async () => {
-              await saveSearch(user.email, q || district || m.search, params);
-              setSaved(true);
+            className="mt-3 block min-h-11 text-sm underline disabled:opacity-50"
+            disabled={saveLock.pending}
+            onClick={() => {
+              void saveLock.run(async () => {
+                await saveSearch(user.email, q || district || m.search, params);
+                setSaved(true);
+              });
             }}
           >
             {saved ? m.saved : m.saveSearch}
           </button>
         ) : null}
-        {error ? <p className="mt-4 text-sm text-clay">{error}</p> : null}
       </aside>
-      <div className="grid gap-4">
-        <div className="h-[420px] overflow-hidden rounded-frost border border-ice/15">
-          <PlotMap plots={plots} locale={locale} onPick={setPick} pick={pick} />
+      <div className="grid min-w-0 gap-4">
+        <div className="h-[280px] overflow-hidden rounded-frost border border-ice/15 sm:h-[420px]">
+          <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+            <PlotMap plots={plots} locale={locale} onPick={setPick} pick={pick} />
+          </WidgetBoundary>
         </div>
-        {plots.length === 0 ? (
+        {query.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
+        {query.status === "error" ? (
+          <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />
+        ) : null}
+        {!query.loading && query.status !== "error" && plots.length === 0 ? (
           <p className="text-ink/60">{m.empty}</p>
-        ) : (
-          <div className="grid sm:grid-cols-2 gap-3">
-            {plots.map((plot) => (
+        ) : null}
+        {query.status !== "error" && paged.slice.length > 0 ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {paged.slice.map((plot) => (
               <PlotCard key={plot.id} plot={plot} locale={locale} />
             ))}
           </div>
-        )}
+        ) : null}
+        <PageNav
+          page={paged.page}
+          pages={paged.pages}
+          status={m.pageStatus.replace("{page}", String(paged.page + 1)).replace("{pages}", String(paged.pages))}
+          prevLabel={m.pagePrev}
+          nextLabel={m.pageNext}
+          onPage={paged.setPage}
+        />
       </div>
     </div>
   );

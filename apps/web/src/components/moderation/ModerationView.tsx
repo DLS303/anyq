@@ -1,31 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
+import { PageNav, usePaged } from "@/components/ui/PagedList";
 import { useAuth } from "@/lib/auth";
 import { fetchQueue, moderatePlot } from "@/lib/api";
 import { titleOf } from "@/lib/format";
-import type { Locale, Plot } from "@/lib/types";
+import { ErrorRetry, LoadingSkeleton, useAsync, useSubmitLock } from "@/lib/useAsync";
+import type { Locale } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { toast } from "@/lib/toast";
 
 export function ModerationView({ locale }: { locale: Locale }) {
   const m = t(locale);
   const { user } = useAuth();
-  const [plots, setPlots] = useState<Plot[]>([]);
-  const [error, setError] = useState("");
   const [notes, setNotes] = useState<Record<string, string>>({});
-
-  function load() {
-    if (!user) return;
-    fetchQueue(user.email)
-      .then(setPlots)
-      .catch((err: Error) => setError(err.message));
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  const actionLock = useSubmitLock();
+  const allowed = user?.role === "moderator" || user?.role === "admin";
+  const query = useAsync(
+    (signal) => (user && allowed ? fetchQueue(user.email, signal) : Promise.resolve([])),
+    [user?.email, allowed],
+  );
+  const plots = query.data ?? [];
+  const paged = usePaged(plots, user?.email ?? "");
 
   if (!user || (user.role !== "moderator" && user.role !== "admin")) {
     return (
@@ -39,16 +36,26 @@ export function ModerationView({ locale }: { locale: Locale }) {
   }
 
   async function act(id: string, action: "approve" | "revision" | "reject") {
-    if (!user) return;
-    await moderatePlot(user.email, id, action, notes[id] ?? "");
-    load();
+    if (!user || actionLock.pending) return;
+    await actionLock.run(async () => {
+      try {
+        await moderatePlot(user.email, id, action, notes[id] ?? "");
+        query.reload();
+      } catch (err) {
+        toast(err instanceof Error ? err.message : m.hubSaveError);
+      }
+    });
   }
 
   return (
-    <div className="grid gap-4">
-      {error ? <p className="text-clay text-sm">{error}</p> : null}
-      {plots.length === 0 ? <p className="text-ink/50">{m.empty}</p> : null}
-      {plots.map((plot) => (
+    <div className="grid min-w-0 gap-4">
+      {query.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
+      {query.status === "error" ? (
+        <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />
+      ) : null}
+      {!query.loading && query.status !== "error" && plots.length === 0 ? <p className="text-ink/50">{m.empty}</p> : null}
+      {query.status !== "error"
+        ? paged.slice.map((plot) => (
         <div key={plot.id} className="border border-ink/10 bg-white/60 p-4">
           <p className="font-serif text-xl">{titleOf(plot, locale)}</p>
           <p className="text-sm text-ink/55 mt-1">
@@ -64,19 +71,28 @@ export function ModerationView({ locale }: { locale: Locale }) {
             value={notes[plot.id] ?? ""}
             onChange={(e) => setNotes((n) => ({ ...n, [plot.id]: e.target.value }))}
           />
-          <div className="mt-3 flex gap-2 text-sm">
-            <button onClick={() => act(plot.id, "approve")} className="bg-pine text-paper px-3 py-1.5">
+          <div className="mt-3 flex flex-wrap gap-2 text-sm">
+            <button type="button" disabled={actionLock.pending} onClick={() => void act(plot.id, "approve")} className="min-h-11 bg-pine px-3 py-1.5 text-paper disabled:opacity-50">
               {m.approve}
             </button>
-            <button onClick={() => act(plot.id, "revision")} className="border border-ink/20 px-3 py-1.5">
+            <button type="button" disabled={actionLock.pending} onClick={() => void act(plot.id, "revision")} className="min-h-11 border border-ink/20 px-3 py-1.5 disabled:opacity-50">
               {m.revision}
             </button>
-            <button onClick={() => act(plot.id, "reject")} className="text-clay px-3 py-1.5">
+            <button type="button" disabled={actionLock.pending} onClick={() => void act(plot.id, "reject")} className="min-h-11 px-3 py-1.5 text-clay disabled:opacity-50">
               {m.reject}
             </button>
           </div>
         </div>
-      ))}
+      ))
+        : null}
+      <PageNav
+        page={paged.page}
+        pages={paged.pages}
+        status={m.pageStatus.replace("{page}", String(paged.page + 1)).replace("{pages}", String(paged.pages))}
+        prevLabel={m.pagePrev}
+        nextLabel={m.pageNext}
+        onPage={paged.setPage}
+      />
     </div>
   );
 }

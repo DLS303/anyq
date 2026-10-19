@@ -46,7 +46,6 @@ const nextConfig: NextConfig = {
       "pdfjs-dist",
       "xlsx",
       "jspdf",
-      "jspdf-autotable",
       "@turf/turf",
       "leaflet",
     ],

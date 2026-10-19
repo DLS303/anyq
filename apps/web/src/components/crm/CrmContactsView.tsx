@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { PageNav, usePaged } from "@/components/ui/PagedList";
 import { useAuth } from "@/lib/auth";
 import { createContact, fetchContacts } from "@/lib/api";
-import { ErrorRetry, useAsync } from "@/lib/useAsync";
+import { useDebounced } from "@/lib/useDebounced";
+import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
 import { t } from "@/i18n/messages";
 import { CONTACT_TYPE, money } from "@/lib/format";
 import type { ContactType, CrmContact, Locale } from "@/lib/types";
@@ -12,15 +14,18 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
   const { user } = useAuth();
   const m = t(locale);
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounced(search, 300);
   const [typeFilter, setTypeFilter] = useState<string>("");
+  const createLock = useSubmitLock();
   const contactsQuery = useAsync(
-    () =>
+    (signal) =>
       user
-        ? fetchContacts(user.email, { q: search || undefined, ctype: typeFilter || undefined })
+        ? fetchContacts(user.email, { q: debouncedSearch || undefined, ctype: typeFilter || undefined }, signal)
         : Promise.resolve([] as CrmContact[]),
-    [user?.email, typeFilter],
+    [user?.email, typeFilter, debouncedSearch],
   );
   const contacts = contactsQuery.data ?? [];
+  const paged = usePaged(contacts, `${typeFilter}:${debouncedSearch}`);
   const loading = contactsQuery.loading;
   const load = contactsQuery.reload;
 
@@ -37,10 +42,11 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
 
   async function handleCreateSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!user || !newName.trim() || !newPhone.trim()) {
-      alert("Заполните имя и телефон");
+    if (!user || !newName.trim() || !newPhone.trim() || createLock.pending) {
+      if (!newName.trim() || !newPhone.trim()) alert("Заполните имя и телефон");
       return;
     }
+    await createLock.run(async () => {
     try {
       await createContact(user.email, {
         name: newName.trim(),
@@ -64,6 +70,7 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
     } catch (err) {
       alert((err as Error).message);
     }
+    });
   }
 
   return (
@@ -71,7 +78,7 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
       {/* Search and Filter Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-xl border border-ink/10 shadow-xs">
         <div className="flex flex-wrap items-center gap-2 flex-1 max-w-xl">
-          <div className="relative flex-1 min-w-[200px]">
+          <div className="relative min-w-0 flex-1 basis-full sm:basis-auto sm:min-w-[12rem]">
             <input
               type="text"
               placeholder="Поиск по имени, БИН/ИИН, телефону..."
@@ -139,7 +146,7 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
             Контактов не найдено
           </div>
         ) : (
-          contacts.map((c) => (
+          paged.slice.map((c) => (
             <div
               key={c.id}
               className="bg-white rounded-xl border border-ink/10 p-4 shadow-xs hover:border-pine/40 hover:shadow-md transition-all flex flex-col justify-between"
@@ -207,6 +214,14 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
           ))
         )}
       </div>
+      <PageNav
+        page={paged.page}
+        pages={paged.pages}
+        status={m.pageStatus.replace("{page}", String(paged.page + 1)).replace("{pages}", String(paged.pages))}
+        prevLabel={m.pagePrev}
+        nextLabel={m.pageNext}
+        onPage={paged.setPage}
+      />
 
       {/* New Contact Modal */}
       {isCreating && (
@@ -321,7 +336,8 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-pine text-white font-semibold rounded-lg hover:bg-pine/90 shadow-xs"
+                  disabled={createLock.pending}
+                  className="min-h-11 rounded-lg bg-pine px-4 py-2 font-semibold text-white shadow-xs hover:bg-pine/90 disabled:opacity-50"
                 >
                   Сохранить контакт
                 </button>

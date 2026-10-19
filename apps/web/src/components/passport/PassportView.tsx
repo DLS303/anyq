@@ -3,17 +3,24 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useState } from "react";
+import { ChunkFallback } from "@/components/ui/ChunkFallback";
+import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
 import { useAuth } from "@/lib/auth";
 import { sendInquiry, toggleFavorite } from "@/lib/api";
+import { loadWithin } from "@/lib/loadWithin";
+import { useSubmitLock } from "@/lib/useAsync";
 import type { DevCalc, Locale, Plot, Utility } from "@/lib/types";
 import { PURPOSE, RELIEF, STATUS, UTILITY, descOf, maskCadastral, money, titleOf } from "@/lib/format";
 import { t } from "@/i18n/messages";
 import { AuthImage } from "@/components/media/AuthImage";
 
-const PlotMap = dynamic(() => import("@/components/catalog/PlotMap"), { ssr: false });
+const PlotMap = dynamic(() => loadWithin(import("@/components/catalog/PlotMap")), {
+  ssr: false,
+  loading: () => <ChunkFallback />,
+});
 const CadastralGeoPlanner = dynamic(
-  () => import("@/components/passport/CadastralGeoPlanner").then((mod) => mod.CadastralGeoPlanner),
-  { ssr: false }
+  () => loadWithin(import("@/components/passport/CadastralGeoPlanner").then((mod) => mod.CadastralGeoPlanner)),
+  { ssr: false, loading: () => <ChunkFallback /> },
 );
 
 function Util({ label, value, locale }: { label: string; value: Utility; locale: Locale }) {
@@ -56,19 +63,29 @@ export function PassportView({
   const [fav, setFav] = useState(Boolean(fav0));
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
+  const inquiryLock = useSubmitLock();
 
   async function onFav() {
     if (!user) {
       setError(m.needLoginFav);
       return;
     }
-    const res = await toggleFavorite(user.email, plot.id);
-    setFav(res.favorite);
+    if (inquiryLock.pending) return;
+    await inquiryLock.run(async () => {
+      try {
+        const res = await toggleFavorite(user.email, plot.id);
+        setFav(res.favorite);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "error");
+      }
+    });
   }
 
   async function onInquiry(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (inquiryLock.pending) return;
     const fd = new FormData(e.currentTarget);
+    await inquiryLock.run(async () => {
     try {
       await sendInquiry(
         plot.id,
@@ -84,6 +101,7 @@ export function PassportView({
     } catch (err) {
       setError(err instanceof Error ? err.message : "error");
     }
+    });
   }
 
   const docs = plot.docs ?? { egrn: false, topo: false, apz: false, tu: false };
@@ -131,8 +149,10 @@ export function PassportView({
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
-        <div className="h-[360px] border border-ink/10 overflow-hidden">
-          <PlotMap plots={[plot]} locale={locale} />
+        <div className="h-[240px] overflow-hidden border border-ink/10 sm:h-[360px]">
+          <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+            <PlotMap plots={[plot]} locale={locale} />
+          </WidgetBoundary>
         </div>
         <div className="border border-ink/10 bg-white/50 p-5">
           <h2 className="font-serif text-2xl">{m.legal}</h2>
@@ -178,7 +198,9 @@ export function PassportView({
           </div>
           <span className="text-xs text-ink/50 hidden sm:inline">СП РК 3.01-101-2013</span>
         </div>
-        <CadastralGeoPlanner plot={plot} locale={locale} />
+        <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+          <CadastralGeoPlanner plot={plot} locale={locale} />
+        </WidgetBoundary>
       </section>
 
       <section>
@@ -275,7 +297,9 @@ export function PassportView({
               className="border border-ink/15 px-3 py-2"
             />
             <textarea name="message" rows={3} placeholder={m.message} className="border border-ink/15 px-3 py-2" />
-            <button className="bg-pine text-paper py-2">{m.sendInquiry}</button>
+            <button className="min-h-12 bg-pine py-2 text-paper disabled:opacity-50" disabled={inquiryLock.pending}>
+              {m.sendInquiry}
+            </button>
           </form>
         )}
         {error ? <p className="text-clay text-sm mt-2">{error}</p> : null}

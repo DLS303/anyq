@@ -30,8 +30,8 @@ export function ConsentsPanel({ locale }: { locale: Locale }) {
   const m = t(locale);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const loaded = useAsync(async () => {
-    const [rows, documents] = await Promise.all([fetchConsents(), fetchConsentDocuments()]);
+  const loaded = useAsync(async (signal) => {
+    const [rows, documents] = await Promise.all([fetchConsents(signal), fetchConsentDocuments(signal)]);
     return { rows, documents };
   }, [locale]);
   const rows = loaded.data?.rows ?? [];

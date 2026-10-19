@@ -2,7 +2,7 @@
 
 import { useAuth } from "@/lib/auth";
 import { fetchInvoices, payInvoice } from "@/lib/api";
-import { ErrorRetry, useAsync } from "@/lib/useAsync";
+import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
 import { t } from "@/i18n/messages";
 import { INVOICE_STATUS, money } from "@/lib/format";
 import type { CrmInvoice, Locale } from "@/lib/types";
@@ -17,15 +17,17 @@ export function CrmInvoicesView({
   const { user } = useAuth();
   const m = t(locale);
   const invoicesQuery = useAsync(
-    () => (user ? fetchInvoices(user.email) : Promise.resolve([] as CrmInvoice[])),
+    (signal) => (user ? fetchInvoices(user.email, undefined, signal) : Promise.resolve([] as CrmInvoice[])),
     [user?.email],
   );
   const invoices = invoicesQuery.data ?? [];
   const loading = invoicesQuery.loading;
   const load = invoicesQuery.reload;
+  const payLock = useSubmitLock();
 
   async function handleMarkPaid(id: string) {
-    if (!user) return;
+    if (!user || payLock.pending) return;
+    await payLock.run(async () => {
     try {
       await payInvoice(user.email, id);
       load();
@@ -39,6 +41,7 @@ export function CrmInvoicesView({
     } catch (e) {
       alert((e as Error).message);
     }
+    });
   }
 
   const totalPaid = invoices.filter((i) => i.status === "paid").reduce((s, i) => s + i.amount_kzt, 0);
@@ -137,8 +140,9 @@ export function CrmInvoicesView({
                       ) : inv.can_mark_paid ? (
                         <button
                           type="button"
+                          disabled={payLock.pending}
                           onClick={() => handleMarkPaid(inv.id)}
-                          className="px-3 py-1 bg-ink text-white rounded text-[11px] font-semibold hover:bg-ink/80 transition-colors shadow-2xs"
+                          className="min-h-11 rounded bg-ink px-3 py-1 text-[11px] font-semibold text-white shadow-2xs transition-colors hover:bg-ink/80 disabled:opacity-50"
                         >
                           Отметить оплаченным
                         </button>

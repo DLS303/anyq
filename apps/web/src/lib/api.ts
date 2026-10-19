@@ -1,3 +1,4 @@
+import { preparePhoto, preparePhotos } from "./photos";
 import type {
   ChatMessage,
   ChatThread,
@@ -28,7 +29,20 @@ export function getApiBase(): string {
 
 export const API = getApiBase();
 
-type Envelope<T> = { ok: boolean; data: T; total?: number; detail?: string };
+export const API_TIMEOUT_MS = 15_000;
+export const API_GET_RETRIES = 2;
+const RETRY_BASE_MS = 300;
+const RETRY_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+
+type Envelope<T> = { ok: boolean; data: T; total?: number; detail?: string; [key: string]: unknown };
+
+type RequestExtra = {
+  email?: string;
+  timeoutMs?: number;
+  auth?: boolean;
+};
+
+export type RequestInitExtra = RequestInit & RequestExtra;
 
 export class ApiError extends Error {
   status: number;
@@ -38,6 +52,10 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.status = status;
   }
+}
+
+export function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function detailOf(json: unknown, fallback: string) {
@@ -70,55 +88,150 @@ function sessionExpired(path: string, res: Response, headers: Headers) {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit & { email?: string }): Promise<T> {
+function anySignal(signals: AbortSignal[]) {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.any === "function") {
+    return AbortSignal.any(signals);
+  }
+  const controller = new AbortController();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+    signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  return controller.signal;
+}
+
+function delay(ms: number, signal?: AbortSignal | null) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(finish, ms);
+    function finish() {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }
+    function onAbort() {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function fetchOnce(path: string, init: RequestInitExtra | undefined, timeoutMs: number) {
   const headers = new Headers(init?.headers);
-  if (!(init?.body instanceof FormData)) {
+  const body = init?.body;
+  if (body && !(body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  if (!isCredentialPost(path)) applyAuth(headers);
-  const res = await fetch(`${getApiBase()}${path}`, {
-    ...init,
-    headers,
-    cache: "no-store",
-  });
-  sessionExpired(path, res, headers);
-  let json: Envelope<T>;
+  if (init?.auth !== false && !isCredentialPost(path)) applyAuth(headers);
+  const caller = init?.signal ?? undefined;
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), timeoutMs);
+  const signal = caller ? anySignal([caller, timeout.signal]) : timeout.signal;
   try {
-    json = (await res.json()) as Envelope<T>;
-  } catch {
-    throw new ApiError(res.statusText || "Ошибка сети", res.status || 0);
+    const res = await fetch(`${getApiBase()}${path}`, {
+      method: init?.method,
+      headers,
+      body,
+      cache: "no-store",
+      signal,
+      credentials: init?.credentials,
+    });
+    sessionExpired(path, res, headers);
+    return res;
+  } catch (error) {
+    if (caller?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (timeout.signal.aborted) throw new ApiError("timeout", 408);
+    throw error instanceof Error ? error : new ApiError("network", 0);
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+export async function apiFetch(path: string, init?: RequestInitExtra): Promise<Response> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const retryable = method === "GET" || method === "HEAD";
+  const attempts = retryable ? API_GET_RETRIES + 1 : 1;
+  const timeoutMs = init?.timeoutMs ?? API_TIMEOUT_MS;
+  const caller = init?.signal ?? undefined;
+  let lastResponse: Response | null = null;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await delay(RETRY_BASE_MS * 2 ** (attempt - 1), caller);
+    if (caller?.aborted) throw new DOMException("Aborted", "AbortError");
+    try {
+      const response = await fetchOnce(path, init, timeoutMs);
+      if (retryable && attempt < attempts - 1 && RETRY_STATUS.has(response.status)) {
+        await response.body?.cancel().catch(() => undefined);
+        lastResponse = response;
+        continue;
+      }
+      return response;
+    } catch (error) {
+      if (caller?.aborted || isAbortError(error)) throw error;
+      if (error instanceof ApiError && error.status === 408) throw error;
+      lastError = error;
+      if (!retryable || attempt === attempts - 1) throw error;
+    }
+  }
+
+  if (lastResponse) return lastResponse;
+  throw lastError instanceof Error ? lastError : new ApiError("network", 0);
+}
+
+async function readBody<T>(res: Response): Promise<T> {
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new ApiError(res.statusText || "network", res.status || 0);
+  }
+}
+
+async function request<T>(path: string, init?: RequestInitExtra): Promise<T> {
+  const res = await apiFetch(path, init);
+  const json = await readBody<Envelope<T>>(res);
   if (!res.ok) throw new ApiError(detailOf(json, res.statusText), res.status);
   return json.data;
 }
 
-export function fetchPlots(params: Record<string, string | undefined> = {}) {
+async function requestEnvelope<T>(path: string, init?: RequestInitExtra) {
+  const res = await apiFetch(path, init);
+  const json = await readBody<Envelope<T>>(res);
+  if (!res.ok) throw new ApiError(detailOf(json, res.statusText), res.status);
+  return json;
+}
+
+export function fetchPlots(params: Record<string, string | undefined> = {}, signal?: AbortSignal) {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v) q.set(k, v);
   }
   const s = q.toString();
-  return request<Plot[]>(`/v1/plots${s ? `?${s}` : ""}`);
+  return request<Plot[]>(`/v1/plots${s ? `?${s}` : ""}`, { signal });
 }
 
-export async function fetchPlot(id: string, email?: string) {
+export async function fetchPlot(id: string, email?: string, signal?: AbortSignal) {
   void email;
-  const path = `/v1/plots/${id}`;
-  const headers = new Headers();
-  applyAuth(headers);
-  const res = await fetch(`${getApiBase()}${path}`, { headers, cache: "no-store" });
-  sessionExpired(path, res, headers);
-  const json = (await res.json()) as Envelope<Plot> & { calc?: DevCalc; favorite?: boolean };
-  if (!res.ok) throw new Error(detailOf(json, res.statusText));
-  return { plot: json.data, calc: json.calc, favorite: Boolean(json.favorite) };
+  const json = await requestEnvelope<Plot>(`/v1/plots/${id}`, { signal });
+  return {
+    plot: json.data,
+    calc: json.calc as DevCalc | undefined,
+    favorite: Boolean(json.favorite),
+  };
 }
 
-export function fetchModules() {
-  return request<ModuleInfo[]>("/v1/modules");
+export function fetchModules(signal?: AbortSignal) {
+  return request<ModuleInfo[]>("/v1/modules", { signal });
 }
 
-export function fetchMyPlots(email: string) {
-  return request<Plot[]>("/v1/cabinet/plots", { email });
+export function fetchMyPlots(email: string, signal?: AbortSignal) {
+  return request<Plot[]>("/v1/cabinet/plots", { email, signal });
 }
 
 export function createPlot(email: string, body: Record<string, unknown>) {
@@ -129,8 +242,8 @@ export function createPlot(email: string, body: Record<string, unknown>) {
   });
 }
 
-export function fetchQueue(email: string) {
-  return request<Plot[]>("/v1/moderation/queue", { email });
+export function fetchQueue(email: string, signal?: AbortSignal) {
+  return request<Plot[]>("/v1/moderation/queue", { email, signal });
 }
 
 export function moderatePlot(
@@ -158,12 +271,12 @@ export function sendInquiry(
   });
 }
 
-export function fetchInquiries(email: string) {
-  return request<Inquiry[]>("/v1/cabinet/inquiries", { email });
+export function fetchInquiries(email: string, signal?: AbortSignal) {
+  return request<Inquiry[]>("/v1/cabinet/inquiries", { email, signal });
 }
 
-export function fetchFavorites(email: string) {
-  return request<Plot[]>("/v1/cabinet/favorites", { email });
+export function fetchFavorites(email: string, signal?: AbortSignal) {
+  return request<Plot[]>("/v1/cabinet/favorites", { email, signal });
 }
 
 export function toggleFavorite(email: string, plotId: string) {
@@ -185,21 +298,21 @@ export function submitPlot(email: string, id: string) {
   return request<Plot>(`/v1/cabinet/plots/${id}/submit`, { method: "POST", email });
 }
 
-export function suggestPlots(q: string) {
+export function suggestPlots(q: string, signal?: AbortSignal) {
   return request<{ kind: string; value: string; slug: string }[]>(
     `/v1/plots/suggest?q=${encodeURIComponent(q)}`,
+    { signal },
   );
 }
 
-export async function uploadPhoto(email: string, file: File, projectId?: string) {
+export async function uploadPhoto(email: string, file: File, projectId?: string, signal?: AbortSignal) {
   void email;
-  const headers = new Headers();
-  applyAuth(headers);
+  const prepared = await preparePhoto(file);
   const fd = new FormData();
-  fd.append("file", file);
+  fd.append("file", prepared);
   if (projectId) fd.append("project_id", projectId);
-  const res = await fetch(`${getApiBase()}/v1/cabinet/photos`, { method: "POST", headers, body: fd });
-  const json = (await res.json()) as Envelope<{ url: string }>;
+  const res = await apiFetch("/v1/cabinet/photos", { method: "POST", body: fd, signal });
+  const json = await readBody<Envelope<{ url: string }>>(res);
   if (!res.ok) throw new ApiError(detailOf(json, res.statusText), res.status);
   return json.data.url;
 }
@@ -212,24 +325,23 @@ export function saveSearch(email: string, title: string, params: Record<string, 
   });
 }
 
-export function fetchSavedSearches(email: string) {
+export function fetchSavedSearches(email: string, signal?: AbortSignal) {
   return request<{ id: string; title: string; params: Record<string, string> }[]>("/v1/cabinet/searches", {
     email,
+    signal,
   });
 }
 
-export function fetchSpecialists(params: Record<string, string | undefined> = {}) {
+export function fetchSpecialists(params: Record<string, string | undefined> = {}, signal?: AbortSignal) {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
   const s = q.toString();
-  return request<Specialist[]>(`/v1/specialists${s ? `?${s}` : ""}`);
+  return request<Specialist[]>(`/v1/specialists${s ? `?${s}` : ""}`, { signal });
 }
 
-export async function fetchSpecialist(id: string) {
-  const res = await fetch(`${getApiBase()}/v1/specialists/${id}`, { cache: "no-store" });
-  const json = (await res.json()) as Envelope<Specialist> & { reviews?: Review[] };
-  if (!res.ok) throw new Error(detailOf(json, res.statusText));
-  return { specialist: json.data, reviews: json.reviews ?? [] };
+export async function fetchSpecialist(id: string, signal?: AbortSignal) {
+  const json = await requestEnvelope<Specialist>(`/v1/specialists/${id}`, { signal });
+  return { specialist: json.data, reviews: (json.reviews as Review[] | undefined) ?? [] };
 }
 
 export function createOrder(email: string, specialistId: string, body: { plot_id?: string; message: string }) {
@@ -240,8 +352,8 @@ export function createOrder(email: string, specialistId: string, body: { plot_id
   });
 }
 
-export function fetchOrders(email: string) {
-  return request<ServiceOrder[]>("/v1/orders", { email });
+export function fetchOrders(email: string, signal?: AbortSignal) {
+  return request<ServiceOrder[]>("/v1/orders", { email, signal });
 }
 
 export function setOrderStatus(
@@ -265,10 +377,10 @@ export type ActVat = {
   prior_signed_kzt: number;
 };
 
-export function fetchActVat(actDate: string, noVat: boolean, projectId?: string) {
+export function fetchActVat(actDate: string, noVat: boolean, projectId?: string, signal?: AbortSignal) {
   const q = new URLSearchParams({ act_date: actDate, no_vat: noVat ? "true" : "false" });
   if (projectId) q.set("project_id", projectId);
-  return request<ActVat>(`/v1/acts/vat?${q}`);
+  return request<ActVat>(`/v1/acts/vat?${q}`, { signal });
 }
 
 export function reviewOrder(email: string, id: string, stars: number, text: string) {
@@ -279,13 +391,13 @@ export function reviewOrder(email: string, id: string, stars: number, text: stri
   });
 }
 
-export function fetchFunnels() {
-  return request<Record<string, string[]>>("/v1/crm/funnels");
+export function fetchFunnels(signal?: AbortSignal) {
+  return request<Record<string, string[]>>("/v1/crm/funnels", { signal });
 }
 
-export function fetchDeals(email: string, funnel?: string) {
+export function fetchDeals(email: string, funnel?: string, signal?: AbortSignal) {
   const q = funnel ? `?funnel=${funnel}` : "";
-  return request<Deal[]>(`/v1/crm/deals${q}`, { email });
+  return request<Deal[]>(`/v1/crm/deals${q}`, { email, signal });
 }
 
 export function moveDeal(email: string, id: string, stage: string) {
@@ -296,14 +408,14 @@ export function moveDeal(email: string, id: string, stage: string) {
   });
 }
 
-export async function fetchDealDetail(email: string, id: string) {
+export async function fetchDealDetail(email: string, id: string, signal?: AbortSignal) {
   void email;
-  const headers = new Headers();
-  applyAuth(headers);
-  const res = await fetch(`${getApiBase()}/v1/crm/deals/${id}`, { headers, cache: "no-store" });
-  const json = (await res.json()) as { ok: boolean; data: Deal; activities: CrmActivity[]; invoices: CrmInvoice[]; detail?: string };
-  if (!res.ok) throw new Error(json.detail || res.statusText);
-  return { deal: json.data, activities: json.activities, invoices: json.invoices };
+  const json = await requestEnvelope<Deal>(`/v1/crm/deals/${id}`, { signal });
+  return {
+    deal: json.data,
+    activities: (json.activities as CrmActivity[] | undefined) ?? [],
+    invoices: (json.invoices as CrmInvoice[] | undefined) ?? [],
+  };
 }
 
 export function createDeal(
@@ -335,9 +447,9 @@ export function dealToProject(
   });
 }
 
-export function fetchLeads(email: string, status?: string) {
+export function fetchLeads(email: string, status?: string, signal?: AbortSignal) {
   const q = status ? `?status=${status}` : "";
-  return request<Lead[]>(`/v1/crm/leads${q}`, { email });
+  return request<Lead[]>(`/v1/crm/leads${q}`, { email, signal });
 }
 
 export function createLead(body: {
@@ -362,12 +474,16 @@ export function convertLead(
   return request<Deal>(`/v1/crm/leads/${leadId}/convert`, { method: "POST", email, body: JSON.stringify(body) });
 }
 
-export function fetchContacts(email: string, params: { q?: string; ctype?: string } = {}) {
+export function fetchContacts(
+  email: string,
+  params: { q?: string; ctype?: string } = {},
+  signal?: AbortSignal,
+) {
   const p = new URLSearchParams();
   if (params.q) p.set("q", params.q);
   if (params.ctype) p.set("ctype", params.ctype);
   const qs = p.toString();
-  return request<CrmContact[]>(`/v1/crm/contacts${qs ? `?${qs}` : ""}`, { email });
+  return request<CrmContact[]>(`/v1/crm/contacts${qs ? `?${qs}` : ""}`, { email, signal });
 }
 
 export function createContact(
@@ -386,12 +502,16 @@ export function createContact(
   return request<CrmContact>("/v1/crm/contacts", { method: "POST", email, body: JSON.stringify(body) });
 }
 
-export function fetchActivities(email: string, params: { deal_id?: string; lead_id?: string } = {}) {
+export function fetchActivities(
+  email: string,
+  params: { deal_id?: string; lead_id?: string } = {},
+  signal?: AbortSignal,
+) {
   const p = new URLSearchParams();
   if (params.deal_id) p.set("deal_id", params.deal_id);
   if (params.lead_id) p.set("lead_id", params.lead_id);
   const qs = p.toString();
-  return request<CrmActivity[]>(`/v1/crm/activities${qs ? `?${qs}` : ""}`, { email });
+  return request<CrmActivity[]>(`/v1/crm/activities${qs ? `?${qs}` : ""}`, { email, signal });
 }
 
 export function createActivity(
@@ -416,9 +536,9 @@ export function toggleActivity(email: string, id: string, completed: boolean) {
   });
 }
 
-export function fetchInvoices(email: string, deal_id?: string) {
+export function fetchInvoices(email: string, deal_id?: string, signal?: AbortSignal) {
   const q = deal_id ? `?deal_id=${deal_id}` : "";
-  return request<CrmInvoice[]>(`/v1/crm/invoices${q}`, { email });
+  return request<CrmInvoice[]>(`/v1/crm/invoices${q}`, { email, signal });
 }
 
 export function createInvoice(
@@ -439,28 +559,22 @@ export function payInvoice(email: string, id: string) {
   return request<CrmInvoice>(`/v1/crm/invoices/${id}/pay`, { method: "POST", email });
 }
 
-export function fetchCrmAnalytics(email: string) {
-  return request<CrmAnalytics>("/v1/crm/analytics", { email });
+export function fetchCrmAnalytics(email: string, signal?: AbortSignal) {
+  return request<CrmAnalytics>("/v1/crm/analytics", { email, signal });
 }
 
-export function fetchThreads(email: string) {
-  return request<ChatThread[]>("/v1/chat/threads", { email });
+export function fetchThreads(email: string, signal?: AbortSignal) {
+  return request<ChatThread[]>("/v1/chat/threads", { email, signal });
 }
 
-export async function fetchMessages(email: string, tid: string) {
+export async function fetchMessages(email: string, tid: string, signal?: AbortSignal) {
   void email;
-  const path = `/v1/chat/threads/${tid}/messages`;
-  const headers = new Headers();
-  applyAuth(headers);
-  const res = await fetch(`${getApiBase()}${path}`, { headers, cache: "no-store" });
-  sessionExpired(path, res, headers);
-  const json = (await res.json()) as Envelope<ChatMessage[]> & { thread?: ChatThread };
-  if (!res.ok) throw new Error(detailOf(json, res.statusText));
-  return { messages: json.data, thread: json.thread };
+  const json = await requestEnvelope<ChatMessage[]>(`/v1/chat/threads/${tid}/messages`, { signal });
+  return { messages: json.data, thread: json.thread as ChatThread | undefined };
 }
 
-export function fetchMe() {
-  return request<User>("/v1/auth/me");
+export function fetchMe(signal?: AbortSignal) {
+  return request<User>("/v1/auth/me", { signal });
 }
 
 export function loginRequest(email: string, password: string, consentOfferPd: boolean, consentAi = false) {
@@ -494,23 +608,23 @@ export function registerRequest(body: {
   });
 }
 
-export function fetchMaterials(params: Record<string, string | undefined> = {}) {
+export function fetchMaterials(params: Record<string, string | undefined> = {}, signal?: AbortSignal) {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
   const s = q.toString();
-  return request<Material[]>(`/v1/materials${s ? `?${s}` : ""}`);
+  return request<Material[]>(`/v1/materials${s ? `?${s}` : ""}`, { signal });
 }
 
-export function fetchMaterial(id: string) {
-  return request<Material>(`/v1/materials/${id}`);
+export function fetchMaterial(id: string, signal?: AbortSignal) {
+  return request<Material>(`/v1/materials/${id}`, { signal });
 }
 
 export function createMaterial(email: string, body: Record<string, unknown>) {
   return request<Material>("/v1/materials", { method: "POST", email, body: JSON.stringify(body) });
 }
 
-export function fetchSupplierMaterials(email: string) {
-  return request<Material[]>("/v1/cabinet/materials", { email });
+export function fetchSupplierMaterials(email: string, signal?: AbortSignal) {
+  return request<Material[]>("/v1/cabinet/materials", { email, signal });
 }
 
 export function orderMaterial(
@@ -524,8 +638,8 @@ export function orderMaterial(
   });
 }
 
-export function fetchMaterialOrders(email: string) {
-  return request<MaterialOrder[]>("/v1/material-orders", { email });
+export function fetchMaterialOrders(email: string, signal?: AbortSignal) {
+  return request<MaterialOrder[]>("/v1/material-orders", { email, signal });
 }
 
 export function setMaterialOrderStatus(email: string, id: string, status: string) {
@@ -542,12 +656,12 @@ export function calculateEstimate(body: EstimateInput) {
   });
 }
 
-export function fetchProjects() {
-  return request<Record<string, unknown>[]>("/v1/site/projects");
+export function fetchProjects(signal?: AbortSignal) {
+  return request<Record<string, unknown>[]>("/v1/site/projects", { signal });
 }
 
-export function fetchSiteBundle(id: string) {
-  return request<Record<string, unknown>>(`/v1/site/projects/${id}/bundle`);
+export function fetchSiteBundle(id: string, signal?: AbortSignal) {
+  return request<Record<string, unknown>>(`/v1/site/projects/${id}/bundle`, { signal });
 }
 
 export function postSite(
@@ -555,29 +669,29 @@ export function postSite(
   email: string,
   body: Record<string, unknown> = {},
   idempotencyKey?: string,
+  signal?: AbortSignal,
 ) {
   const headers = new Headers();
   if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
-  return request(`/v1/site/${path}`, { method: "POST", email, body: JSON.stringify(body), headers });
+  return request(`/v1/site/${path}`, { method: "POST", email, body: JSON.stringify(body), headers, signal });
 }
 
-export function deleteSite(path: string) {
-  return request(`/v1/site/${path}`, { method: "DELETE" });
+export function deleteSite(path: string, signal?: AbortSignal) {
+  return request(`/v1/site/${path}`, { method: "DELETE", signal });
 }
 
-export async function uploadDailyPhotos(logId: string, files: File[]) {
-  const headers = new Headers();
-  applyAuth(headers);
+export async function uploadDailyPhotos(logId: string, files: File[], signal?: AbortSignal) {
+  const prepared = await preparePhotos(files);
   const fd = new FormData();
-  for (const file of files) fd.append("files", file);
-  const path = `/v1/site/daily/${logId}/photos`;
-  const res = await fetch(`${getApiBase()}${path}`, { method: "POST", headers, body: fd });
-  sessionExpired(path, res, headers);
-  const json = (await res.json()) as Envelope<{
-    log: Record<string, unknown>;
-    added: { has_people: boolean; has_plates: boolean; taken_at?: string | null }[];
-  }>;
-  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  for (const file of prepared) fd.append("files", file);
+  const res = await apiFetch(`/v1/site/daily/${logId}/photos`, { method: "POST", body: fd, signal });
+  const json = await readBody<
+    Envelope<{
+      log: Record<string, unknown>;
+      added: { has_people: boolean; has_plates: boolean; taken_at?: string | null }[];
+    }>
+  >(res);
+  if (!res.ok) throw new ApiError(detailOf(json, res.statusText), res.status);
   return json.data;
 }
 
@@ -609,13 +723,19 @@ export function createSiteProject(body: {
   });
 }
 
-export function addProjectMember(projectId: string, body: { email: string; role: string }, idempotencyKey?: string) {
+export function addProjectMember(
+  projectId: string,
+  body: { email: string; role: string },
+  idempotencyKey?: string,
+  signal?: AbortSignal,
+) {
   const headers = new Headers();
   if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
   return request(`/v1/site/projects/${projectId}/members`, {
     method: "POST",
     body: JSON.stringify(body),
     headers,
+    signal,
   });
 }
 
@@ -623,28 +743,30 @@ export function removeProjectMember(projectId: string, userId: string) {
   return request(`/v1/site/projects/${projectId}/members/${userId}`, { method: "DELETE" });
 }
 
-export async function uploadDailyVoice(logId: string, file: Blob, durationS: number) {
-  const headers = new Headers();
-  applyAuth(headers);
+export async function uploadDailyVoice(logId: string, file: Blob, durationS: number, signal?: AbortSignal) {
   const type = file.type || "audio/webm";
   const ext = type.includes("mp4") || type.includes("m4a") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
   const fd = new FormData();
   fd.append("file", file, `note.${ext}`);
   fd.append("duration_s", String(durationS));
-  const path = `/v1/site/daily/${logId}/voice`;
-  const res = await fetch(`${getApiBase()}${path}`, { method: "POST", headers, body: fd });
-  sessionExpired(path, res, headers);
-  const json = (await res.json()) as Envelope<Record<string, unknown>>;
-  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  const res = await apiFetch(`/v1/site/daily/${logId}/voice`, { method: "POST", body: fd, signal });
+  const json = await readBody<Envelope<Record<string, unknown>>>(res);
+  if (!res.ok) throw new ApiError(detailOf(json, res.statusText), res.status);
   return json.data;
 }
 
-export function fetchConsents() {
-  return request<ConsentRow[]>("/v1/auth/consents");
+export function fetchConsents(signal?: AbortSignal) {
+  return request<ConsentRow[]>("/v1/auth/consents", { signal });
 }
 
-export function fetchConsentDocuments() {
-  return request<ConsentDocument[]>("/v1/auth/consents/documents");
+export function fetchConsentDocuments(signal?: AbortSignal) {
+  return request<ConsentDocument[]>("/v1/auth/consents/documents", { signal });
+}
+
+export async function fetchAuthorizedBlob(path: string, signal?: AbortSignal) {
+  const res = await apiFetch(path, { signal });
+  if (!res.ok) throw new ApiError(res.statusText || "file", res.status);
+  return res.blob();
 }
 
 export function grantAiConsent() {

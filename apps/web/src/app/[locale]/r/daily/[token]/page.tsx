@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import { PhotoView } from "@/components/media/PhotoView";
 import { t } from "@/i18n/messages";
+import { apiFetch } from "@/lib/api";
 import { roleLabel, weatherLabel } from "@/lib/report";
 import type { Locale } from "@/lib/types";
 
@@ -19,9 +21,8 @@ type PublicDaily = {
 };
 
 async function loadReport(token: string): Promise<{ status: number; data: PublicDaily | null }> {
-  const base = process.env.INTERNAL_API_URL ?? "http://127.0.0.1:8010";
   try {
-    const res = await fetch(`${base}/v1/public/daily/${encodeURIComponent(token)}`, { cache: "no-store" });
+    const res = await apiFetch(`/v1/public/daily/${encodeURIComponent(token)}`, { auth: false });
     if (!res.ok) return { status: res.status, data: null };
     const json = (await res.json()) as { data?: PublicDaily };
     return { status: 200, data: json.data ?? null };
@@ -73,9 +74,13 @@ export default async function PublicDailyPage({
       {data.photos.length ? (
         <div className="mt-4 grid gap-3">
           {data.photos.map((photo) => (
-            // Public URLs are cleaned copies. The token stays on this origin.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img key={photo.url} src={photo.url} alt={m.reportPhotoAlt} className="max-h-[70vh] w-full bg-white object-contain" />
+            <PhotoView
+              key={photo.url}
+              src={photo.url}
+              alt={m.reportPhotoAlt}
+              sizes="(max-width: 640px) 100vw, 32rem"
+              className="max-h-[70vh] w-full bg-white object-contain"
+            />
           ))}
         </div>
       ) : null}
