@@ -83,6 +83,7 @@ def test_invite_expiry_reuse_and_role_lock():
     assert user["role"] != "admin"
     assert user["company"] == "North Test LLP"
     assert user["company_bin"] == "880000000001"
+    assert user["company_key"] == "user:u-owner"
     member = store.get_user(user["id"])
     assert member is not None
     assert any(row.user_id == member.id and row.role_on_site == "foreman" for row in store.directory.values())

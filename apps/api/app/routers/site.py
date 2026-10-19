@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.company_features import (
     apply_bundle_flags,
     feature_open_for_company,
+    flag_map,
     project_company_id,
     require_feature,
 )
@@ -317,8 +318,10 @@ def get_project(pid: str, user: User = Depends(require_user)):
 @router.get("/projects/{pid}/bundle")
 def bundle(pid: str, user: User = Depends(require_user)):
     p = _guard_pid(user, pid)
+    company_id = project_company_id(p)
+    flags = flag_map(company_id)
     data = {
-        "snapshot": store.project_snapshot(p.id),
+        "snapshot": store.project_snapshot(p.id, flags),
         "daily": [member_daily(item) for item in store._by_project(store.daily_logs, p.id)],
         "rfis": store._by_project(store.rfis, p.id),
         "submittals": store._by_project(store.submittals, p.id),
@@ -336,7 +339,7 @@ def bundle(pid: str, user: User = Depends(require_user)):
         "can_manage_members": store.can_manage_project(user, p),
         "can_approve_changes": store.is_assigned_supervisor(user, p),
     }
-    return {"ok": True, "data": apply_bundle_flags(p, data)}
+    return {"ok": True, "data": apply_bundle_flags(p, data, flags)}
 
 
 def _member_or_404(user: User, pid: str) -> Project:
