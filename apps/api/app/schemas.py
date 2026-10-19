@@ -647,3 +647,5 @@ class StoredUpload(BaseModel):
     project_id: str | None = None
     kind: Literal["upload", "original", "public", "voice"] = "upload"
     daily_log_id: str | None = None
+    size: int = 0
+    sha256: str = ""

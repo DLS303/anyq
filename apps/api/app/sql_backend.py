@@ -188,6 +188,10 @@ class AuditLog(Base):
     actor: Mapped[str] = mapped_column(String(80), nullable=False)
     at: Mapped[str] = mapped_column(String(40), nullable=False)
     key: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    entity_type: Mapped[str | None] = mapped_column(String(64))
+    entity_id: Mapped[str | None] = mapped_column(String(36))
+    project_id: Mapped[str | None] = mapped_column(String(80))
+    changes: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (Index("ix_audit_log_company_id", "company_id"),)
 
@@ -681,6 +685,9 @@ class SqlRuntime:
                 self._ensure_meta()
                 with self.engine.begin() as conn:
                     install_audit_guards(conn)
+                from app.rfi_tables import ensure_rfi_tables
+
+                ensure_rfi_tables(self.engine)
                 return
             except (OperationalError, ProgrammingError, IntegrityError) as exc:
                 last = exc

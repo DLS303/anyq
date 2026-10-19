@@ -40,6 +40,10 @@ const nextConfig: NextConfig = {
         source: "/:locale/r/daily/:token",
         headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
       },
+      {
+        source: "/:locale/r/rfi/:token",
+        headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
+      },
     ];
   },
   experimental: {

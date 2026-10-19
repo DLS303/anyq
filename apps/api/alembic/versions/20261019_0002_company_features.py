@@ -8,6 +8,8 @@ Works on SQLite and PostgreSQL 16. company_id is indexed. The logical key
 (company_id, key) is unique. audit_log rejects UPDATE and DELETE.
 """
 
+import sqlalchemy as sa
+
 from alembic import op
 from app.sql_backend import AuditLog, CompanyFeature, install_audit_guards
 
@@ -20,7 +22,17 @@ depends_on = None
 def upgrade() -> None:
     bind = op.get_bind()
     CompanyFeature.__table__.create(bind, checkfirst=True)
-    AuditLog.__table__.create(bind, checkfirst=True)
+    # Original columns only. 0005 adds entity_type, entity_id, project_id, changes.
+    op.create_table(
+        "audit_log",
+        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+        sa.Column("event", sa.String(length=64), nullable=False),
+        sa.Column("company_id", sa.String(length=180), nullable=False),
+        sa.Column("actor", sa.String(length=80), nullable=False),
+        sa.Column("at", sa.String(length=40), nullable=False),
+        sa.Column("key", sa.String(length=64), nullable=False),
+    )
+    op.create_index("ix_audit_log_company_id", "audit_log", ["company_id"])
     install_audit_guards(bind)
 
 

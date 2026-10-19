@@ -64,12 +64,10 @@ export const features = buildFeatures(null);
 
 export const DEMO_ONLY_TABS = ["sub", "draw", "ks"] as const;
 
-/** Object screen: pilot tabs unless demo mode or any company flag is on. */
-export function objectUsesPilotLayout(flags: CompanyFlags | null | undefined, options?: { demo?: boolean }) {
+/** Pilot tabs stay put. A company flag only reveals its own item in the more menu. */
+export function objectUsesPilotLayout(_flags: CompanyFlags | null | undefined, options?: { demo?: boolean }) {
   const demo = options?.demo ?? DEMO_MODE;
-  if (demo) return false;
-  if (!flags) return true;
-  return !ORG_FEATURE_KEYS.some((key) => Boolean(flags[key]));
+  return !demo;
 }
 
 export function menuTabVisible(tab: string, flags: CompanyFlags | null | undefined, demo = DEMO_MODE) {

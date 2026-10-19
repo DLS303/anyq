@@ -33,10 +33,11 @@ describe("release visibility", () => {
     expect(buildFeatures(null, true).ksActs).toBe(true);
   });
 
-  it("keeps the pilot object layout unless demo mode or a company flag is on", () => {
+  it("keeps the pilot object layout when a company flag is on", () => {
     expect(objectUsesPilotLayout(null, { demo: false })).toBe(true);
     expect(objectUsesPilotLayout({}, { demo: false })).toBe(true);
-    expect(objectUsesPilotLayout({ meetings: true }, { demo: false })).toBe(false);
+    expect(objectUsesPilotLayout({ meetings: true }, { demo: false })).toBe(true);
+    expect(objectUsesPilotLayout({ rfi: true }, { demo: false })).toBe(true);
     expect(objectUsesPilotLayout({}, { demo: true })).toBe(false);
   });
 

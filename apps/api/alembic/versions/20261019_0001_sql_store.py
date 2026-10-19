@@ -15,7 +15,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    Base.metadata.create_all(bind=op.get_bind())
+    # audit_log is created in 0002 with its original columns. 0005 expands it
+    # and creates the designer-question tables.
+    skip = {"audit_log", "external_contacts", "rfis", "access_tokens"}
+    tables = [table for table in Base.metadata.sorted_tables if table.name not in skip]
+    Base.metadata.create_all(bind=op.get_bind(), tables=tables)
 
 
 def downgrade() -> None:

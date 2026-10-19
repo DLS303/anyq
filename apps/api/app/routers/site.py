@@ -102,22 +102,6 @@ class ShareIn(BaseModel):
     expires_in_days: int = Field(default=DEFAULT_SHARE_DAYS, ge=MIN_SHARE_DAYS, le=MAX_SHARE_DAYS)
 
 
-class RfiIn(BaseModel):
-    title: str
-    question: str
-    drawing: str = ""
-    assignee_id: str | None = None
-
-    @field_validator("title", "question")
-    @classmethod
-    def _filled(cls, value: str) -> str:
-        return _required_text(value)
-
-
-class AnswerIn(BaseModel):
-    answer: str
-
-
 class PunchIn(BaseModel):
     title: str
     location: str = ""
@@ -336,7 +320,12 @@ def bundle(pid: str, user: User = Depends(require_user)):
         "can_manage_members": store.can_manage_project(user, p),
         "can_approve_changes": store.is_assigned_supervisor(user, p),
     }
-    return {"ok": True, "data": apply_bundle_flags(p, data)}
+    data = apply_bundle_flags(p, data)
+    if data.get("features", {}).get("rfi") or feature_open_for_company(data.get("company_id") or "", "rfi"):
+        from app.rfi_service import list_for_user
+
+        data["rfis"] = [*data.get("rfis", []), *list_for_user(user, p.id)]
+    return {"ok": True, "data": data}
 
 
 def _member_or_404(user: User, pid: str) -> Project:
@@ -567,26 +556,6 @@ def revoke_share(log_id: str, user: User = Depends(require_user)):
     log, _project = _owned_log(user, log_id)
     store.revoke_daily_share(log.id)
     return {"ok": True, "data": {"active": False}}
-
-
-@router.post("/projects/{pid}/rfis")
-def add_rfi(
-    pid: str,
-    body: RfiIn,
-    user: User = Depends(require_feature("rfi")),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-):
-    _guard_pid(user, pid)
-    return _saved(user, idempotency_key, body, lambda: store.add_rfi(pid, body.model_dump()))
-
-
-@router.post("/rfis/{rid}/answer")
-def answer_rfi(rid: str, body: AnswerIn, user: User = Depends(require_feature("rfi"))):
-    _guard_item(user, store.rfis, rid)
-    try:
-        return {"ok": True, "data": store.answer_rfi(rid, body.answer)}
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
 
 
 @router.post("/projects/{pid}/punches")

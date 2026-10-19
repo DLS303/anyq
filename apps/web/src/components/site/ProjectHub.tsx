@@ -16,6 +16,7 @@ import { loadWithin } from "@/lib/loadWithin";
 import { ErrorRetry, LoadingSkeleton, isMissing, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { AuthImage } from "@/components/media/AuthImage";
 import { InvitePanel } from "@/components/invites/InvitePanel";
+import { RfiPanel } from "./RfiPanel";
 import { ObjectBudgetCard } from "./ObjectBudgetCard";
 import { DailyReport, type DailyEntry } from "./DailyReport";
 import { InspectionForm } from "./InspectionForm";
@@ -355,77 +356,13 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       ) : null}
 
       {tab === "rfi" && org.rfi ? (
-        <Tool
-          title={m.tabRfi}
-          empty={m.hubEmpty}
-          items={bundle.rfis as { id: string; number: string; title: string; question: string; answer: string; status: string; drawing: string }[]}
-          render={(x) => (
-            <div>
-              <p className="font-medium">
-                {x.number} · {x.title} · {statusLabel(x.status, m)}
-                {x.drawing ? ` · ${x.drawing}` : ""}
-              </p>
-              <p className="text-ink/60">{x.question}</p>
-              {x.answer ? <p className="mt-1">{m.hubAnswerPrefix}: {x.answer}</p> : user ? (
-                <button
-                  type="button"
-                  className="underline text-xs mt-1"
-                  onClick={async () => {
-                    const answer = prompt(m.hubAnswerPrefix) || "";
-                    if (!answer) return;
-                    try {
-                      await postSite(`rfis/${x.id}/answer`, email, { answer });
-                      toast(m.hubSaved);
-                      load();
-                    } catch (err) {
-                      toast(err instanceof Error ? err.message : m.hubSaveError);
-                    }
-                  }}
-                >
-                  {m.hubAnswer}
-                </button>
-              ) : null}
-            </div>
-          )}
-        >
-          {user ? (
-            <form
-              className="grid gap-2 mb-4"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const form = e.currentTarget;
-                const fd = new FormData(form);
-                const title = String(fd.get("title") || "").trim();
-                const question = String(fd.get("question") || "").trim();
-                if (!title || !question) {
-                  setPunchError(m.fieldRequired);
-                  return;
-                }
-                setPunchError("");
-                void forms.submit(async (key) => {
-                  await postSite(
-                    `projects/${p.id}/rfis`,
-                    email,
-                    {
-                      title,
-                      question,
-                      drawing: String(fd.get("drawing") || ""),
-                    },
-                    key,
-                  );
-                  return form;
-                });
-              }}
-            >
-              <input name="title" required placeholder={m.hubRfiTitle} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
-              <input name="drawing" placeholder={m.hubRfiDrawing} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
-              <textarea name="question" required placeholder={m.hubRfiQuestion} className="border border-ink/15 px-2 py-1 text-sm min-h-24" />
-              <button className={primaryBtn} disabled={forms.submitting}>
-                {m.tabRfi}
-              </button>
-            </form>
-          ) : null}
-        </Tool>
+        <RfiPanel
+          locale={locale}
+          projectId={p.id}
+          canWrite={Boolean(user)}
+          members={(bundle.members as { user_id: string; name: string; role: string }[]) || []}
+          onChange={load}
+        />
       ) : null}
 
       {tab === "sub" && org.submittals ? (

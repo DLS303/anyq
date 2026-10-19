@@ -22,6 +22,7 @@ from app.routers import (
     plots,
     procurement,
     public,
+    rfi,
     site,
     specialists,
 )
@@ -60,6 +61,8 @@ app.include_router(invitations.router)
 app.include_router(budget.router)
 app.include_router(procurement.router)
 app.include_router(public.router)
+app.include_router(rfi.router)
+app.include_router(rfi.public)
 app.include_router(files.router)
 
 

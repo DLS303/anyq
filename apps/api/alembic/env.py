@@ -2,6 +2,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
+import app.rfi_tables  # noqa: F401  # registers designer-question tables on Base
 from alembic import context
 from app.sql_backend import Base, resolve_database_url
 
