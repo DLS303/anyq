@@ -329,16 +329,20 @@ def test_dev_docs_remain_available():
     assert root.json()["docs"] == "/docs"
 
 
+def test_ready_503_schema_when_migrations_are_unreadable(monkeypatch):
+    def unreadable():
+        raise OSError("migrations unreadable")
+
+    monkeypatch.setattr(health_router, "_script_directory", unreadable)
+    res = client.get("/v1/health/ready")
+    assert res.status_code == 503
+    assert res.json() == {"ok": False, "checks": ["schema"]}
+    assert "migrations" not in res.text
+
+
 def test_production_docs_return_404(tmp_path):
     code = """
 import os
-from sqlalchemy import create_engine
-from app.sql_backend import Base, resolve_database_url
-
-engine = create_engine(resolve_database_url())
-Base.metadata.create_all(engine)
-engine.dispose()
-
 from fastapi.testclient import TestClient
 from app.main import app
 
@@ -372,6 +376,15 @@ print("docs-hidden")
     env["ANYQ_DEMO_MODE"] = "0"
     env.pop("DATABASE_URL", None)
     env.pop("ANYQ_DATA_DIR", None)
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=API_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
     completed = subprocess.run(
         [sys.executable, "-c", code],
         cwd=API_ROOT,

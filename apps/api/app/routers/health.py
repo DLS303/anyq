@@ -131,7 +131,10 @@ def _schema_matches(script: ScriptDirectory, current: set[str]) -> bool:
 
 def _database_checks() -> list[str]:
     """Read alembic_version once. A failed read is a database failure, not a schema failure."""
-    script = _script_directory()
+    try:
+        script = _script_directory()
+    except Exception:  # noqa: BLE001 - failure details stay off the response
+        return [_CHECK_SCHEMA]
     try:
         with _probe_connection() as conn:
             current = set(MigrationContext.configure(conn).get_current_heads())
