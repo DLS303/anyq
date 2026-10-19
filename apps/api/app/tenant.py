@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import re
+from uuid import uuid4
+
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 _BIN_KEY = re.compile(r"^bin:\d{12}$")
 _USER_KEY = re.compile(r"^user:\S+$")
@@ -16,12 +20,29 @@ def company_key(user) -> str:
     return f"user:{getattr(user, 'id', '')}"
 
 
-def assign_company_key(user_id: str, company_bin: str, taken_bin_keys: set[str]) -> tuple[str, bool]:
-    """Return (key, needs_review). A BIN already used by another company does not join it."""
+def claim_company_key(session, user_id: str, company_bin: str) -> tuple[str, bool]:
+    """Reserve a BIN on the caller's open transaction. A conflict becomes user:<id> plus review.
+
+    The caller commits this insert together with the new user. The companies table comes from
+    migration 0002 only. A failed BIN insert rolls the session back; it must be empty aside
+    from that insert.
+    """
     digits = re.sub(r"\D", "", company_bin or "")
-    if len(digits) == 12:
-        key = f"bin:{digits}"
-        if key in taken_bin_keys:
-            return f"user:{user_id}", True
-        return key, False
-    return f"user:{user_id}", False
+    if len(digits) == 12 and _insert_legacy_key(session, f"bin:{digits}"):
+        return f"bin:{digits}", False
+    if session.in_transaction():
+        session.rollback()
+    _insert_legacy_key(session, f"user:{user_id}")
+    return f"user:{user_id}", len(digits) == 12
+
+
+def _insert_legacy_key(session, key: str) -> bool:
+    try:
+        session.execute(
+            text("INSERT INTO companies (id, legacy_key) VALUES (:id, :key)"),
+            {"id": str(uuid4()), "key": key},
+        )
+        session.flush()
+        return True
+    except IntegrityError:
+        return False

@@ -2233,13 +2233,15 @@ class MemoryStore:
             raise ValueError("Нужно согласие на обработку персональных данных")
         pilot = _pilot_flag(body.pilot)
         password_hash = hash_password(body.password)
-        from app.tenant import assign_company_key
+        from app.tenant import claim_company_key
 
         forced_member = False
         saved = None
         for attempt in (1, 2):
             session = self._sql.factory()
             try:
+                uid = f"u-{uuid4().hex[:8]}"
+                key, review = claim_company_key(session, uid, bin_no)
                 needed = {"owner_gate", "rev", "users", "credentials", "consents"}
                 if body.role == "supplier":
                     needed.add("materials")
@@ -2266,18 +2268,6 @@ class MemoryStore:
                 )
                 if taken:
                     raise ValueError("Такой email уже зарегистрирован")
-                uid = f"u-{uuid4().hex[:8]}"
-                reserved = {
-                    item
-                    for item in session.scalars(
-                        select(Record.company_key).where(
-                            Record.collection == "users",
-                            Record.company_key.like("bin:%"),
-                        )
-                    )
-                    if item
-                }
-                key, review = assign_company_key(uid, bin_no, reserved)
                 user = User(
                     id=uid,
                     email=email,
