@@ -22,6 +22,7 @@ env/
 .env
 .env.*
 !.env.example
+!deploy/.env.production.example
 .env.local
 .env.*.local
 

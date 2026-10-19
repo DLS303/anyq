@@ -1,0 +1,7 @@
+# Daily backup of the Anyq data volume. Install on the server as root:
+#   sudo cp deploy/anyq-backup.cron /etc/cron.d/anyq-backup
+#   sudo chmod 644 /etc/cron.d/anyq-backup
+# Archives stay in /var/backups/anyq. Retention comes from deploy/.env.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+15 3 * * * deploy /opt/anyq/deploy/backup.sh >> /var/backups/anyq/backup.log 2>&1

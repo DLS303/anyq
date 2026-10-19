@@ -1,0 +1,78 @@
+name: Deploy
+
+# Manual production deploy over SSH. The job does nothing until the
+# repository secrets DEPLOY_HOST, DEPLOY_USER, and DEPLOY_SSH_KEY exist.
+# Optional secret DEPLOY_KNOWN_HOSTS pins the server key. Without it, the
+# first connection stores the key with StrictHostKeyChecking=accept-new.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to check out on the server (/opt/anyq)
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Require deploy secrets
+        id: check
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_SSH_KEY" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deploy is disabled until DEPLOY_HOST, DEPLOY_USER, and DEPLOY_SSH_KEY exist as repository secrets."
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          case "$DEPLOY_REF" in
+            ""|*[!A-Za-z0-9._/-]*)
+              echo "Ref contains unsupported characters." >&2
+              exit 1
+              ;;
+          esac
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          strict=accept-new
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/known_hosts
+            strict=yes
+          fi
+          ssh -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking="$strict" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd /opt/anyq && DEPLOY_REF=$(printf '%q' "$DEPLOY_REF") ./deploy/deploy.sh"
