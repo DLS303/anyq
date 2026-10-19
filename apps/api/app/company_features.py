@@ -336,6 +336,10 @@ def ensure_feature(company_id: str, key: str) -> None:
 
 def resolve_path_company(collection: str, doc_id: str, user: User) -> str | None:
     """One query for path access. The company id is the owner's stored key, as in the bundle."""
+    if collection == "drawing_revision":
+        from app.markups import company_for_revision
+
+        return company_for_revision(doc_id, user)
     entity = aliased(Record)
     project = aliased(Record)
     member = aliased(Record)
@@ -372,11 +376,14 @@ def resolve_path_company(collection: str, doc_id: str, user: User) -> str | None
     return company_key(owner)
 
 
-def _path_target(path_params) -> tuple[str, str] | None:
+def _path_target(path_params, path: str = "") -> tuple[str, str] | None:
     for name, collection in _PATH_IDS:
         value = path_params.get(name)
         if value:
             return collection, str(value)
+    revision_id = str(path_params.get("id") or "").strip()
+    if revision_id and "/revisions/" in path and "/markups" in path:
+        return "drawing_revision", revision_id
     return None
 
 
@@ -387,7 +394,7 @@ def require_feature(key: str):
         raise RuntimeError(f"unknown feature {key}")
 
     def dependency(request: Request, user: User = Depends(require_user)) -> User:
-        target = _path_target(request.path_params)
+        target = _path_target(request.path_params, request.url.path)
         if target is None:
             raise HTTPException(status_code=404, detail="Не найдено")
         company_id = resolve_path_company(target[0], target[1], user)
