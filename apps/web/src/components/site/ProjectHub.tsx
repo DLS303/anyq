@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { addProjectMember, fetchSiteBundle, postSite, removeProjectMember } from "@/lib/api";
 import { money } from "@/lib/format";
-import { DEMO_MODE, menuTabVisible, objectUsesPilotLayout, type CompanyFlags } from "@/lib/features";
+import { DEMO_MODE, objectMenus, type CompanyFlags } from "@/lib/features";
 import { useProjectFeatures } from "@/lib/useFeature";
 import { canEditProject } from "@/lib/pilot";
 import { siteRoleLabel, statusLabel } from "@/lib/report";
@@ -70,29 +70,6 @@ type Tab =
   | "ks";
 
 type Msg = ReturnType<typeof t>;
-
-const LEGACY_TABS: Tab[] = [
-  "home",
-  "daily",
-  "rfi",
-  "sub",
-  "punch",
-  "qa",
-  "draw",
-  "gantt",
-  "money",
-  "crew",
-  "meet",
-  "dir",
-  "ks",
-];
-
-const PILOT_MAIN: Tab[] = ["today", "punch", "procurement", "money", "qa"];
-const PILOT_MORE: Tab[] = ["rfi", "gantt", "crew", "meet", "dir", "sub", "draw", "ks"];
-
-function visibleTabs(tabs: Tab[], flags: CompanyFlags | null) {
-  return tabs.filter((id) => menuTabVisible(id, flags));
-}
 
 function tabLabel(id: Tab, m: Msg, pilot: boolean) {
   switch (id) {
@@ -162,9 +139,10 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const companyFlags =
     bundle && bundle.features && typeof bundle.features === "object" ? (bundle.features as CompanyFlags) : null;
   const org = useProjectFeatures(companyFlags);
-  const pilot = objectUsesPilotLayout(companyFlags);
-  const mainTabs = visibleTabs(pilot ? PILOT_MAIN : LEGACY_TABS, companyFlags);
-  const moreTabs = visibleTabs(PILOT_MORE, companyFlags);
+  const menus = objectMenus(companyFlags);
+  const pilot = menus.pilot;
+  const mainTabs = menus.main as Tab[];
+  const moreTabs = menus.more as Tab[];
   const menuKey = `${pilot ? "pilot" : "legacy"}:${mainTabs.join(".")}:${moreTabs.join(".")}`;
 
   useEffect(() => {

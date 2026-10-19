@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 
 from app.authutil import load_secret
 from app.config import settings
@@ -26,6 +27,7 @@ from app.routers import (
     specialists,
 )
 from app.security import PublicRobotsMiddleware, SecurityHeadersMiddleware
+from app.sql_backend import ChangedByOther
 
 load_secret()
 
@@ -61,6 +63,11 @@ app.include_router(budget.router)
 app.include_router(procurement.router)
 app.include_router(public.router)
 app.include_router(files.router)
+
+
+@app.exception_handler(ChangedByOther)
+def changed_by_other(_request: Request, exc: ChangedByOther):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @app.get("/")

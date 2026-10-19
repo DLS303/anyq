@@ -107,9 +107,7 @@ def test_share_expiry_revoke_and_public_copy():
     assert token
     pad = "=" * (-len(token) % 4)
     assert len(base64.urlsafe_b64decode(token + pad)) >= 16
-    saved = store.db_path()
-    with open(saved, "rb") as handle:
-        db_text = handle.read().decode("latin-1")
+    db_text = store._sql.stored_text()
     assert token not in db_text
     assert store.daily_logs[log["id"]].share_token_sha256 in db_text
     assert original_id in db_text
