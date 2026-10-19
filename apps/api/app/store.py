@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from app.authutil import hash_password, make_token, verify_password
 from app.geo import centroid, haversine_km
-from app.legal import PD_VERSION, pd_sha256
+from app.legal import PD_VERSION, ai_document, pd_sha256, privacy_document
 from app.schemas import (
     FUNNEL_STAGES,
     ChatMessage,
@@ -103,6 +103,7 @@ from app.site_models import (
     SiteRole,
     Submittal,
     Timesheet,
+    VoiceNote,
 )
 from app.transitions import (
     MATERIAL_ORDER_TRANSITIONS,
@@ -230,6 +231,24 @@ def db_file() -> Path:
     if override:
         return Path(override)
     return Path(__file__).resolve().parents[3] / "data" / "db.json"
+
+
+def mask_email(email: str) -> str:
+    local, sep, domain = email.partition("@")
+    if not sep or not domain:
+        return "***"
+    return f"{local[:1]}***@{domain}"
+
+
+def _deadline_or_blank(value: str | None) -> str:
+    if value is None or not value.strip():
+        return ""
+    text = value.strip()
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("Срок в формате ГГГГ-ММ-ДД") from exc
+    return text
 
 
 def _slugify(text: str) -> str:
@@ -1653,13 +1672,27 @@ class MemoryStore:
     def consents_for(self, user_id: str) -> list[ConsentRecord]:
         return [item for item in self.consents if item.user_id == user_id]
 
+    def _latest_consent(self, user_id: str, kind: str, version: str | None = None) -> ConsentRecord | None:
+        found: ConsentRecord | None = None
+        for item in self.consents:
+            if item.user_id != user_id or item.type != kind:
+                continue
+            if version is not None and item.text_version != version:
+                continue
+            found = item
+        return found
+
+    def _consent_is_active(self, row: ConsentRecord | None) -> bool:
+        return row is not None and row.action == "grant" and not row.revoked_at
+
     def has_current_pd_consent(self, user_id: str) -> bool:
-        return any(
-            item.user_id == user_id and item.type == "offer_pd" and item.text_version == PD_VERSION
-            for item in self.consents
-        )
+        return self._consent_is_active(self._latest_consent(user_id, "offer_pd", PD_VERSION))
+
+    def has_ai_consent(self, user_id: str) -> bool:
+        return self._consent_is_active(self._latest_consent(user_id, "ai", ai_document().version))
 
     def _append_consent_unlocked(self, user: User, ip: str, user_agent: str) -> ConsentRecord:
+        privacy = privacy_document()
         record = ConsentRecord(
             id=f"c-{uuid4().hex[:12]}",
             user_id=user.id,
@@ -1667,11 +1700,78 @@ class MemoryStore:
             text_version=PD_VERSION,
             text_sha256=pd_sha256(),
             granted_at=_now(),
+            action="grant",
+            ip=ip,
+            user_agent=user_agent,
+            login=user.email,
+            privacy_version=privacy.version,
+            privacy_sha256=privacy.sha256,
+        )
+        self.consents.append(record)
+        return record
+
+    def _new_ai_consent(self, user: User, ip: str, user_agent: str) -> ConsentRecord:
+        doc = ai_document()
+        return ConsentRecord(
+            id=f"c-{uuid4().hex[:12]}",
+            user_id=user.id,
+            type="ai",
+            text_version=doc.version,
+            text_sha256=doc.sha256,
+            granted_at=_now(),
+            action="grant",
             ip=ip,
             user_agent=user_agent,
             login=user.email,
         )
-        self.consents.append(record)
+
+    def append_ai_consent(self, user: User, *, ip: str = "", user_agent: str = "") -> ConsentRecord:
+        if self.has_ai_consent(user.id):
+            current = self._latest_consent(user.id, "ai", ai_document().version)
+            if current is not None:
+                return current
+        record = self._new_ai_consent(user, ip, user_agent)
+        with self._lock:
+            if self.has_ai_consent(user.id):
+                current = self._latest_consent(user.id, "ai", ai_document().version)
+                if current is not None:
+                    return current
+            self.consents.append(record)
+            self._save_unlocked()
+        return record
+
+    def revoke_consent(self, user: User, consent_id: str, *, ip: str = "", user_agent: str = "") -> ConsentRecord:
+        target = next((item for item in self.consents if item.id == consent_id and item.user_id == user.id), None)
+        if target is None:
+            raise LookupError("Согласие не найдено")
+        if target.action != "grant":
+            raise ValueError("Можно отозвать только выданное согласие")
+        latest = self._latest_consent(user.id, target.type, target.text_version)
+        if latest is None or latest.id != target.id or not self._consent_is_active(latest):
+            raise ValueError("Согласие уже отозвано")
+        record = ConsentRecord(
+            id=f"c-{uuid4().hex[:12]}",
+            user_id=user.id,
+            type=target.type,
+            text_version=target.text_version,
+            text_sha256=target.text_sha256,
+            granted_at=target.granted_at,
+            action="revoke",
+            revoked_at=_now(),
+            ip=ip,
+            user_agent=user_agent,
+            login=user.email,
+            provider=target.provider,
+            country=target.country,
+            privacy_version=target.privacy_version,
+            privacy_sha256=target.privacy_sha256,
+        )
+        with self._lock:
+            latest = self._latest_consent(user.id, target.type, target.text_version)
+            if latest is None or latest.id != target.id or not self._consent_is_active(latest):
+                raise ValueError("Согласие уже отозвано")
+            self.consents.append(record)
+            self._save_unlocked()
         return record
 
     def append_cross_border_consent(
@@ -1774,6 +1874,8 @@ class MemoryStore:
                 )
                 self.materials[mid] = item
             self._append_consent_unlocked(user, ip, user_agent)
+            if body.consent_ai:
+                self.consents.append(self._new_ai_consent(user, ip, user_agent))
             self._save_unlocked()
             return user, make_token(uid)
 
@@ -1783,6 +1885,7 @@ class MemoryStore:
         password: str,
         *,
         consent: bool = False,
+        consent_ai: bool = False,
         ip: str = "",
         user_agent: str = "",
     ) -> tuple[User, str]:
@@ -1798,6 +1901,8 @@ class MemoryStore:
             with self._lock:
                 self._append_consent_unlocked(user, ip, user_agent)
                 self._save_unlocked()
+        if consent_ai:
+            self.append_ai_consent(user, ip=ip, user_agent=user_agent)
         return user, make_token(user.id)
 
     def list_materials(self, category: str | None = None, q: str | None = None) -> list[Material]:
@@ -1922,6 +2027,107 @@ class MemoryStore:
             self._save_unlocked()
             return order
 
+    def can_manage_project(self, user: User, project: Project) -> bool:
+        if user.role == "admin":
+            return True
+        return bool(project.owner_id) and project.owner_id == user.id
+
+    def create_project(
+        self,
+        user: User,
+        title: str,
+        address: str = "",
+        deadline: str | None = None,
+        budget_kzt: int | None = None,
+    ) -> Project:
+        if user.role not in ("admin", "owner"):
+            raise PermissionError("Создавать объект может владелец или администратор")
+        name = title.strip()
+        if len(name) < 3 or len(name) > 120:
+            raise ValueError("Название от 3 до 120 символов")
+        place = address.strip()
+        if len(place) > 200:
+            raise ValueError("Адрес длиннее 200 символов")
+        if budget_kzt is not None and budget_kzt < 0:
+            raise ValueError("Бюджет не может быть отрицательным")
+        finish = _deadline_or_blank(deadline)
+        with self._lock:
+            pid = f"prj-{uuid4().hex[:8]}"
+            base = _slugify(name)[:40] or "object"
+            taken = {item.slug for item in self.projects.values()}
+            slug = base if base not in taken else f"{base}-{pid[-4:]}"
+            project = Project(
+                id=pid,
+                slug=slug[:48],
+                title=name,
+                owner_id=user.id,
+                address=place,
+                status="active",
+                start="",
+                finish=finish,
+                budget_kzt=budget_kzt,
+            )
+            self.projects[pid] = project
+            self._save_unlocked()
+            return project
+
+    def member_view(self, user: User, role: str) -> dict:
+        return {
+            "user_id": user.id,
+            "name": user.full_name,
+            "role": role,
+            "email": mask_email(user.email),
+        }
+
+    def list_project_members(self, project: Project) -> list[dict]:
+        rows = []
+        for row in self.directory.values():
+            if row.project_id != project.id:
+                continue
+            person = self.get_user(row.user_id)
+            if person is None:
+                continue
+            rows.append(self.member_view(person, row.role_on_site))
+        return rows
+
+    def add_project_member(self, actor: User, pid: str, email: str, role: str) -> dict:
+        project = self.get_project(pid)
+        if not project:
+            raise LookupError("Проект не найден")
+        if not self.can_manage_project(actor, project):
+            raise PermissionError("Недостаточно прав")
+        person = self.get_user_by_email(email)
+        if person is None:
+            raise LookupError("Пользователь не найден")
+        if any(row.project_id == project.id and row.user_id == person.id for row in self.directory.values()):
+            raise ValueError("Участник уже добавлен")
+        with self._lock:
+            row = DirectoryRow(
+                id=f"dir-{uuid4().hex[:8]}",
+                project_id=project.id,
+                user_id=person.id,
+                company=person.company,
+                role_on_site=role,
+            )
+            self.directory[row.id] = row
+            self._save_unlocked()
+        return self.member_view(person, role)
+
+    def remove_project_member(self, actor: User, pid: str, user_id: str) -> dict:
+        project = self.get_project(pid)
+        if not project:
+            raise LookupError("Проект не найден")
+        if not self.can_manage_project(actor, project):
+            raise PermissionError("Недостаточно прав")
+        rows = [row for row in self.directory.values() if row.project_id == project.id and row.user_id == user_id]
+        if not rows:
+            raise LookupError("Участник не найден")
+        with self._lock:
+            for row in rows:
+                self.directory.pop(row.id, None)
+            self._save_unlocked()
+        return {"user_id": user_id}
+
     def get_project(self, pid: str) -> Project | None:
         if pid in self.projects:
             return self.projects[pid]
@@ -1951,9 +2157,10 @@ class MemoryStore:
         open_inc = sum(1 for x in self.incidents.values() if x.project_id == p.id and not x.closed)
         fail_insp = sum(1 for x in self.inspections.values() if x.project_id == p.id and x.result == "fail")
         health = "green"
+        over_budget = isinstance(budget, int) and budget > 0 and actual > budget * 0.85
         if open_inc or fail_insp:
             health = "red"
-        elif open_rfi or open_punch or actual > budget * 0.85:
+        elif open_rfi or open_punch or over_budget:
             health = "amber"
         return {
             "project": p.model_dump(),
@@ -2004,6 +2211,18 @@ class MemoryStore:
             raise ValueError("Не больше 10 фото")
         with self._lock:
             log.photos.append(photo)
+            self.daily_logs[log.id] = log
+            self._save_unlocked()
+            return log
+
+    def add_daily_voice(self, log_id: str, note: VoiceNote) -> DailyLog:
+        log = self.daily_logs.get(log_id)
+        if not log:
+            raise ValueError("Запись не найдена")
+        if len(log.voice_notes) >= 5:
+            raise ValueError("Не больше 5 голосовых заметок")
+        with self._lock:
+            log.voice_notes.append(note)
             self.daily_logs[log.id] = log
             self._save_unlocked()
             return log

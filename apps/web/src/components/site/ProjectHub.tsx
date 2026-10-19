@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { fetchSiteBundle, postSite } from "@/lib/api";
+import { addProjectMember, fetchSiteBundle, postSite, removeProjectMember } from "@/lib/api";
 import { money } from "@/lib/format";
 import { canEditProject, PILOT_MODE } from "@/lib/pilot";
 import { siteRoleLabel, statusLabel } from "@/lib/report";
@@ -132,6 +132,12 @@ function tabLabel(id: Tab, m: Msg, pilot: boolean) {
   }
 }
 
+function directoryRole(role: string, m: Msg) {
+  const labeled = siteRoleLabel(role, m);
+  if (labeled === m.roleMember && role) return role;
+  return labeled;
+}
+
 function healthLabel(health: string, m: Msg) {
   if (health === "green") return m.healthOk;
   if (health === "red") return m.healthBad;
@@ -187,7 +193,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       contractor_id?: string | null;
     };
     health: string;
-    budget_kzt: number;
+    budget_kzt: number | null;
     committed_kzt: number;
     actual_kzt: number;
     open_rfi: number;
@@ -288,7 +294,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
 
       {tab === "home" ? (
         <div className="grid sm:grid-cols-4 gap-3">
-          <Kpi label={m.tabBudget} value={money(snap.budget_kzt, locale)} />
+          <Kpi label={m.tabBudget} value={snap.budget_kzt == null ? m.objectBudgetEmpty : money(snap.budget_kzt, locale)} />
           <Kpi label={m.hubCommitted} value={money(snap.committed_kzt, locale)} />
           <Kpi label={m.hubActual} value={money(snap.actual_kzt, locale)} />
           <Kpi
@@ -314,7 +320,6 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
             projectId={p.id}
             logs={logs}
             canWrite={Boolean(user) && canEdit}
-            startOpen={logs.length > 0}
             onLogin={goLogin}
             onChange={load}
           />
@@ -327,7 +332,6 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
           projectId={p.id}
           logs={logs}
           canWrite={Boolean(user) && canEdit}
-          startOpen
           onLogin={goLogin}
           onChange={load}
         />
@@ -826,13 +830,72 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         <Tool
           title={m.tabDir}
           empty={m.hubEmpty}
-          items={bundle.directory as { id: string; company: string; role_on_site: string }[]}
+          items={((bundle.members as { user_id: string; name: string; role: string; email: string }[]) || []).map((row) => ({
+            ...row,
+            id: row.user_id,
+          }))}
           render={(x) => (
-            <p>
-              {x.role_on_site} · {x.company}
-            </p>
+            <div className="flex items-center justify-between gap-3">
+              <p>
+                {directoryRole(x.role, m)} · {x.name}
+                <span className="mt-1 block text-xs text-ink/50">{x.email}</span>
+              </p>
+              {bundle.can_manage_members ? (
+                <button
+                  type="button"
+                  className="min-h-12 shrink-0 text-xs underline"
+                  onClick={async () => {
+                    try {
+                      await removeProjectMember(p.id, x.user_id);
+                      toast(m.hubSaved);
+                      load();
+                    } catch (err) {
+                      toast(err instanceof Error ? err.message : m.hubSaveError);
+                    }
+                  }}
+                >
+                  {m.memberRemove}
+                </button>
+              ) : null}
+            </div>
           )}
-        />
+        >
+          {bundle.can_manage_members ? (
+            <form
+              className="mb-4 grid gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const form = event.currentTarget;
+                const fd = new FormData(form);
+                void forms.submit(async (key) => {
+                  await addProjectMember(
+                    p.id,
+                    {
+                      email: String(fd.get("email") || ""),
+                      role: String(fd.get("role") || "foreman"),
+                    },
+                    key,
+                  );
+                  return form;
+                });
+              }}
+            >
+              <input name="email" type="email" required placeholder={m.memberEmail} className="min-h-12 border border-ink/15 px-2 py-1 text-sm" />
+              <label className="grid gap-1 text-sm">
+                {m.memberRole}
+                <select name="role" defaultValue="foreman" className="min-h-12 border border-ink/15 bg-white px-2 text-sm">
+                  <option value="foreman">{m.roleForeman}</option>
+                  <option value="supervisor">{m.supervisor}</option>
+                  <option value="procurement">{m.roleProcurement}</option>
+                  <option value="customer">{m.roleCustomer}</option>
+                </select>
+              </label>
+              <button className={primaryBtn} disabled={forms.submitting}>
+                {m.memberAdd}
+              </button>
+            </form>
+          ) : null}
+        </Tool>
       ) : null}
 
       {tab === "ks" ? (

@@ -1,16 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { fetchProjects } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { createSiteProject, fetchProjects } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { money } from "@/lib/format";
 import { t } from "@/i18n/messages";
 import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
+import { toast } from "@/lib/toast";
 import type { Locale } from "@/lib/types";
 
 type Snap = {
   project: { id: string; slug: string; title: string; address: string };
   health: string;
-  budget_kzt: number;
+  budget_kzt: number | null;
   open_rfi: number;
   open_punch: number;
 };
@@ -24,8 +28,60 @@ function healthLabel(health: string, locale: Locale) {
 
 export function ProjectList({ locale }: { locale: Locale }) {
   const m = t(locale);
+  const router = useRouter();
+  const { user } = useAuth();
+  const canCreate = user?.role === "admin" || user?.role === "owner";
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const query = useAsync(() => fetchProjects() as Promise<Snap[]>, []);
   const items = query.data ?? [];
+
+  async function create(form: HTMLFormElement) {
+    const fd = new FormData(form);
+    const title = String(fd.get("title") || "").trim();
+    const address = String(fd.get("address") || "").trim();
+    const deadline = String(fd.get("deadline") || "").trim();
+    const budgetRaw = String(fd.get("budget") || "").trim();
+    const body: { title: string; address: string; deadline?: string; budget_kzt?: number } = { title, address };
+    if (deadline) body.deadline = deadline;
+    if (budgetRaw) body.budget_kzt = Number(budgetRaw);
+    setBusy(true);
+    try {
+      const created = await createSiteProject(body);
+      toast(m.hubSaved);
+      router.push(`/${locale}/site/${created.id}`);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : m.hubSaveError);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const creator = canCreate ? (
+    <div className="mb-4">
+      {open ? (
+        <form
+          className="grid gap-2 border border-ink/10 bg-white/70 p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void create(event.currentTarget);
+          }}
+        >
+          <input name="title" required minLength={3} maxLength={120} placeholder={m.objectName} aria-label={m.objectName} className="min-h-12 border border-ink/15 px-3 text-sm" />
+          <input name="address" maxLength={200} placeholder={m.objectAddress} aria-label={m.objectAddress} className="min-h-12 border border-ink/15 px-3 text-sm" />
+          <input name="deadline" type="date" aria-label={m.objectDeadline} className="min-h-12 border border-ink/15 px-3 text-sm" />
+          <input name="budget" type="number" min={0} step={1} placeholder={m.objectBudget} aria-label={m.objectBudget} className="min-h-12 border border-ink/15 px-3 text-sm" />
+          <button type="submit" className="inline-flex min-h-12 items-center justify-center rounded-full bg-pine px-4 text-sm font-medium text-paper disabled:opacity-50" disabled={busy}>
+            {m.objectCreate}
+          </button>
+        </form>
+      ) : (
+        <button type="button" className="inline-flex min-h-12 items-center justify-center rounded-full bg-pine px-4 text-sm font-medium text-paper" onClick={() => setOpen(true)}>
+          {m.objectNew}
+        </button>
+      )}
+    </div>
+  ) : null;
 
   if (query.loading) return <LoadingSkeleton label={m.hubLoading} />;
   if (query.status === "error") {
@@ -33,17 +89,21 @@ export function ProjectList({ locale }: { locale: Locale }) {
   }
   if (!items.length) {
     return (
-      <div className="border border-ink/10 bg-white/50 p-6 text-center">
-        <p className="text-sm text-ink/70">{m.listEmpty}</p>
-        <Link href={`/${locale}/crm`} className="mt-4 inline-flex min-h-12 items-center text-sm underline">
-          {m.hubFromCrm}
-        </Link>
+      <div>
+        {creator}
+        <div className="border border-ink/10 bg-white/50 p-6 text-center">
+          <p className="text-sm text-ink/70">{m.listEmpty}</p>
+          <Link href={`/${locale}/crm`} className="mt-4 inline-flex min-h-12 items-center text-sm underline">
+            {m.hubFromCrm}
+          </Link>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="grid gap-3">
+      {creator}
       {items.map((row) => (
         <Link
           key={row.project.id}
@@ -58,7 +118,7 @@ export function ProjectList({ locale }: { locale: Locale }) {
             <p className="text-xs uppercase tracking-wider">{healthLabel(row.health, locale)}</p>
           </div>
           <p className="mt-3 text-sm">
-            {money(row.budget_kzt, locale)} · {m.hubIssueRfi} {row.open_rfi} · {m.hubIssuePunch} {row.open_punch}
+            {row.budget_kzt == null ? m.objectBudgetEmpty : money(row.budget_kzt, locale)} · {m.hubIssueRfi} {row.open_rfi} · {m.hubIssuePunch} {row.open_punch}
           </p>
         </Link>
       ))}

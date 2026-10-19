@@ -43,10 +43,12 @@ export function LoginView({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [pdConsent, setPdConsent] = useState(false);
+  const [aiConsent, setAiConsent] = useState(false);
 
   useEffect(() => {
     setMode(PILOT_MODE ? "login" : initialMode);
     setPdConsent(false);
+    setAiConsent(false);
   }, [initialMode]);
 
   function toast(message: string) {
@@ -60,11 +62,11 @@ export function LoginView({
     setBusy(true);
     try {
       if (!pdConsent) {
-        setError(locale === "kk" ? "Дербес деректерді өңдеуге келісім керек" : "Нужно согласие на обработку персональных данных");
+        setError(m.consentRequired);
         setBusy(false);
         return;
       }
-      const res = await loginRequest(email, password, true);
+      const res = await loginRequest(email, password, true, aiConsent);
       login(res.user, res.token);
       toast(`Добро пожаловать в ANYQ, ${res.user.full_name}`);
       router.push(`/${locale}/cabinet`);
@@ -111,7 +113,7 @@ export function LoginView({
       }
     }
     if (!pdConsent) {
-      setError(locale === "kk" ? "Дербес деректерді өңдеуге келісім керек" : "Нужно согласие на обработку персональных данных");
+      setError(m.consentRequired);
       return;
     }
     setBusy(true);
@@ -132,6 +134,7 @@ export function LoginView({
         sku_price: role === "supplier" ? price : 0,
         sku_stock: role === "supplier" ? Number(skuStock) || 0 : 0,
         consent_offer_pd: true,
+        consent_ai: aiConsent,
       });
       login(res.user, res.token);
       if (role === "supplier") {
@@ -223,6 +226,7 @@ export function LoginView({
               </div>
 
               <ConsentField locale={locale} checked={pdConsent} onChange={setPdConsent} />
+              <AiConsentField locale={locale} checked={aiConsent} onChange={setAiConsent} />
 
               <button
                 type="submit"
@@ -415,6 +419,7 @@ export function LoginView({
               </label>
 
               <ConsentField locale={locale} checked={pdConsent} onChange={setPdConsent} />
+              <AiConsentField locale={locale} checked={aiConsent} onChange={setAiConsent} />
 
               <button type="submit" disabled={busy || !pdConsent} className="btn-ice w-full font-bold text-sm shadow-navy justify-center mt-1 disabled:opacity-50">
                 {busy ? "Регистрация..." : role === "supplier" ? "Зарегистрировать и открыть каталог" : m.register}
@@ -459,6 +464,35 @@ export function LoginView({
         </aside>
       </div>
     </div>
+  );
+}
+
+function AiConsentField({
+  locale,
+  checked,
+  onChange,
+}: {
+  locale: Locale;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  const m = t(locale);
+  return (
+    <label className="flex items-start gap-2.5 text-sm text-slate-700">
+      <input
+        type="checkbox"
+        className="mt-1 h-4 w-4 accent-[#2F5B8A]"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span>
+        {m.consentAiAllow}{" "}
+        <Link href={`/${locale}/legal/ai-consent`} className="underline text-pine" target="_blank" rel="noopener noreferrer">
+          {m.consentAiDoc}
+        </Link>
+        . {m.consentAiHint}
+      </span>
+    </label>
   );
 }
 

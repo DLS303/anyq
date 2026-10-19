@@ -463,10 +463,10 @@ export function fetchMe() {
   return request<User>("/v1/auth/me");
 }
 
-export function loginRequest(email: string, password: string, consentOfferPd: boolean) {
+export function loginRequest(email: string, password: string, consentOfferPd: boolean, consentAi = false) {
   return request<{ user: User; token: string }>("/v1/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email, password, consent_offer_pd: consentOfferPd }),
+    body: JSON.stringify({ email, password, consent_offer_pd: consentOfferPd, consent_ai: consentAi }),
   });
 }
 
@@ -486,6 +486,7 @@ export function registerRequest(body: {
   sku_price: number;
   sku_stock: number;
   consent_offer_pd: boolean;
+  consent_ai?: boolean;
 }) {
   return request<{ user: User; token: string }>("/v1/auth/register", {
     method: "POST",
@@ -578,6 +579,80 @@ export async function uploadDailyPhotos(logId: string, files: File[]) {
   }>;
   if (!res.ok) throw new Error(detailOf(json, res.statusText));
   return json.data;
+}
+
+export type ConsentRow = {
+  id: string;
+  type: string;
+  text_version: string;
+  text_sha256: string;
+  granted_at: string;
+  revoked_at?: string | null;
+  action?: "grant" | "revoke" | string;
+};
+
+export type ConsentDocument = {
+  key: string;
+  version: string;
+  sha256: string;
+};
+
+export function createSiteProject(body: {
+  title: string;
+  address: string;
+  deadline?: string;
+  budget_kzt?: number;
+}) {
+  return request<{ id: string }>("/v1/site/projects", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function addProjectMember(projectId: string, body: { email: string; role: string }, idempotencyKey?: string) {
+  const headers = new Headers();
+  if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
+  return request(`/v1/site/projects/${projectId}/members`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers,
+  });
+}
+
+export function removeProjectMember(projectId: string, userId: string) {
+  return request(`/v1/site/projects/${projectId}/members/${userId}`, { method: "DELETE" });
+}
+
+export async function uploadDailyVoice(logId: string, file: Blob, durationS: number) {
+  const headers = new Headers();
+  applyAuth(headers);
+  const type = file.type || "audio/webm";
+  const ext = type.includes("mp4") || type.includes("m4a") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
+  const fd = new FormData();
+  fd.append("file", file, `note.${ext}`);
+  fd.append("duration_s", String(durationS));
+  const path = `/v1/site/daily/${logId}/voice`;
+  const res = await fetch(`${getApiBase()}${path}`, { method: "POST", headers, body: fd });
+  sessionExpired(path, res, headers);
+  const json = (await res.json()) as Envelope<Record<string, unknown>>;
+  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  return json.data;
+}
+
+export function fetchConsents() {
+  return request<ConsentRow[]>("/v1/auth/consents");
+}
+
+export function fetchConsentDocuments() {
+  return request<ConsentDocument[]>("/v1/auth/consents/documents");
+}
+
+export function grantAiConsent() {
+  return request<ConsentRow>("/v1/auth/consents/ai", { method: "POST" });
+}
+
+export function revokeConsent(id: string) {
+  return request<ConsentRow>(`/v1/auth/consents/${id}/revoke`, { method: "POST" });
 }
 
 export function sendChat(email: string, tid: string, text: string) {

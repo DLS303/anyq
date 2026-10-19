@@ -9,7 +9,18 @@ CheckResult = Literal["pass", "fail", "na"]
 CoStatus = Literal["draft", "submitted", "approved", "rejected"]
 TaskStatus = Literal["not_started", "in_progress", "done", "blocked"]
 LogWeather = Literal["clear", "cloud", "rain", "snow", "wind"]
-SiteRole = Literal["buyer", "contractor", "supervisor", "architect", "surveyor", "supplier", "foreman"]
+SiteRole = Literal[
+    "buyer",
+    "contractor",
+    "supervisor",
+    "architect",
+    "surveyor",
+    "supplier",
+    "foreman",
+    "procurement",
+    "customer",
+]
+MemberRole = Literal["foreman", "supervisor", "procurement", "customer"]
 
 
 class Project(BaseModel):
@@ -23,7 +34,7 @@ class Project(BaseModel):
     status: str = "active"
     start: str = ""
     finish: str = ""
-    budget_kzt: int = 0
+    budget_kzt: int | None = None
 
 
 class DailyPhoto(BaseModel):
@@ -34,12 +45,19 @@ class DailyPhoto(BaseModel):
     taken_at: str | None = None
 
 
+class VoiceNote(BaseModel):
+    file_id: str
+    duration_s: int = 0
+    created_at: str = ""
+    content_type: str = ""
+
+
 class DailyLog(BaseModel):
     id: str
     project_id: str
     day: str
     weather: LogWeather = "clear"
-    temp_c: int = 20
+    temp_c: int | None = None
     workers: int = 0
     notes: str = ""
     delays: str = ""
@@ -47,6 +65,7 @@ class DailyLog(BaseModel):
     author_id: str = ""
     author_role: str = ""
     photos: list[DailyPhoto] = []
+    voice_notes: list[VoiceNote] = []
     share_token_sha256: str | None = None
     share_expires_at: str | None = None
     share_revoked: bool = False

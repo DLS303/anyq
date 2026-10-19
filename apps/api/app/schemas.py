@@ -553,26 +553,32 @@ class RegisterBody(BaseModel):
     sku_price: int = 0
     sku_stock: float = 0
     consent_offer_pd: bool = False
+    consent_ai: bool = False
 
 
 class LoginBody(BaseModel):
     email: str
     password: str
     consent_offer_pd: bool = False
+    consent_ai: bool = False
 
 
 class ConsentRecord(BaseModel):
     id: str
     user_id: str
-    type: Literal["offer_pd", "cross_border"] = "offer_pd"
+    type: Literal["offer_pd", "cross_border", "ai"] = "offer_pd"
     text_version: str
     text_sha256: str
     granted_at: str
+    action: Literal["grant", "revoke"] = "grant"
+    revoked_at: str | None = None
     ip: str = ""
     user_agent: str = ""
     login: str = ""
     provider: str = ""
     country: str = ""
+    privacy_version: str = ""
+    privacy_sha256: str = ""
 
 
 class CrossBorderConsentBody(BaseModel):
@@ -587,5 +593,5 @@ class StoredUpload(BaseModel):
     content_type: str
     created_at: str
     project_id: str | None = None
-    kind: Literal["upload", "original", "public"] = "upload"
+    kind: Literal["upload", "original", "public", "voice"] = "upload"
     daily_log_id: str | None = None

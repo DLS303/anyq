@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ConsentsPanel } from "@/components/cabinet/ConsentsPanel";
 import { ProjectList } from "@/components/site/ProjectList";
 import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
 import Link from "next/link";
@@ -159,6 +160,7 @@ export function CabinetView({ locale }: { locale: Locale }) {
 
   return (
     <div className="grid gap-8">
+      <ConsentsPanel locale={locale} />
       {/* Profile Bar with Instant Role Switching */}
       <div className="glass-strong rounded-3xl p-6 sm:p-7 shadow-luxury border border-slate-200/90">
         <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-100">
