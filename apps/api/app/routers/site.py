@@ -1,10 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from app.deps import require_user
+from app.idempotency import IdempotencyConflict, run_idempotent
 from app.media import process_upload
 from app.paths import write_stored_file
 from app.schemas import User
@@ -17,7 +18,7 @@ from app.shares import (
     share_is_active,
     token_hash,
 )
-from app.site_models import DailyPhoto, Project
+from app.site_models import DailyPhoto, LogWeather, Project
 from app.store import store
 
 router = APIRouter(prefix="/v1/site", tags=["site"])
@@ -25,11 +26,12 @@ router = APIRouter(prefix="/v1/site", tags=["site"])
 
 class DailyIn(BaseModel):
     day: str
-    weather: str = "clear"
+    weather: LogWeather = "clear"
     temp_c: int = 20
     workers: int = 0
     notes: str = ""
     delays: str = ""
+    delay_hours: float = Field(default=0, ge=0, le=24)
 
 
 class ShareIn(BaseModel):
@@ -58,13 +60,21 @@ class StatusIn(BaseModel):
     status: str
 
 
+class CheckItemIn(BaseModel):
+    label: str
+    result: str
+    comment: str = ""
+
+
 class InspIn(BaseModel):
     title: str
     checklist: list[str] = []
+    items: list[CheckItemIn] = []
     result: str = "open"
     inspector: str = ""
     notes: str = ""
     day: str = ""
+    photo: str = ""
 
 
 class IncidentIn(BaseModel):
@@ -83,12 +93,26 @@ class TsIn(BaseModel):
     notes: str = ""
 
 
+class PersonIn(BaseModel):
+    role: str
+    name: str = ""
+
+
+class DecisionIn(BaseModel):
+    text: str
+    owner_role: str
+    due: str = ""
+
+
 class MeetIn(BaseModel):
     title: str
     day: str
     attendees: str = ""
     decisions: str = ""
     actions: str = ""
+    participants: list[PersonIn] = []
+    agenda: str = ""
+    decision_items: list[DecisionIn] = []
 
 
 class PctIn(BaseModel):
@@ -147,6 +171,16 @@ def _owned_log(user: User, log_id: str):
     return log, project
 
 
+def _saved(user: User, key: str | None, body: BaseModel, create):
+    try:
+        data = run_idempotent(user.id, key, body.model_dump_json(), create)
+    except IdempotencyConflict as exc:
+        raise HTTPException(409, "Этот запрос уже отправлен с другими данными") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "data": data}
+
+
 def _guard_item(user: User, table: dict, item_id: str) -> None:
     item = table.get(item_id)
     if not item:
@@ -158,8 +192,7 @@ def _guard_item(user: User, table: dict, item_id: str) -> None:
 
 @router.get("/projects")
 def list_projects(user: User = Depends(require_user)):
-    visible = [p for p in store.list_projects() if store.can_access_project(user, p)]
-    snaps = [store.project_snapshot(p.id) for p in visible]
+    snaps = [store.project_snapshot(p.id) for p in store.projects_for(user)]
     return {"ok": True, "data": snaps}
 
 
@@ -192,17 +225,27 @@ def bundle(pid: str, user: User = Depends(require_user)):
             "timesheets": store._by_project(store.timesheets, p.id),
             "meetings": store._by_project(store.meetings, p.id),
             "directory": store._by_project(store.directory, p.id),
+            "can_approve_changes": store.is_assigned_supervisor(user, p),
         },
     }
 
 
 @router.post("/projects/{pid}/daily")
-def add_daily(pid: str, body: DailyIn, user: User = Depends(require_user)):
+def add_daily(
+    pid: str,
+    body: DailyIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     _guard_pid(user, pid)
-    try:
-        return {"ok": True, "data": member_daily(store.add_daily(pid, body.model_dump(), user.id, user.role))}
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+    if body.delay_hours > 0 and not body.delays.strip():
+        raise HTTPException(400, "Укажите причину простоя")
+    return _saved(
+        user,
+        idempotency_key,
+        body,
+        lambda: member_daily(store.add_daily(pid, body.model_dump(), user.id, user.role)),
+    )
 
 
 @router.post("/daily/{log_id}/photos")
@@ -287,12 +330,14 @@ def revoke_share(log_id: str, user: User = Depends(require_user)):
 
 
 @router.post("/projects/{pid}/rfis")
-def add_rfi(pid: str, body: RfiIn, user: User = Depends(require_user)):
+def add_rfi(
+    pid: str,
+    body: RfiIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     _guard_pid(user, pid)
-    try:
-        return {"ok": True, "data": store.add_rfi(pid, body.model_dump())}
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+    return _saved(user, idempotency_key, body, lambda: store.add_rfi(pid, body.model_dump()))
 
 
 @router.post("/rfis/{rid}/answer")
@@ -305,12 +350,14 @@ def answer_rfi(rid: str, body: AnswerIn, user: User = Depends(require_user)):
 
 
 @router.post("/projects/{pid}/punches")
-def add_punch(pid: str, body: PunchIn, user: User = Depends(require_user)):
+def add_punch(
+    pid: str,
+    body: PunchIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     _guard_pid(user, pid)
-    try:
-        return {"ok": True, "data": store.add_punch(pid, body.model_dump())}
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+    return _saved(user, idempotency_key, body, lambda: store.add_punch(pid, body.model_dump()))
 
 
 @router.post("/punches/{iid}/status")
@@ -323,21 +370,28 @@ def punch_status(iid: str, body: StatusIn, user: User = Depends(require_user)):
 
 
 @router.post("/projects/{pid}/inspections")
-def add_insp(pid: str, body: InspIn, user: User = Depends(require_user)):
+def add_insp(
+    pid: str,
+    body: InspIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     _guard_pid(user, pid)
-    try:
-        return {"ok": True, "data": store.add_inspection(pid, body.model_dump())}
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+    payload = body.model_dump()
+    if not str(payload.get("inspector") or "").strip():
+        payload["inspector"] = user.full_name
+    return _saved(user, idempotency_key, body, lambda: store.add_inspection(pid, payload))
 
 
 @router.post("/projects/{pid}/incidents")
-def add_inc(pid: str, body: IncidentIn, user: User = Depends(require_user)):
+def add_inc(
+    pid: str,
+    body: IncidentIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     _guard_pid(user, pid)
-    try:
-        return {"ok": True, "data": store.add_incident(pid, body.model_dump())}
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+    return _saved(user, idempotency_key, body, lambda: store.add_incident(pid, body.model_dump()))
 
 
 @router.post("/incidents/{iid}/close")
@@ -350,21 +404,25 @@ def close_inc(iid: str, user: User = Depends(require_user)):
 
 
 @router.post("/projects/{pid}/timesheets")
-def add_ts(pid: str, body: TsIn, user: User = Depends(require_user)):
+def add_ts(
+    pid: str,
+    body: TsIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     _guard_pid(user, pid)
-    try:
-        return {"ok": True, "data": store.add_timesheet(pid, body.model_dump())}
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+    return _saved(user, idempotency_key, body, lambda: store.add_timesheet(pid, body.model_dump()))
 
 
 @router.post("/projects/{pid}/meetings")
-def add_mt(pid: str, body: MeetIn, user: User = Depends(require_user)):
+def add_mt(
+    pid: str,
+    body: MeetIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     _guard_pid(user, pid)
-    try:
-        return {"ok": True, "data": store.add_meeting(pid, body.model_dump())}
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+    return _saved(user, idempotency_key, body, lambda: store.add_meeting(pid, body.model_dump()))
 
 
 @router.post("/schedule/{tid}/progress")
@@ -377,12 +435,14 @@ def task_pct(tid: str, body: PctIn, user: User = Depends(require_user)):
 
 
 @router.post("/projects/{pid}/schedule")
-def add_task(pid: str, body: TaskCreateIn, user: User = Depends(require_user)):
+def add_task(
+    pid: str,
+    body: TaskCreateIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     _guard_pid(user, pid)
-    try:
-        return {"ok": True, "data": store.add_schedule_task(pid, body.model_dump())}
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+    return _saved(user, idempotency_key, body, lambda: store.add_schedule_task(pid, body.model_dump()))
 
 
 @router.post("/schedule/{tid}/update")
@@ -405,17 +465,25 @@ def delete_task(tid: str, user: User = Depends(require_user)):
 
 
 @router.post("/projects/{pid}/changes")
-def add_co(pid: str, body: CoIn, user: User = Depends(require_user)):
+def add_co(
+    pid: str,
+    body: CoIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     _guard_pid(user, pid)
-    try:
-        return {"ok": True, "data": store.add_change(pid, body.model_dump())}
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+    return _saved(user, idempotency_key, body, lambda: store.add_change(pid, body.model_dump()))
 
 
 @router.post("/changes/{cid}/status")
 def co_status(cid: str, body: StatusIn, user: User = Depends(require_user)):
     _guard_item(user, store.change_orders, cid)
+    if body.status not in {"draft", "submitted", "approved", "rejected"}:
+        raise HTTPException(400, "Неизвестный статус")
+    item = store.change_orders[cid]
+    project = store.get_project(item.project_id)
+    if body.status in {"approved", "rejected"} and (not project or not store.is_assigned_supervisor(user, project)):
+        raise HTTPException(403, "Утверждает только технадзор этого объекта")
     try:
         return {"ok": True, "data": store.set_change(cid, body.status)}
     except ValueError as e:

@@ -1,17 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { createContact, fetchContacts } from "@/lib/api";
+import { ErrorRetry, useAsync } from "@/lib/useAsync";
+import { t } from "@/i18n/messages";
 import { CONTACT_TYPE, money } from "@/lib/format";
 import type { ContactType, CrmContact, Locale } from "@/lib/types";
 
 export function CrmContactsView({ locale }: { locale: Locale }) {
   const { user } = useAuth();
-  const [contacts, setContacts] = useState<CrmContact[]>([]);
+  const m = t(locale);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("");
-  const [loading, setLoading] = useState(true);
+  const contactsQuery = useAsync(
+    () =>
+      user
+        ? fetchContacts(user.email, { q: search || undefined, ctype: typeFilter || undefined })
+        : Promise.resolve([] as CrmContact[]),
+    [user?.email, typeFilter],
+  );
+  const contacts = contactsQuery.data ?? [];
+  const loading = contactsQuery.loading;
+  const load = contactsQuery.reload;
 
   // New Contact Modal
   const [isCreating, setIsCreating] = useState(false);
@@ -23,20 +34,6 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
   const [newCity, setNewCity] = useState("Алматы");
   const [newType, setNewType] = useState<ContactType>("client");
   const [newNotes, setNewNotes] = useState("");
-
-  function load() {
-    if (!user) return;
-    setLoading(true);
-    fetchContacts(user.email, { q: search || undefined, ctype: typeFilter || undefined })
-      .then(setContacts)
-      .catch(() => setContacts([]))
-      .finally(() => setLoading(false));
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, typeFilter]);
 
   async function handleCreateSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -129,7 +126,11 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
 
       {/* Contacts Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {loading ? (
+        {contactsQuery.status === "error" && !contactsQuery.data ? (
+          <div className="col-span-full">
+            <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={load} />
+          </div>
+        ) : loading ? (
           <div className="col-span-full py-12 text-center text-xs text-ink/40">
             Загрузка контактов...
           </div>

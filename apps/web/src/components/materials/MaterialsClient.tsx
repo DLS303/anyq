@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { fetchMaterials } from "@/lib/api";
+import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
 import { MATERIAL_CAT, money } from "@/lib/format";
-import type { Locale, Material, MaterialCat } from "@/lib/types";
+import type { Locale, MaterialCat } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { CheckCircle2, Layers, Search, Truck, ArrowRight, X } from "lucide-react";
 
@@ -14,13 +15,11 @@ export function MaterialsClient({ locale }: { locale: Locale }) {
   const m = t(locale);
   const [category, setCategory] = useState("");
   const [q, setQ] = useState("");
-  const [items, setItems] = useState<Material[]>([]);
-
-  useEffect(() => {
-    fetchMaterials({ category: category || undefined, q: q || undefined })
-      .then(setItems)
-      .catch(() => setItems([]));
-  }, [category, q]);
+  const query = useAsync(
+    () => fetchMaterials({ category: category || undefined, q: q || undefined }),
+    [category, q],
+  );
+  const items = query.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -89,6 +88,10 @@ export function MaterialsClient({ locale }: { locale: Locale }) {
         </div>
       </div>
 
+      {query.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
+      {query.status === "error" ? (
+        <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={query.reload} />
+      ) : null}
       {/* Materials Grid */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
         {items.map((item) => (
@@ -142,7 +145,7 @@ export function MaterialsClient({ locale }: { locale: Locale }) {
         ))}
       </div>
 
-      {items.length === 0 ? (
+      {!query.loading && query.status !== "error" && items.length === 0 ? (
         <div className="text-center py-12 text-slate-400 text-sm">
           По вашему запросу ничего не найдено. Попробуйте сбросить фильтры.
         </div>

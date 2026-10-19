@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { fetchSpecialists } from "@/lib/api";
+import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
 import { CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
-import type { Locale, SpecCategory, Specialist } from "@/lib/types";
+import type { Locale, SpecCategory } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { CheckCircle2, HardHat, ShieldCheck, Star, ArrowRight } from "lucide-react";
 
@@ -13,11 +14,8 @@ const CATS: SpecCategory[] = ["survey", "legal", "architecture", "smr", "supervi
 export function SpecialistsClient({ locale }: { locale: Locale }) {
   const m = t(locale);
   const [category, setCategory] = useState("");
-  const [items, setItems] = useState<Specialist[]>([]);
-
-  useEffect(() => {
-    fetchSpecialists({ category: category || undefined }).then(setItems).catch(() => setItems([]));
-  }, [category]);
+  const query = useAsync(() => fetchSpecialists({ category: category || undefined }), [category]);
+  const items = query.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -66,6 +64,10 @@ export function SpecialistsClient({ locale }: { locale: Locale }) {
         </div>
       </div>
 
+      {query.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
+      {query.status === "error" ? (
+        <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={query.reload} />
+      ) : null}
       {/* Grid */}
       <div className="grid sm:grid-cols-2 gap-5">
         {items.map((s) => (
@@ -133,7 +135,7 @@ export function SpecialistsClient({ locale }: { locale: Locale }) {
         ))}
       </div>
 
-      {items.length === 0 ? (
+      {!query.loading && query.status !== "error" && items.length === 0 ? (
         <div className="text-center py-12 text-slate-400 text-sm">
           В выбранной категории специалистов не найдено.
         </div>

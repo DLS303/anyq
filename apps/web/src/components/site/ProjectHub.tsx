@@ -7,7 +7,12 @@ import { useAuth } from "@/lib/auth";
 import { fetchSiteBundle, postSite } from "@/lib/api";
 import { money } from "@/lib/format";
 import { canEditProject, PILOT_MODE } from "@/lib/pilot";
+import { siteRoleLabel, statusLabel } from "@/lib/report";
+import { ErrorRetry, LoadingSkeleton, isMissing, useAsync, useGuardedSubmit } from "@/lib/useAsync";
+import { AuthImage } from "@/components/media/AuthImage";
 import { DailyReport, type DailyEntry } from "./DailyReport";
+import { InspectionForm } from "./InspectionForm";
+import { MeetingForm } from "./MeetingForm";
 import { toast } from "@/lib/toast";
 import { t } from "@/i18n/messages";
 import dynamic from "next/dynamic";
@@ -142,61 +147,34 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const { user } = useAuth();
   const pilot = PILOT_MODE;
   const [tab, setTab] = useState<Tab>(pilot ? "today" : "home");
-  const [bundle, setBundle] = useState<Record<string, unknown> | null>(null);
-  const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
-  const [busy, setBusy] = useState(false);
   const [showPunch, setShowPunch] = useState(false);
   const [showExtra, setShowExtra] = useState(false);
   const email = user?.email || "";
-
-  function load() {
-    setPhase("loading");
-    fetchSiteBundle(id)
-      .then((data) => {
-        setBundle(data);
-        setPhase("ready");
-      })
-      .catch(() => {
-        setBundle(null);
-        setPhase("error");
-      });
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
-
-  async function send(form: HTMLFormElement | null, path: string, body: Record<string, unknown>) {
-    setBusy(true);
-    try {
-      await postSite(path, email, body);
-      form?.reset();
-      load();
-    } catch (err) {
-      toast(err instanceof Error ? err.message : m.hubSaveError);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const bundleQuery = useAsync(() => fetchSiteBundle(id), [id]);
+  const bundle = bundleQuery.data;
+  const load = bundleQuery.reload;
+  const forms = useGuardedSubmit(m.hubSaved, m.hubSaveError, load);
 
   function goLogin() {
     router.push(`/${locale}/login`);
   }
 
-  if (!bundle) {
-    if (!pilot) return <p className="text-ink/50">{m.empty}</p>;
-    if (phase === "error") {
-      return (
-        <div className="border border-ink/10 bg-white/50 p-6 text-center">
-          <p className="text-sm text-ink/70">{m.hubLoadError}</p>
-          <button type="button" className={`${primaryBtn} mt-4`} onClick={load}>
-            {m.hubRetry}
-          </button>
-        </div>
-      );
+  if (bundleQuery.loading || !bundle) {
+    if (bundleQuery.status === "error") {
+      if (isMissing(bundleQuery.error)) {
+        return (
+          <div className="border border-ink/10 bg-white/50 p-6 text-center">
+            <h1 className="font-serif text-3xl">{m.hubNotFoundTitle}</h1>
+            <p className="mt-2 text-sm text-ink/70">{m.hubNotFound}</p>
+            <Link href={`/${locale}/site`} className={`${primaryBtn} mt-4`}>
+              {m.hubBackToList}
+            </Link>
+          </div>
+        );
+      }
+      return <ErrorRetry message={m.hubLoadError} retryLabel={m.hubRetry} onRetry={load} />;
     }
-    return <p className="text-ink/50">{m.hubLoading}</p>;
+    return <LoadingSkeleton label={m.hubLoading} />;
   }
 
   const snap = bundle.snapshot as {
@@ -220,6 +198,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const p = snap.project;
   const directory = (bundle.directory as { user_id?: string }[]) || [];
   const canEdit = canEditProject(user, p, directory);
+  const canApprove = Boolean(bundle.can_approve_changes);
   const healthColor = snap.health === "green" ? "bg-pine" : snap.health === "red" ? "bg-clay" : "bg-sand";
   const mainTabs = pilot ? PILOT_MAIN : LEGACY_TABS;
   const logs = (bundle.daily as DailyEntry[]) || [];
@@ -243,7 +222,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   }
 
   return (
-    <div className="min-w-0 max-w-full">
+    <div className={pilot ? "min-w-0 max-w-full pb-24 sm:pb-0" : "min-w-0 max-w-full"}>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div className="min-w-0">
           <h1 className="text-2xl sm:text-4xl font-medium tracking-tight">{p.title}</h1>
@@ -261,7 +240,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
             </div>
           ) : null}
           <div className={`${healthColor} text-paper px-3 py-2 text-xs uppercase tracking-wider`}>
-            {pilot ? healthLabel(snap.health, m) : `health ${snap.health}`}
+            {healthLabel(snap.health, m)}
           </div>
         </div>
       </div>
@@ -312,7 +291,10 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
           <Kpi label={m.tabBudget} value={money(snap.budget_kzt, locale)} />
           <Kpi label={m.hubCommitted} value={money(snap.committed_kzt, locale)} />
           <Kpi label={m.hubActual} value={money(snap.actual_kzt, locale)} />
-          <Kpi label="open RFI / punch / ТБ" value={`${snap.open_rfi} / ${snap.open_punch} / ${snap.open_incidents}`} />
+          <Kpi
+            label={`${m.hubIssueRfi} / ${m.hubIssuePunch} / ${m.hubIssueSafety}`}
+            value={`${snap.open_rfi} / ${snap.open_punch} / ${snap.open_incidents}`}
+          />
         </div>
       ) : null}
 
@@ -353,31 +335,33 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
 
       {tab === "rfi" ? (
         <Tool
-          title="RFI"
+          title={m.tabRfi}
+          empty={m.hubEmpty}
           items={bundle.rfis as { id: string; number: string; title: string; question: string; answer: string; status: string; drawing: string }[]}
           render={(x) => (
             <div>
               <p className="font-medium">
-                {x.number} · {x.title} · {x.status}
+                {x.number} · {x.title} · {statusLabel(x.status, m)}
                 {x.drawing ? ` · ${x.drawing}` : ""}
               </p>
               <p className="text-ink/60">{x.question}</p>
-              {x.answer ? <p className="mt-1">A: {x.answer}</p> : user ? (
+              {x.answer ? <p className="mt-1">{m.hubAnswerPrefix}: {x.answer}</p> : user ? (
                 <button
                   type="button"
                   className="underline text-xs mt-1"
                   onClick={async () => {
-                    const answer = prompt("Ответ") || "";
+                    const answer = prompt(m.hubAnswerPrefix) || "";
                     if (!answer) return;
                     try {
                       await postSite(`rfis/${x.id}/answer`, email, { answer });
+                      toast(m.hubSaved);
                       load();
                     } catch (err) {
                       toast(err instanceof Error ? err.message : m.hubSaveError);
                     }
                   }}
                 >
-                  ответить
+                  {m.hubAnswer}
                 </button>
               ) : null}
             </div>
@@ -390,18 +374,26 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                 e.preventDefault();
                 const form = e.currentTarget;
                 const fd = new FormData(form);
-                void send(form, `projects/${p.id}/rfis`, {
-                  title: String(fd.get("title")),
-                  question: String(fd.get("question")),
-                  drawing: String(fd.get("drawing") || ""),
+                void forms.submit(async (key) => {
+                  await postSite(
+                    `projects/${p.id}/rfis`,
+                    email,
+                    {
+                      title: String(fd.get("title")),
+                      question: String(fd.get("question")),
+                      drawing: String(fd.get("drawing") || ""),
+                    },
+                    key,
+                  );
+                  return form;
                 });
               }}
             >
-              <input name="title" required placeholder="тема" className="border border-ink/15 px-2 py-1 text-sm" />
-              <input name="drawing" placeholder="лист АР/КЖ" className="border border-ink/15 px-2 py-1 text-sm" />
-              <textarea name="question" required placeholder="вопрос площадки" className="border border-ink/15 px-2 py-1 text-sm" />
-              <button className="bg-pine text-paper py-1 text-sm" disabled={busy}>
-                + RFI
+              <input name="title" required placeholder={m.hubRfiTitle} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
+              <input name="drawing" placeholder={m.hubRfiDrawing} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
+              <textarea name="question" required placeholder={m.hubRfiQuestion} className="border border-ink/15 px-2 py-1 text-sm min-h-24" />
+              <button className={primaryBtn} disabled={forms.submitting}>
+                {m.tabRfi}
               </button>
             </form>
           ) : null}
@@ -410,11 +402,12 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
 
       {tab === "sub" ? (
         <Tool
-          title="Submittals"
+          title={m.tabSub}
+          empty={m.hubEmpty}
           items={bundle.submittals as { id: string; number: string; title: string; spec_section: string; status: string; vendor: string }[]}
           render={(x) => (
             <p>
-              {x.number} · {x.title} · {x.spec_section} · {x.vendor} · {x.status}
+              {x.number} · {x.title} · {x.spec_section} · {x.vendor} · {statusLabel(x.status, m)}
             </p>
           )}
         />
@@ -432,12 +425,13 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
           />
         ) : (
           <Tool
-            title={pilot ? m.tabIssues : "Punch list"}
+            title={m.tabIssues}
+            empty={m.hubEmpty}
             items={punches}
             render={(x) => (
               <div className="flex justify-between gap-3">
                 <p>
-                  {x.title} · {x.location} · {x.trade} · {x.status}
+                  {x.title} · {x.location} · {x.trade} · {statusLabel(x.status, m)}
                 </p>
                 {user && canEdit && x.status !== "closed" ? (
                   <button
@@ -446,13 +440,14 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                     onClick={async () => {
                       try {
                         await postSite(`punches/${x.id}/status`, email, { status: x.status === "open" ? "ready" : "closed" });
+                        toast(m.hubSaved);
                         load();
                       } catch (err) {
                         toast(err instanceof Error ? err.message : m.hubSaveError);
                       }
                     }}
                   >
-                    {x.status === "open" ? (pilot ? m.hubReady : "готово") : pilot ? m.hubCloseItem : "закрыть"}
+                    {x.status === "open" ? m.hubReady : m.hubCloseItem}
                   </button>
                 ) : null}
               </div>
@@ -465,18 +460,26 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                   e.preventDefault();
                   const form = e.currentTarget;
                   const fd = new FormData(form);
-                  void send(form, `projects/${p.id}/punches`, {
-                    title: String(fd.get("title")),
-                    location: String(fd.get("location") || ""),
-                    trade: String(fd.get("trade") || ""),
+                  void forms.submit(async (key) => {
+                    await postSite(
+                      `projects/${p.id}/punches`,
+                      email,
+                      {
+                        title: String(fd.get("title")),
+                        location: String(fd.get("location") || ""),
+                        trade: String(fd.get("trade") || ""),
+                      },
+                      key,
+                    );
+                    return form;
                   });
                 }}
               >
-                <input name="title" required placeholder={pilot ? m.tabIssues : "дефект"} className="border border-ink/15 px-2 py-1 text-sm min-h-11" />
-                <input name="location" placeholder={pilot ? m.hubPlace : "место"} className="border border-ink/15 px-2 py-1 text-sm min-h-11" />
-                <input name="trade" placeholder={pilot ? m.hubTrade : "подряд"} className="border border-ink/15 px-2 py-1 text-sm min-h-11" />
-                <button className={pilot ? primaryBtn : "bg-pine text-paper py-1 text-sm"} disabled={busy}>
-                  {pilot ? m.hubPunchAction : "+ punch"}
+                <input name="title" required placeholder={m.tabIssues} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
+                <input name="location" placeholder={m.hubPlace} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
+                <input name="trade" placeholder={m.hubTrade} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
+                <button className={primaryBtn} disabled={forms.submitting}>
+                  {m.hubPunchAction}
                 </button>
               </form>
             ) : null}
@@ -498,23 +501,49 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       {tab === "qa" ? (
         <div className="grid md:grid-cols-2 gap-6">
           <Tool
-            title="Inspections"
-            items={bundle.inspections as { id: string; title: string; result: string; inspector: string; notes: string; day: string }[]}
+            title={m.toolInspections}
+            empty={m.hubEmpty}
+            items={
+              bundle.inspections as {
+                id: string;
+                title: string;
+                result: string;
+                inspector: string;
+                notes: string;
+                day: string;
+                photo?: string;
+                items?: { label: string; result: string; comment: string }[];
+                checklist?: string[];
+              }[]
+            }
             render={(x) => (
-              <p>
-                {x.day} · {x.title} · {x.result} · {x.inspector}
-                {x.notes ? ` — ${x.notes}` : ""}
-              </p>
+              <div>
+                <p>
+                  {x.day} · {x.title} · {statusLabel(x.result, m)} · {x.inspector}
+                </p>
+                {(x.items?.length ? x.items : (x.checklist || []).map((label) => ({ label, result: "", comment: "" }))).map((item, index) => (
+                  <p key={`${x.id}-${index}`} className="text-ink/70">
+                    {item.label}
+                    {item.result ? ` · ${statusLabel(item.result, m)}` : ""}
+                    {item.comment ? ` — ${item.comment}` : ""}
+                  </p>
+                ))}
+                {x.notes ? <p className="mt-1">{x.notes}</p> : null}
+                {x.photo ? <AuthImage src={x.photo} alt={m.inspPhoto} className="mt-2 aspect-video w-full max-w-xs object-cover" /> : null}
+              </div>
             )}
-          />
+          >
+            {user ? <InspectionForm locale={locale} projectId={p.id} onDone={load} /> : null}
+          </Tool>
           <Tool
-            title="Incidents"
+            title={m.toolIncidents}
+            empty={m.hubEmpty}
             items={bundle.incidents as { id: string; title: string; severity: string; description: string; closed: boolean }[]}
             render={(x) => (
               <div className="flex justify-between gap-2">
                 <p>
-                  {x.title} · {x.severity} — {x.description}
-                  {x.closed ? " · closed" : ""}
+                  {x.title} · {statusLabel(x.severity, m)} — {x.description}
+                  {x.closed ? ` · ${m.statusClosed}` : ""}
                 </p>
                 {user && !x.closed ? (
                   <button
@@ -523,18 +552,56 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                     onClick={async () => {
                       try {
                         await postSite(`incidents/${x.id}/close`, email, {});
+                        toast(m.hubSaved);
                         load();
                       } catch (err) {
                         toast(err instanceof Error ? err.message : m.hubSaveError);
                       }
                     }}
                   >
-                    закрыть
+                    {m.hubCloseItem}
                   </button>
                 ) : null}
               </div>
             )}
-          />
+          >
+            {user ? (
+              <form
+                className="mb-4 grid gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const form = e.currentTarget;
+                  const fd = new FormData(form);
+                  void forms.submit(async (key) => {
+                    await postSite(
+                      `projects/${p.id}/incidents`,
+                      email,
+                      {
+                        title: String(fd.get("title") || ""),
+                        severity: String(fd.get("severity") || "low"),
+                        description: String(fd.get("description") || ""),
+                        day: String(fd.get("day") || ""),
+                      },
+                      key,
+                    );
+                    return form;
+                  });
+                }}
+              >
+                <input name="title" required placeholder={m.toolIncidents} className="min-h-12 border border-ink/15 px-2 py-1 text-sm" />
+                <select name="severity" className="min-h-12 border border-ink/15 px-2 py-1 text-sm" aria-label={m.toolIncidents}>
+                  <option value="low">{m.statusLow}</option>
+                  <option value="medium">{m.statusMedium}</option>
+                  <option value="high">{m.statusHigh}</option>
+                </select>
+                <input name="day" type="date" className="min-h-12 border border-ink/15 px-2 py-1 text-sm" />
+                <textarea name="description" className="min-h-24 border border-ink/15 px-2 py-1 text-sm" placeholder={m.inspNotes} />
+                <button className={primaryBtn} disabled={forms.submitting}>
+                  {m.toolIncidents}
+                </button>
+              </form>
+            ) : null}
+          </Tool>
         </div>
       ) : null}
 
@@ -587,61 +654,72 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
           <div className="grid gap-6">
             {budget.length > 0 || !pilot ? (
               <Tool
-                title={pilot ? m.hubBudgetTitle : "Budget vs committed vs actual"}
+                title={m.hubBudgetTitle}
+                empty={m.hubEmpty}
                 items={budget}
                 render={(x) => (
                   <p>
-                    {x.code} {x.title} · {pilot ? m.hubPlan : "план"} {money(x.budget_kzt, locale)} · {pilot ? m.hubCommitted : "обязательства"} {money(x.committed_kzt, locale)} · {pilot ? m.hubActual : "факт"} {money(x.actual_kzt, locale)}
+                    {x.code} {x.title} · {m.hubPlan} {money(x.budget_kzt, locale)} · {m.hubCommitted} {money(x.committed_kzt, locale)} · {m.hubActual} {money(x.actual_kzt, locale)}
                   </p>
                 )}
               />
             ) : null}
             {changes.length > 0 || !pilot || showExtra || canEdit ? (
               <Tool
-                title={pilot ? m.hubExtraTitle : "Change orders"}
+                title={m.hubExtraTitle}
+                empty={m.hubEmpty}
                 items={changes}
                 render={(x) => (
                   <div className="flex justify-between gap-3">
                     <p>
-                      {x.number} · {x.title} · {money(x.amount_kzt, locale)} · {x.status}
+                      {x.number} · {x.title} · {money(x.amount_kzt, locale)} · {statusLabel(x.status, m)}
                     </p>
-                    {canEdit && x.status === "submitted" ? (
+                    {canApprove && x.status === "submitted" ? (
                       <button
                         type="button"
-                        className="underline text-xs"
+                        className="underline text-xs min-h-12"
                         onClick={async () => {
                           try {
                             await postSite(`changes/${x.id}/status`, email, { status: "approved" });
+                            toast(m.hubSaved);
                             load();
                           } catch (err) {
                             toast(err instanceof Error ? err.message : m.hubSaveError);
                           }
                         }}
                       >
-                        {pilot ? m.hubApprove : "approve"}
+                        {m.hubApprove}
                       </button>
                     ) : null}
                   </div>
                 )}
               >
-                {pilot && canEdit ? (
+                {canEdit ? (
                   <form
                     className="grid sm:grid-cols-3 gap-2 mb-4"
                     onSubmit={(e) => {
                       e.preventDefault();
                       const form = e.currentTarget;
                       const fd = new FormData(form);
-                      void send(form, `projects/${p.id}/changes`, {
-                        title: String(fd.get("title")),
-                        amount_kzt: Number(fd.get("amount") || 0),
-                        reason: String(fd.get("reason") || ""),
+                      void forms.submit(async (key) => {
+                        await postSite(
+                          `projects/${p.id}/changes`,
+                          email,
+                          {
+                            title: String(fd.get("title")),
+                            amount_kzt: Number(fd.get("amount") || 0),
+                            reason: String(fd.get("reason") || ""),
+                          },
+                          key,
+                        );
+                        return form;
                       });
                     }}
                   >
                     <input name="title" required placeholder={m.hubExtraTitle} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
                     <input name="amount" required type="number" placeholder={m.hubAmount} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
                     <input name="reason" placeholder={m.hubReason} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
-                    <button className={primaryBtn} disabled={busy}>
+                    <button className={primaryBtn} disabled={forms.submitting}>
                       {m.hubMoneyAction}
                     </button>
                   </form>
@@ -654,11 +732,12 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
 
       {tab === "crew" ? (
         <Tool
-          title="Timesheets"
+          title={m.tabCrew}
+          empty={m.hubEmpty}
           items={bundle.timesheets as { id: string; day: string; crew: string; hours: number; cost_kzt: number }[]}
           render={(x) => (
             <p>
-              {x.day} · {x.crew} · {x.hours} ч · {money(x.cost_kzt, locale)}
+              {x.day} · {x.crew} · {x.hours} {m.hubHours} · {money(x.cost_kzt, locale)}
             </p>
           )}
         >
@@ -669,20 +748,28 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                 e.preventDefault();
                 const form = e.currentTarget;
                 const fd = new FormData(form);
-                void send(form, `projects/${p.id}/timesheets`, {
-                  day: String(fd.get("day")),
-                  crew: String(fd.get("crew")),
-                  hours: Number(fd.get("hours") || 0),
-                  cost_kzt: Number(fd.get("cost") || 0),
+                void forms.submit(async (key) => {
+                  await postSite(
+                    `projects/${p.id}/timesheets`,
+                    email,
+                    {
+                      day: String(fd.get("day")),
+                      crew: String(fd.get("crew")),
+                      hours: Number(fd.get("hours") || 0),
+                      cost_kzt: Number(fd.get("cost") || 0),
+                    },
+                    key,
+                  );
+                  return form;
                 });
               }}
             >
-              <input name="day" type="date" required className="border border-ink/15 px-2 py-1 text-sm" />
-              <input name="crew" placeholder="бригада" className="border border-ink/15 px-2 py-1 text-sm" />
-              <input name="hours" type="number" placeholder="часы" className="border border-ink/15 px-2 py-1 text-sm" />
-              <input name="cost" type="number" placeholder="₸" className="border border-ink/15 px-2 py-1 text-sm" />
-              <button className="bg-pine text-paper py-1 text-sm" disabled={busy}>
-                + табель
+              <input name="day" type="date" required className="min-h-12 border border-ink/15 px-2 py-1 text-sm" />
+              <input name="crew" placeholder={m.hubCrewName} className="min-h-12 border border-ink/15 px-2 py-1 text-sm" />
+              <input name="hours" type="number" placeholder={m.hubHours} className="min-h-12 border border-ink/15 px-2 py-1 text-sm" />
+              <input name="cost" type="number" placeholder="₸" className="min-h-12 border border-ink/15 px-2 py-1 text-sm" />
+              <button className={primaryBtn} disabled={forms.submitting}>
+                {m.tabCrew}
               </button>
             </form>
           ) : null}
@@ -691,19 +778,54 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
 
       {tab === "meet" ? (
         <Tool
-          title="Meetings"
-          items={bundle.meetings as { id: string; title: string; day: string; attendees: string; decisions: string }[]}
+          title={m.toolMeetings}
+          empty={m.hubEmpty}
+          items={
+            bundle.meetings as {
+              id: string;
+              title: string;
+              day: string;
+              attendees: string;
+              decisions: string;
+              agenda?: string;
+              participants?: { role: string; name: string }[];
+              decision_items?: { text: string; owner_role: string; due: string }[];
+            }[]
+          }
           render={(x) => (
-            <p>
-              {x.day} · {x.title} — {x.decisions} ({x.attendees})
-            </p>
+            <div>
+              <p className="font-medium">
+                {x.day} · {x.title}
+              </p>
+              {x.agenda ? <p className="mt-1">{x.agenda}</p> : null}
+              {x.participants?.length ? (
+                <p className="mt-1 text-ink/70">
+                  {x.participants.map((person) => `${siteRoleLabel(person.role, m)}${person.name ? ` (${person.name})` : ""}`).join(", ")}
+                </p>
+              ) : x.attendees ? (
+                <p className="mt-1 text-ink/70">{x.attendees}</p>
+              ) : null}
+              {x.decision_items?.length
+                ? x.decision_items.map((item, index) => (
+                    <p key={`${x.id}-d-${index}`} className="mt-1">
+                      {item.text} · {siteRoleLabel(item.owner_role, m)} · {item.due}
+                    </p>
+                  ))
+                : x.decisions ? (
+                    <p className="mt-1">{x.decisions}</p>
+                  )
+                : null}
+            </div>
           )}
-        />
+        >
+          {user ? <MeetingForm locale={locale} projectId={p.id} onDone={load} /> : null}
+        </Tool>
       ) : null}
 
       {tab === "dir" ? (
         <Tool
-          title="Directory"
+          title={m.tabDir}
+          empty={m.hubEmpty}
           items={bundle.directory as { id: string; company: string; role_on_site: string }[]}
           render={(x) => (
             <p>
@@ -801,12 +923,14 @@ function Kpi({ label, value }: { label: string; value: string }) {
 
 function ItemList<T extends { id: string }>({
   items,
+  empty,
   render,
 }: {
   items: T[];
+  empty: string;
   render: (item: T) => React.ReactNode;
 }) {
-  if (!items.length) return null;
+  if (!items.length) return <p className="text-sm text-ink/50">{empty}</p>;
   return (
     <div className="grid gap-2">
       {items.map((item) => (
@@ -821,11 +945,13 @@ function ItemList<T extends { id: string }>({
 function Tool<T extends { id: string }>({
   title,
   items,
+  empty,
   render,
   children,
 }: {
   title: string;
   items: T[];
+  empty: string;
   render: (item: T) => React.ReactNode;
   children?: React.ReactNode;
 }) {
@@ -833,7 +959,7 @@ function Tool<T extends { id: string }>({
     <section>
       <h2 className="font-serif text-2xl mb-3">{title}</h2>
       {children}
-      <ItemList items={items || []} render={render} />
+      <ItemList items={items || []} empty={empty} render={render} />
     </section>
   );
 }

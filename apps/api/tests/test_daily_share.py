@@ -144,6 +144,7 @@ def test_share_expiry_revoke_and_public_copy():
         "workers",
         "notes",
         "delays",
+        "delay_hours",
         "project_title",
         "author_role",
         "photos",

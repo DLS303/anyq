@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { ErrorRetry, useAsync } from "@/lib/useAsync";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { createDeal, fetchDeals, fetchFunnels, moveDeal } from "@/lib/api";
@@ -55,8 +56,13 @@ export function CrmBoard({ locale }: { locale: Locale }) {
   const [activeTab, setActiveTab] = useState<CrmTab>("deals");
   const [viewMode, setViewMode] = useState<ViewMode>("kanban");
   const [funnel, setFunnel] = useState<Funnel>("construction");
-  const [stages, setStages] = useState<Record<string, string[]>>({});
-  const [deals, setDeals] = useState<Deal[]>([]);
+  const stagesQuery = useAsync(() => fetchFunnels(), []);
+  const dealsQuery = useAsync(
+    () => (user ? fetchDeals(user.email, funnel) : Promise.resolve([] as Deal[])),
+    [user?.email, funnel],
+  );
+  const stages = stagesQuery.data ?? {};
+  const deals = dealsQuery.data ?? [];
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
 
   // New Deal Modal
@@ -68,22 +74,8 @@ export function CrmBoard({ locale }: { locale: Locale }) {
   const [dealNotes, setDealNotes] = useState("");
 
   function loadDeals() {
-    if (!user) return;
-    fetchDeals(user.email, funnel)
-      .then(setDeals)
-      .catch(() => setDeals([]));
+    dealsQuery.reload();
   }
-
-  useEffect(() => {
-    fetchFunnels()
-      .then(setStages)
-      .catch(() => setStages({}));
-  }, []);
-
-  useEffect(() => {
-    loadDeals();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, funnel]);
 
   async function handleMove(dealId: string, stage: string) {
     if (!user) return;
@@ -241,6 +233,10 @@ export function CrmBoard({ locale }: { locale: Locale }) {
       )}
 
       {/* Tab Views */}
+      {activeTab === "deals" && (dealsQuery.status === "error" || stagesQuery.status === "error") ? (
+        <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={loadDeals} />
+      ) : null}
+
       {activeTab === "deals" && viewMode === "kanban" && (
         <CrmKanban
           stages={columns}

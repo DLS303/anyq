@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
+from typing import get_args
 from uuid import uuid4
 
 from app.authutil import hash_password, make_token, verify_password
@@ -99,6 +100,7 @@ from app.site_models import (
     Project,
     PunchItem,
     ScheduleTask,
+    SiteRole,
     Submittal,
     Timesheet,
 )
@@ -110,6 +112,104 @@ from app.transitions import (
 from app.trust import trust_score
 
 CADASTRE = re.compile(r"^\d{2}-\d{3}-\d{3}-\d{3}$")
+DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+SITE_ROLES = set(get_args(SiteRole))
+CHECK_RESULTS = {"pass", "fail", "na"}
+
+
+def _role(value: object) -> str:
+    role = str(value or "").strip()
+    if role not in SITE_ROLES:
+        raise ValueError("Укажите роль из списка объекта")
+    return role
+
+
+def _day(value: object, message: str) -> str:
+    day = str(value or "").strip()
+    if not DAY_RE.match(day):
+        raise ValueError(message)
+    return day
+
+
+def _inspection_payload(body: dict) -> dict:
+    title = str(body.get("title") or "").strip()
+    if len(title) < 2:
+        raise ValueError("Укажите название проверки")
+    raw_items = body.get("items") or []
+    items: list[dict] = []
+    for raw in raw_items:
+        label = str(raw.get("label") or "").strip()
+        result = str(raw.get("result") or "").strip()
+        if not label:
+            raise ValueError("Укажите пункт проверки")
+        if result not in CHECK_RESULTS:
+            raise ValueError("Результат пункта: принято, не принято или не применимо")
+        items.append({"label": label, "result": result, "comment": str(raw.get("comment") or "").strip()})
+    checklist = [str(line).strip() for line in (body.get("checklist") or []) if str(line).strip()]
+    if not items and not checklist:
+        raise ValueError("Добавьте пункты проверки")
+    if items:
+        result = "fail" if any(item["result"] == "fail" for item in items) else "pass"
+        checklist = [item["label"] for item in items]
+    else:
+        result = str(body.get("result") or "open")
+        if result not in {"open", "fail", "pass"}:
+            raise ValueError("Неизвестный результат проверки")
+    day = str(body.get("day") or "").strip()
+    if day and not DAY_RE.match(day):
+        raise ValueError("Укажите дату проверки")
+    photo = str(body.get("photo") or "").strip()
+    if len(photo) > 300:
+        raise ValueError("Ссылка на фото слишком длинная")
+    return {
+        "title": title,
+        "checklist": checklist,
+        "items": items,
+        "result": result,
+        "inspector": str(body.get("inspector") or "").strip(),
+        "notes": str(body.get("notes") or "").strip(),
+        "day": day,
+        "photo": photo,
+    }
+
+
+def _meeting_payload(body: dict) -> dict:
+    title = str(body.get("title") or "").strip()
+    if len(title) < 2:
+        raise ValueError("Укажите тему планёрки")
+    day = _day(body.get("day"), "Укажите дату планёрки")
+    people: list[dict] = []
+    for raw in body.get("participants") or []:
+        people.append({"role": _role(raw.get("role")), "name": str(raw.get("name") or "").strip()})
+    if not people:
+        raise ValueError("Добавьте участников")
+    agenda = str(body.get("agenda") or "").strip()
+    if len(agenda) < 2:
+        raise ValueError("Укажите повестку")
+    decisions: list[dict] = []
+    for raw in body.get("decision_items") or []:
+        text = str(raw.get("text") or "").strip()
+        if len(text) < 2:
+            raise ValueError("Укажите решение")
+        decisions.append(
+            {
+                "text": text,
+                "owner_role": _role(raw.get("owner_role")),
+                "due": _day(raw.get("due"), "Укажите срок решения"),
+            }
+        )
+    attendees = ", ".join(f"{row['role']} ({row['name']})" if row["name"] else row["role"] for row in people)
+    summary = "; ".join(f"{row['text']} [{row['owner_role']} {row['due']}]" for row in decisions)
+    return {
+        "title": title,
+        "day": day,
+        "attendees": attendees,
+        "decisions": summary,
+        "actions": summary,
+        "participants": people,
+        "agenda": agenda,
+        "decision_items": decisions,
+    }
 
 
 def _pilot_flag(value: str) -> str:
@@ -1482,6 +1582,11 @@ class MemoryStore:
             return True
         return any(row.project_id == project.id and row.user_id == user.id for row in self.directory.values())
 
+    def is_assigned_supervisor(self, user: User, project: Project) -> bool:
+        if user.role != "supervisor":
+            return False
+        return any(row.project_id == project.id and row.user_id == user.id for row in self.directory.values())
+
     def add_upload(
         self,
         user: User,
@@ -1828,6 +1933,11 @@ class MemoryStore:
     def list_projects(self) -> list[Project]:
         return list(self.projects.values())
 
+    def projects_for(self, user: User) -> list[Project]:
+        if user.role == "supervisor":
+            return [project for project in self.projects.values() if self.is_assigned_supervisor(user, project)]
+        return [project for project in self.projects.values() if self.can_access_project(user, project)]
+
     def project_snapshot(self, pid: str) -> dict | None:
         p = self.get_project(pid)
         if not p:
@@ -1973,8 +2083,9 @@ class MemoryStore:
         proj = self.get_project(pid)
         if not proj:
             raise ValueError("Проект не найден")
+        payload = _inspection_payload(body)
         with self._lock:
-            item = Inspection(id=f"in-{uuid4().hex[:8]}", project_id=proj.id, **body)
+            item = Inspection(id=f"in-{uuid4().hex[:8]}", project_id=proj.id, **payload)
             self.inspections[item.id] = item
             self._save_unlocked()
             return item
@@ -2013,8 +2124,9 @@ class MemoryStore:
         proj = self.get_project(pid)
         if not proj:
             raise ValueError("Проект не найден")
+        payload = _meeting_payload(body)
         with self._lock:
-            item = Meeting(id=f"mt-{uuid4().hex[:8]}", project_id=proj.id, **body)
+            item = Meeting(id=f"mt-{uuid4().hex[:8]}", project_id=proj.id, **payload)
             self.meetings[item.id] = item
             self._save_unlocked()
             return item
@@ -2072,9 +2184,9 @@ class MemoryStore:
         if not item:
             raise ValueError("CO не найден")
         with self._lock:
+            already = item.status
             item.status = status  # type: ignore[assignment]
-            if status == "approved":
-                # roll into first matching budget line extras
+            if status == "approved" and already != "approved":
                 extras = next((b for b in self.budget_lines.values() if b.project_id == item.project_id and b.code == "05"), None)
                 if extras:
                     extras.committed_kzt += item.amount_kzt
@@ -2088,7 +2200,13 @@ class MemoryStore:
             raise ValueError("Проект не найден")
         with self._lock:
             n = sum(1 for x in self.change_orders.values() if x.project_id == proj.id) + 1
-            item = ChangeOrder(id=f"co-{uuid4().hex[:8]}", project_id=proj.id, number=f"CO-{n:03d}", **body)
+            item = ChangeOrder(
+                id=f"co-{uuid4().hex[:8]}",
+                project_id=proj.id,
+                number=f"CO-{n:03d}",
+                status="submitted",
+                **body,
+            )
             self.change_orders[item.id] = item
             self._save_unlocked()
             return item

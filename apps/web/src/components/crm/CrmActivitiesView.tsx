@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { createActivity, fetchActivities, toggleActivity } from "@/lib/api";
+import { ErrorRetry, useAsync } from "@/lib/useAsync";
+import { t } from "@/i18n/messages";
 import { ACTIVITY_TYPE } from "@/lib/format";
 import type { ActivityType, CrmActivity, Locale } from "@/lib/types";
 
@@ -14,10 +16,16 @@ export function CrmActivitiesView({
   onSelectDealId: (dealId: string) => void;
 }) {
   const { user } = useAuth();
-  const [activities, setActivities] = useState<CrmActivity[]>([]);
+  const m = t(locale);
   const [filterType, setFilterType] = useState<string>("");
   const [onlyPending, setOnlyPending] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const activitiesQuery = useAsync(
+    () => (user ? fetchActivities(user.email) : Promise.resolve([] as CrmActivity[])),
+    [user?.email],
+  );
+  const activities = activitiesQuery.data ?? [];
+  const loading = activitiesQuery.loading;
+  const load = activitiesQuery.reload;
 
   // New activity modal
   const [isCreating, setIsCreating] = useState(false);
@@ -25,20 +33,6 @@ export function CrmActivitiesView({
   const [newDesc, setNewDesc] = useState("");
   const [newType, setNewType] = useState<ActivityType>("call");
   const [newDueDate, setNewDueDate] = useState("");
-
-  function load() {
-    if (!user) return;
-    setLoading(true);
-    fetchActivities(user.email)
-      .then(setActivities)
-      .catch(() => setActivities([]))
-      .finally(() => setLoading(false));
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
 
   async function handleToggle(id: string, current: boolean) {
     if (!user) return;
@@ -124,7 +118,9 @@ export function CrmActivitiesView({
 
       {/* Activities Feed */}
       <div className="space-y-2.5">
-        {loading ? (
+        {activitiesQuery.status === "error" && !activitiesQuery.data ? (
+          <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={load} />
+        ) : loading ? (
           <div className="py-12 text-center text-xs text-ink/40">Загрузка задач и дел...</div>
         ) : filtered.length === 0 ? (
           <div className="py-12 text-center text-xs text-ink/40 italic bg-white rounded-xl border border-ink/10">
