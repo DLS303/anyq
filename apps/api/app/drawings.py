@@ -4,19 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import re
-import threading
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
 
 from fastapi import HTTPException, Request
-from sqlalchemy import and_, func, or_, select, true, update
+from sqlalchemy import and_, or_, select, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from app.audit import write as audit_write
 from app.company_features import ensure_feature
-from app.drawing_models import DrawingBase, DrawingRevisionRow, DrawingRow, DrawingSetRow, StoredFile
-from app.paths import resolve_stored_file, write_stored_file
+from app.drawing_models import DrawingRevisionRow, DrawingRow, DrawingSetRow, StoredFile
+from app.paths import discard_upload, publish_upload, resolve_stored_file, stage_upload
 from app.pdf_clean import strip_pdf
 from app.schemas import User
 from app.sql_backend import Record
@@ -26,8 +28,6 @@ from app.tenant import company_key
 MAX_PDF_BYTES = 50 * 1024 * 1024
 UPLOAD_ROLES = frozenset({"owner", "supervisor"})
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
-_ready = False
-_lock = threading.Lock()
 
 
 class DrawingConflict(Exception):
@@ -36,17 +36,6 @@ class DrawingConflict(Exception):
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def ensure_schema() -> None:
-    global _ready
-    if _ready:
-        return
-    with _lock:
-        if _ready:
-            return
-        DrawingBase.metadata.create_all(store._sql.engine)
-        _ready = True
 
 
 def parse_uuid(value: str | None, *, required: bool = True) -> str | None:
@@ -94,9 +83,8 @@ def _allowed(project, member, user: User):
     return access
 
 
-def _access_columns(project, member, owner):
+def _access_columns(project, member):
     return (
-        func.coalesce(project.company_key, owner.company_key).label("company_id"),
         project.doc_id.label("project_id"),
         project.owner_id.label("owner_id"),
         member.payload["role_on_site"].as_string().label("site_role"),
@@ -105,9 +93,8 @@ def _access_columns(project, member, owner):
 
 def _with_membership(stmt, project, user: User):
     member = aliased(Record)
-    owner = aliased(Record)
     return (
-        stmt.add_columns(*_access_columns(project, member, owner))
+        stmt.add_columns(*_access_columns(project, member))
         .outerjoin(
             member,
             and_(
@@ -116,7 +103,6 @@ def _with_membership(stmt, project, user: User):
                 member.user_id == user.id,
             ),
         )
-        .outerjoin(owner, and_(owner.collection == "users", owner.doc_id == project.owner_id))
         .where(_allowed(project, member, user))
         .limit(1)
     )
@@ -153,15 +139,18 @@ def path_entity(request: Request) -> tuple[str, str]:
 
 
 def load_access(request: Request, user: User) -> Access:
-    ensure_schema()
     kind, path_id = path_entity(request)
     with store._sql.factory() as session:
         row = session.execute(_access_statement(kind, path_id, user)).first()
-    if row is None or not row.company_id:
+    if row is None:
         raise HTTPException(status_code=404, detail="Не найдено")
-    ensure_feature(str(row.company_id), "drawings")
+    owner = store.get_user(str(row.owner_id or ""))
+    company_id = company_key(owner) if owner is not None else ""
+    if not company_id:
+        raise HTTPException(status_code=404, detail="Не найдено")
+    ensure_feature(company_id, "drawings")
     return Access(
-        company_id=str(row.company_id),
+        company_id=company_id,
         project_id=str(row.project_id),
         user_id=user.id,
         user_role=_clean(user.role),
@@ -254,27 +243,68 @@ def _read_pdf(raw: bytes) -> bytes:
         raise HTTPException(status_code=400, detail="Только PDF") from exc
 
 
-def _store_file(session, access: Access, file_id: str, raw: bytes, stamp: str) -> StoredFile:
+def _prepare_pdf(raw: bytes) -> tuple[bytes, str, Path]:
     cleaned = _read_pdf(raw)
-    digest = hashlib.sha256(cleaned).hexdigest()
-    storage_key = f"{file_id}.pdf"
-    write_stored_file("drawing_pdf", storage_key, cleaned)
-    row = StoredFile(
-        id=file_id,
+    key, tmp = stage_upload("drawing_pdf", cleaned)
+    return cleaned, key, tmp
+
+
+def _store_file(session, access: Access, file_id: str, cleaned: bytes, storage_key: str, stamp: str, user_id: str) -> None:
+    session.add(
+        StoredFile(
+            id=file_id,
+            company_id=access.company_id,
+            project_id=access.project_id,
+            storage_key=storage_key,
+            kind="drawing_pdf",
+            mime="application/pdf",
+            size_bytes=len(cleaned),
+            sha256=hashlib.sha256(cleaned).hexdigest(),
+            meta_stripped=True,
+            created_by=user_id,
+            updated_by=user_id,
+            created_at=stamp,
+            updated_at=stamp,
+            row_version=1,
+            deleted_at=None,
+        )
+    )
+
+
+def _use_set(
+    session,
+    access: Access,
+    *,
+    set_id: str | None,
+    set_title: str | None,
+    discipline: str | None,
+    stamp: str,
+    label: str,
+    user_id: str,
+) -> DrawingSetRow | None:
+    if set_id:
+        existing = session.get(DrawingSetRow, set_id)
+        if existing is not None:
+            if existing.deleted_at or existing.project_id != access.project_id:
+                raise HTTPException(status_code=404, detail="Не найдено")
+            return existing
+    elif not (set_title or "").strip():
+        return None
+    row = DrawingSetRow(
+        id=set_id or str(uuid4()),
         company_id=access.company_id,
         project_id=access.project_id,
-        storage_key=storage_key,
-        kind="drawing_pdf",
-        mime="application/pdf",
-        size_bytes=len(cleaned),
-        sha256=digest,
-        meta_stripped=True,
+        title=_clip(set_title, 120, label),
+        discipline=_clip(discipline, 40),
+        created_by=user_id,
+        updated_by=user_id,
         created_at=stamp,
         updated_at=stamp,
         row_version=1,
         deleted_at=None,
     )
     session.add(row)
+    session.flush()
     return row
 
 
@@ -302,78 +332,82 @@ def create_sheet(
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     if row_version not in (None, 0):
         raise DrawingConflict()
-    ensure_schema()
+    cleaned, storage_key, staged = _prepare_pdf(raw)
     stamp = _now()
     label = _clip(title, 120, "sheet")
     chosen_code = _clip(code, 32).upper() or _code_from(label, drawing_id)
     chosen_rev = _clip(rev, 16).upper() or "A"
-    with store._sql.factory() as session:
-        try:
-            sheet_set = None
-            if set_id or (set_title or "").strip():
-                set_key = set_id or drawing_id
-                sheet_set = DrawingSetRow(
-                    id=set_key,
+    committed = False
+    try:
+        with store._sql.factory() as session:
+            try:
+                sheet_set = _use_set(
+                    session,
+                    access,
+                    set_id=set_id,
+                    set_title=set_title,
+                    discipline=discipline,
+                    stamp=stamp,
+                    label=label,
+                    user_id=user_id,
+                )
+                drawing = DrawingRow(
+                    id=drawing_id,
                     company_id=access.company_id,
                     project_id=access.project_id,
-                    title=_clip(set_title, 120, label),
-                    discipline=_clip(discipline, 40),
+                    set_id=sheet_set.id if sheet_set else None,
+                    code=chosen_code,
+                    title=label,
+                    created_by=user_id,
+                    updated_by=user_id,
                     created_at=stamp,
                     updated_at=stamp,
                     row_version=1,
                     deleted_at=None,
                 )
-                session.add(sheet_set)
+                session.add(drawing)
                 session.flush()
-            drawing = DrawingRow(
-                id=drawing_id,
-                company_id=access.company_id,
-                project_id=access.project_id,
-                set_id=sheet_set.id if sheet_set else None,
-                code=chosen_code,
-                title=label,
-                created_at=stamp,
-                updated_at=stamp,
-                row_version=1,
-                deleted_at=None,
-            )
-            session.add(drawing)
-            session.flush()
-            _store_file(session, access, file_id, raw, stamp)
-            session.flush()
-            session.add(
-                DrawingRevisionRow(
-                    id=revision_id,
-                    company_id=access.company_id,
-                    project_id=access.project_id,
-                    drawing_id=drawing_id,
-                    rev=chosen_rev,
-                    file_id=file_id,
-                    is_current=True,
-                    uploaded_by=user_id,
-                    uploaded_at=stamp,
-                    created_at=stamp,
-                    updated_at=stamp,
-                    row_version=1,
-                    deleted_at=None,
+                _store_file(session, access, file_id, cleaned, storage_key, stamp, user_id)
+                session.flush()
+                session.add(
+                    DrawingRevisionRow(
+                        id=revision_id,
+                        company_id=access.company_id,
+                        project_id=access.project_id,
+                        drawing_id=drawing_id,
+                        rev=chosen_rev,
+                        file_id=file_id,
+                        is_current=True,
+                        uploaded_by=user_id,
+                        uploaded_at=stamp,
+                        created_at=stamp,
+                        updated_at=stamp,
+                        row_version=1,
+                        deleted_at=None,
+                    )
                 )
-            )
-            audit_write(
-                "drawing.upload",
-                "drawing_revision",
-                revision_id,
-                access.project_id,
-                {"rev": chosen_rev, "file_id": file_id, "drawing_id": drawing_id},
-                session=session,
-                company_id=access.company_id,
-                actor_user_id=user_id,
-            )
-            session.commit()
-        except IntegrityError as exc:
-            session.rollback()
-            _conflict(exc)
-        revisions = _revisions_for(session, drawing_id)
-        return _sheet_out(drawing, revisions, sheet_set)
+                audit_write(
+                    "drawing.upload",
+                    "drawing_revision",
+                    revision_id,
+                    access.project_id,
+                    {"rev": chosen_rev, "file_id": file_id, "drawing_id": drawing_id},
+                    session=session,
+                    company_id=access.company_id,
+                    actor_user_id=user_id,
+                )
+                session.commit()
+                committed = True
+                result = _sheet_out(drawing, _revisions_for(session, drawing_id), sheet_set)
+            except IntegrityError as exc:
+                session.rollback()
+                _conflict(exc)
+    finally:
+        if committed:
+            publish_upload("drawing_pdf", storage_key, staged)
+        else:
+            discard_upload(staged)
+    return result
 
 
 def add_revision(
@@ -391,109 +425,135 @@ def add_revision(
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     if row_version is None:
         raise HTTPException(status_code=400, detail="Некорректная версия")
-    ensure_schema()
+    cleaned, storage_key, staged = _prepare_pdf(raw)
     stamp = _now()
-    with store._sql.factory() as session:
-        drawing = session.get(DrawingRow, drawing_id)
-        if drawing is None or drawing.deleted_at or drawing.project_id != access.project_id:
-            raise HTTPException(status_code=404, detail="Не найдено")
-        taken = {
-            item.rev
-            for item in session.scalars(
-                select(DrawingRevisionRow).where(
-                    DrawingRevisionRow.drawing_id == drawing_id,
-                    DrawingRevisionRow.deleted_at.is_(None),
+    committed = False
+    try:
+        with store._sql.factory() as session:
+            try:
+                drawing = session.get(DrawingRow, drawing_id)
+                if drawing is None or drawing.deleted_at or drawing.project_id != access.project_id:
+                    raise HTTPException(status_code=404, detail="Не найдено")
+                taken = {
+                    item.rev
+                    for item in session.scalars(
+                        select(DrawingRevisionRow).where(
+                            DrawingRevisionRow.drawing_id == drawing_id,
+                            DrawingRevisionRow.deleted_at.is_(None),
+                        )
+                    ).all()
+                }
+                chosen = _clip(rev, 16).upper() or _next_rev(taken)
+                if chosen in taken:
+                    raise DrawingConflict()
+                bumped = session.execute(
+                    update(DrawingRow)
+                    .where(
+                        DrawingRow.id == drawing_id,
+                        DrawingRow.row_version == row_version,
+                        DrawingRow.deleted_at.is_(None),
+                    )
+                    .values(row_version=row_version + 1, updated_at=stamp, updated_by=user_id)
                 )
-            ).all()
-        }
-        chosen = _clip(rev, 16).upper() or _next_rev(taken)
-        if chosen in taken:
-            raise DrawingConflict()
-        try:
-            bumped = session.execute(
-                update(DrawingRow)
-                .where(
-                    DrawingRow.id == drawing_id,
-                    DrawingRow.row_version == row_version,
-                    DrawingRow.deleted_at.is_(None),
+                if bumped.rowcount != 1:
+                    session.rollback()
+                    raise DrawingConflict()
+                session.execute(
+                    update(DrawingRevisionRow)
+                    .where(
+                        DrawingRevisionRow.drawing_id == drawing_id,
+                        DrawingRevisionRow.is_current.is_(True),
+                        DrawingRevisionRow.deleted_at.is_(None),
+                    )
+                    .values(is_current=False, row_version=DrawingRevisionRow.row_version + 1, updated_at=stamp)
                 )
-                .values(row_version=row_version + 1, updated_at=stamp)
-            )
-            if bumped.rowcount != 1:
-                session.rollback()
-                raise DrawingConflict()
-            session.execute(
-                update(DrawingRevisionRow)
-                .where(
-                    DrawingRevisionRow.drawing_id == drawing_id,
-                    DrawingRevisionRow.is_current.is_(True),
-                    DrawingRevisionRow.deleted_at.is_(None),
+                _store_file(session, access, file_id, cleaned, storage_key, stamp, user_id)
+                session.flush()
+                session.add(
+                    DrawingRevisionRow(
+                        id=revision_id,
+                        company_id=drawing.company_id,
+                        project_id=drawing.project_id,
+                        drawing_id=drawing_id,
+                        rev=chosen,
+                        file_id=file_id,
+                        is_current=True,
+                        uploaded_by=user_id,
+                        uploaded_at=stamp,
+                        created_at=stamp,
+                        updated_at=stamp,
+                        row_version=1,
+                        deleted_at=None,
+                    )
                 )
-                .values(is_current=False, row_version=DrawingRevisionRow.row_version + 1, updated_at=stamp)
-            )
-            _store_file(session, access, file_id, raw, stamp)
-            session.flush()
-            session.add(
-                DrawingRevisionRow(
-                    id=revision_id,
+                audit_write(
+                    "drawing.upload",
+                    "drawing_revision",
+                    revision_id,
+                    drawing.project_id,
+                    {"rev": chosen, "file_id": file_id, "drawing_id": drawing_id},
+                    session=session,
                     company_id=drawing.company_id,
-                    project_id=drawing.project_id,
-                    drawing_id=drawing_id,
-                    rev=chosen,
-                    file_id=file_id,
-                    is_current=True,
-                    uploaded_by=user_id,
-                    uploaded_at=stamp,
-                    created_at=stamp,
-                    updated_at=stamp,
-                    row_version=1,
-                    deleted_at=None,
+                    actor_user_id=user_id,
                 )
-            )
-            audit_write(
-                "drawing.upload",
-                "drawing_revision",
-                revision_id,
-                drawing.project_id,
-                {"rev": chosen, "file_id": file_id, "drawing_id": drawing_id},
-                session=session,
-                company_id=drawing.company_id,
-                actor_user_id=user_id,
-            )
-            session.commit()
-        except IntegrityError as exc:
-            session.rollback()
-            _conflict(exc)
-        session.refresh(drawing)
-        sheet_set = session.get(DrawingSetRow, drawing.set_id) if drawing.set_id else None
-        return _sheet_out(drawing, _revisions_for(session, drawing_id), sheet_set)
+                session.commit()
+                committed = True
+                session.refresh(drawing)
+                sheet_set = session.get(DrawingSetRow, drawing.set_id) if drawing.set_id else None
+                result = _sheet_out(drawing, _revisions_for(session, drawing_id), sheet_set)
+            except IntegrityError as exc:
+                session.rollback()
+                _conflict(exc)
+    finally:
+        if committed:
+            publish_upload("drawing_pdf", storage_key, staged)
+        else:
+            discard_upload(staged)
+    return result
+
+
+def _project_sheets(session, project_id: str) -> list[dict]:
+    current = aliased(DrawingRevisionRow)
+    rows = session.execute(
+        select(DrawingRow, DrawingSetRow, current)
+        .outerjoin(
+            current,
+            and_(
+                current.drawing_id == DrawingRow.id,
+                current.is_current.is_(True),
+                current.deleted_at.is_(None),
+            ),
+        )
+        .outerjoin(DrawingSetRow, and_(DrawingSetRow.id == DrawingRow.set_id, DrawingSetRow.deleted_at.is_(None)))
+        .where(DrawingRow.project_id == project_id, DrawingRow.deleted_at.is_(None))
+        .order_by(DrawingRow.created_at, DrawingRow.code)
+    ).all()
+    grouped: dict[str, list[DrawingRevisionRow]] = defaultdict(list)
+    for item in session.scalars(
+        select(DrawingRevisionRow)
+        .where(DrawingRevisionRow.project_id == project_id, DrawingRevisionRow.deleted_at.is_(None))
+        .order_by(DrawingRevisionRow.uploaded_at, DrawingRevisionRow.rev)
+    ).all():
+        grouped[item.drawing_id].append(item)
+    sheets = []
+    for drawing, sheet_set, current_row in rows:
+        revisions = grouped.get(drawing.id) or ([current_row] if current_row is not None else [])
+        sheets.append(_sheet_out(drawing, revisions, sheet_set))
+    return sheets
+
+
+def sheets_for_project(project_id: str) -> list[dict]:
+    with store._sql.factory() as session:
+        return _project_sheets(session, project_id)
 
 
 def list_sheets(access: Access) -> dict:
-    ensure_schema()
     with store._sql.factory() as session:
-        drawings = session.scalars(
-            select(DrawingRow)
-            .where(DrawingRow.project_id == access.project_id, DrawingRow.deleted_at.is_(None))
-            .order_by(DrawingRow.created_at, DrawingRow.code)
-        ).all()
-        sets = {
-            item.id: item
-            for item in session.scalars(
-                select(DrawingSetRow).where(
-                    DrawingSetRow.project_id == access.project_id,
-                    DrawingSetRow.deleted_at.is_(None),
-                )
-            ).all()
-        }
-        sheets = []
-        for drawing in drawings:
-            sheets.append(_sheet_out(drawing, _revisions_for(session, drawing.id), sets.get(drawing.set_id or "")))
+        sheets = _project_sheets(session, access.project_id)
     return {"can_upload": access.can_upload, "sheets": sheets}
 
 
 def get_sheet(access: Access, drawing_id: str, rev: str | None) -> dict:
-    ensure_schema()
     with store._sql.factory() as session:
         drawing = session.get(DrawingRow, drawing_id)
         if drawing is None or drawing.deleted_at or drawing.project_id != access.project_id:

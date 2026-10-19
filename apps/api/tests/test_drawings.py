@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
@@ -14,9 +15,10 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.company_features import project_company_id
-from app.drawing_models import DrawingRevisionRow
+from app.drawing_models import DrawingRevisionRow, StoredFile
 from app.drawings import MAX_PDF_BYTES
 from app.main import app
+from app.paths import resolve_stored_file
 from app.store import store
 
 client = TestClient(app)
@@ -30,9 +32,9 @@ def _flag_off(monkeypatch):
     monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
 
 
-def _pdf(author: str = "SYNTH-AUTHOR-77") -> bytes:
+def _pdf(author: str = "SYNTH-AUTHOR-77", width: float = 240) -> bytes:
     writer = PdfWriter()
-    writer.add_blank_page(width=240, height=160)
+    writer.add_blank_page(width=width, height=160)
     writer.add_metadata({"/Author": author, "/Title": "Plan"})
     buffer = io.BytesIO()
     writer.write(buffer)
@@ -100,12 +102,14 @@ def _upload(token: str, pid: str, **extra) -> object:
         "title": extra.pop("title", "Level plan"),
         "row_version": extra.pop("row_version", "0"),
     }
+    width = extra.pop("width", None)
     fields.update(extra)
+    payload = _pdf(width=width) if width else _pdf()
     return client.post(
         f"/v1/site/projects/{pid}/drawings",
         headers=_auth(token),
         data=fields,
-        files={"file": ("level.pdf", _pdf(), "application/pdf")},
+        files={"file": ("level.pdf", payload, "application/pdf")},
     )
 
 
@@ -286,6 +290,104 @@ def test_new_revision_becomes_current_and_conflict_is_409():
     assert "storage_key" not in (audit.changes or "")
 
 
+def test_reused_file_id_leaves_the_other_file_unchanged():
+    owner = _register("draw-file-a@example.com", "510000000011")
+    _promote("draw-file-a@example.com", "owner")
+    other = _register("draw-file-b@example.com", "510000000012")
+    _promote("draw-file-b@example.com", "owner")
+    pid = _project(owner["token"], "File yard")
+    other_pid = _project(other["token"], "Other file yard")
+    _enable(owner["token"])
+    _enable(other["token"])
+    shared = str(uuid4())
+    created = _upload(owner["token"], pid, file_id=shared)
+    assert created.status_code == 200, created.text
+    sheet = created.json()["data"]
+    original = client.get(f"/v1/site/drawings/{sheet['id']}/file", headers=_auth(owner["token"]))
+    assert original.status_code == 200, original.text
+    with store._sql.factory() as session:
+        stored = session.get(StoredFile, shared)
+    assert stored is not None
+    assert shared not in stored.storage_key
+    on_disk = resolve_stored_file(stored.kind, stored.storage_key).read_bytes()
+    assert on_disk == original.content
+
+    foreign = _upload(other["token"], other_pid, file_id=shared, width=320)
+    assert foreign.status_code == 409, foreign.text
+    again = client.get(f"/v1/site/drawings/{sheet['id']}/file", headers=_auth(owner["token"]))
+    assert again.content == original.content
+    assert resolve_stored_file(stored.kind, stored.storage_key).read_bytes() == on_disk
+
+    reused = client.post(
+        f"/v1/site/drawings/{sheet['id']}/revisions",
+        headers=_auth(owner["token"]),
+        data={"id": str(uuid4()), "file_id": shared, "rev": "B", "row_version": "1"},
+        files={"file": ("level.pdf", _pdf(width=360), "application/pdf")},
+    )
+    assert reused.status_code == 409, reused.text
+    kept = client.get(f"/v1/site/drawings/{sheet['id']}/file", headers=_auth(owner["token"]))
+    assert kept.content == original.content
+    assert resolve_stored_file(stored.kind, stored.storage_key).read_bytes() == on_disk
+
+
+def test_sheet_company_is_the_owner_stored_key():
+    owner = _register("draw-key@example.com", "510000000015")
+    _promote("draw-key@example.com", "owner")
+    pid = _project(owner["token"], "Key yard")
+    _enable(owner["token"])
+    stored = project_company_id(store.get_project(pid))
+    assert stored.startswith("bin:")
+    with store._sql.factory() as session:
+        session.execute(
+            text("UPDATE records SET company_key = :key WHERE collection = 'projects' AND doc_id = :id"),
+            {"key": "bin:000000000099", "id": pid},
+        )
+        session.commit()
+    created = _upload(owner["token"], pid, title="Stored key")
+    assert created.status_code == 200, created.text
+    assert created.json()["data"]["company_id"] == stored
+    assert created.json()["data"]["company_id"] != "bin:000000000099"
+
+
+def test_sheet_can_join_an_existing_set():
+    owner = _register("draw-set@example.com", "510000000013")
+    _promote("draw-set@example.com", "owner")
+    pid = _project(owner["token"], "Set yard")
+    _enable(owner["token"])
+    set_id = str(uuid4())
+    first = _upload(owner["token"], pid, set_id=set_id, set_title="Plans", code="A1")
+    assert first.status_code == 200, first.text
+    second = _upload(owner["token"], pid, set_id=set_id, title="Section", code="A2")
+    assert second.status_code == 200, second.text
+    assert second.json()["data"]["set_id"] == set_id
+
+
+def test_concurrent_revision_uploads():
+    owner = _register("draw-race@example.com", "510000000014")
+    _promote("draw-race@example.com", "owner")
+    pid = _project(owner["token"], "Race yard")
+    _enable(owner["token"])
+    created = _upload(owner["token"], pid, rev="A")
+    assert created.status_code == 200, created.text
+    sheet = created.json()["data"]
+
+    def send(rev: str):
+        return client.post(
+            f"/v1/site/drawings/{sheet['id']}/revisions",
+            headers=_auth(owner["token"]),
+            data={"id": str(uuid4()), "file_id": str(uuid4()), "rev": rev, "row_version": "1"},
+            files={"file": ("level.pdf", _pdf(), "application/pdf")},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        done = list(pool.map(send, ("B", "C")))
+    assert sorted(item.status_code for item in done) == [200, 409]
+    fresh = client.get(f"/v1/site/drawings/{sheet['id']}", headers=_auth(owner["token"]))
+    assert fresh.status_code == 200, fresh.text
+    current = [item for item in fresh.json()["data"]["revisions"] if item["is_current"]]
+    assert len(current) == 1
+
+
 def test_alembic_drawing_revision_roundtrip(tmp_path):
     db = tmp_path / "drawings.sqlite"
     env = os.environ.copy()
@@ -305,6 +407,10 @@ def test_alembic_drawing_revision_roundtrip(tmp_path):
         for row in connection.execute("SELECT name, sql FROM sqlite_master WHERE type='index'")
     }
     assert "WHERE is_current = 1 AND deleted_at IS NULL" in indexes["ux_drawing_current"]
+    assert "ix_drawings_set_id" in indexes
+    assert "ix_drawing_revisions_file_id" in indexes
+    file_columns = {row[1] for row in connection.execute("PRAGMA table_info(files)")}
+    assert {"created_by", "updated_by"} <= file_columns
     columns = {row[1] for row in connection.execute("PRAGMA table_info(audit_log)")}
     assert {"entity_type", "entity_id", "project_id", "changes"} <= columns
     connection.close()

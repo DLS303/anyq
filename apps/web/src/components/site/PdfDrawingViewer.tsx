@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { PDFDocumentProxy } from "pdfjs-dist";
 import type { Locale } from "@/lib/types";
 import { t } from "@/i18n/messages";
 
@@ -15,7 +16,7 @@ export function PdfDrawingViewer({ locale, fileKey, loadFile }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const scaleRef = useRef(1);
-  const [pdfDoc, setPdfDoc] = useState<{ numPages: number; getPage: (n: number) => Promise<PdfPage> } | null>(null);
+  const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [pageNum, setPageNum] = useState(1);
   const [scale, setScale] = useState(1);
   const [failed, setFailed] = useState(false);
@@ -139,8 +140,3 @@ export function PdfDrawingViewer({ locale, fileKey, loadFile }: Props) {
     </div>
   );
 }
-
-type PdfPage = {
-  getViewport: (params: { scale: number }) => { width: number; height: number };
-  render: (params: unknown) => { promise: Promise<void> };
-};

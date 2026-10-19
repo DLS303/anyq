@@ -8,6 +8,7 @@ down_revision is the company-feature revision from PR #18.
 """
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20261019_0003_pf1a"
@@ -28,6 +29,8 @@ def upgrade() -> None:
         sa.Column("size_bytes", sa.Integer(), nullable=False),
         sa.Column("sha256", sa.String(length=64), nullable=False),
         sa.Column("meta_stripped", sa.Boolean(), nullable=False),
+        sa.Column("created_by", sa.String(length=80), nullable=False, server_default=""),
+        sa.Column("updated_by", sa.String(length=80), nullable=False, server_default=""),
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("updated_at", sa.String(length=40), nullable=False),
         sa.Column("row_version", sa.Integer(), nullable=False),
@@ -42,6 +45,8 @@ def upgrade() -> None:
         sa.Column("project_id", sa.String(length=80), nullable=False),
         sa.Column("title", sa.String(length=120), nullable=False),
         sa.Column("discipline", sa.String(length=40), nullable=False),
+        sa.Column("created_by", sa.String(length=80), nullable=False, server_default=""),
+        sa.Column("updated_by", sa.String(length=80), nullable=False, server_default=""),
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("updated_at", sa.String(length=40), nullable=False),
         sa.Column("row_version", sa.Integer(), nullable=False),
@@ -56,12 +61,15 @@ def upgrade() -> None:
         sa.Column("set_id", sa.String(length=36), sa.ForeignKey("drawing_sets.id"), nullable=True),
         sa.Column("code", sa.String(length=32), nullable=False),
         sa.Column("title", sa.String(length=120), nullable=False),
+        sa.Column("created_by", sa.String(length=80), nullable=False, server_default=""),
+        sa.Column("updated_by", sa.String(length=80), nullable=False, server_default=""),
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("updated_at", sa.String(length=40), nullable=False),
         sa.Column("row_version", sa.Integer(), nullable=False),
         sa.Column("deleted_at", sa.String(length=40), nullable=True),
     )
     op.create_index("ix_drawings_company_updated", "drawings", ["company_id", "updated_at"])
+    op.create_index("ix_drawings_set_id", "drawings", ["set_id"])
     op.create_table(
         "drawing_revisions",
         sa.Column("id", sa.String(length=36), primary_key=True),
@@ -79,6 +87,7 @@ def upgrade() -> None:
         sa.Column("deleted_at", sa.String(length=40), nullable=True),
     )
     op.create_index("ix_drawing_revisions_company_updated", "drawing_revisions", ["company_id", "updated_at"])
+    op.create_index("ix_drawing_revisions_file_id", "drawing_revisions", ["file_id"])
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
         op.execute(
@@ -107,9 +116,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS ux_drawing_current")
     op.execute("DROP INDEX IF EXISTS ux_drawing_rev")
+    op.drop_index("ix_drawing_revisions_file_id", table_name="drawing_revisions")
     op.drop_index("ix_drawing_revisions_company_updated", table_name="drawing_revisions")
     op.drop_table("drawing_revisions")
     op.execute("DROP INDEX IF EXISTS ux_drawings_code")
+    op.drop_index("ix_drawings_set_id", table_name="drawings")
     op.drop_index("ix_drawings_company_updated", table_name="drawings")
     op.drop_table("drawings")
     op.drop_index("ix_drawing_sets_company_updated", table_name="drawing_sets")

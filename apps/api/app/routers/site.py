@@ -13,6 +13,7 @@ from app.company_features import (
     require_feature,
 )
 from app.deps import require_user
+from app.drawings import sheets_for_project
 from app.idempotency import IdempotencyConflict, run_idempotent
 from app.paths import write_stored_file
 from app.photo_jobs import (
@@ -352,6 +353,8 @@ def _member_or_404(user: User, pid: str) -> Project:
 @router.get("/projects/{pid}/drawings")
 def list_drawings(pid: str, user: User = Depends(require_feature("drawings"))):
     project = _member_or_404(user, pid)
+    if flag_map(project_company_id(project)).get("drawings"):
+        return {"ok": True, "data": sheets_for_project(project.id)}
     return {"ok": True, "data": store._by_project(store.drawings, project.id)}
 
 

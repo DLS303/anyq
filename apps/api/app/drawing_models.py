@@ -1,6 +1,15 @@
 """SQL rows for drawing sheets. Kept off the records metadata so migration 0001 does not create them."""
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -20,6 +29,8 @@ class StoredFile(DrawingBase):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     meta_stripped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    updated_by: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -39,6 +50,8 @@ class DrawingSetRow(DrawingBase):
     project_id: Mapped[str] = mapped_column(String(80), nullable=False)
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     discipline: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    created_by: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    updated_by: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -55,6 +68,8 @@ class DrawingRow(DrawingBase):
     project_id: Mapped[str] = mapped_column(String(80), nullable=False)
     set_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("drawing_sets.id"))
     code: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    updated_by: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -63,6 +78,7 @@ class DrawingRow(DrawingBase):
 
     __table_args__ = (
         Index("ix_drawings_company_updated", "company_id", "updated_at"),
+        Index("ix_drawings_set_id", "set_id"),
         Index(
             "ux_drawings_code",
             "project_id",
@@ -93,6 +109,7 @@ class DrawingRevisionRow(DrawingBase):
 
     __table_args__ = (
         Index("ix_drawing_revisions_company_updated", "company_id", "updated_at"),
+        Index("ix_drawing_revisions_file_id", "file_id"),
         Index(
             "ux_drawing_rev",
             "drawing_id",
