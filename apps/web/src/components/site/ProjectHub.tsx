@@ -31,6 +31,18 @@ const Bim3dViewer = dynamic(
   { ssr: false, loading: () => <ChunkFallback /> },
 );
 
+const ProcurementTab = dynamic(
+  () => import("./ProcurementTab").then((m) => m.ProcurementTab),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center p-12 text-ink/50 glass rounded-2xl">
+        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-pine mr-3" />
+      </div>
+    ),
+  },
+);
+
 const KsActGenerator = dynamic(
   () => loadWithin(import("./KsActGenerator").then((m) => m.KsActGenerator)),
   { ssr: false, loading: () => <ChunkFallback /> },
@@ -470,16 +482,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         )
       ) : null}
 
-      {tab === "procurement" ? (
-        <EmptyLine
-          text={m.hubBuyEmpty}
-          action={
-            <Link href={`/${locale}/estimates`} className={primaryBtn}>
-              {m.hubBuyAction}
-            </Link>
-          }
-        />
-      ) : null}
+      {tab === "procurement" ? <ProcurementTab locale={locale} projectId={p.id} projectTitle={p.title} /> : null}
 
       {tab === "qa" ? (
         <div className="grid md:grid-cols-2 gap-6">

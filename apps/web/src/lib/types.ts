@@ -415,3 +415,146 @@ export type ScheduleTask = {
   status: TaskStatus;
   depends?: string;
 };
+
+export type ProcAccess = {
+  member: boolean;
+  can_request: boolean;
+  can_offer: boolean;
+  can_decide: boolean;
+  can_invoice: boolean;
+};
+
+export type ProcRequestRow = {
+  id: string;
+  project_id: string;
+  number: number;
+  title: string;
+  status: "draft" | "collecting" | "decided";
+  created_at: string;
+  created_by: string;
+  lines: number;
+  offers: number;
+  documents: number;
+};
+
+export type ProcList = {
+  requests: ProcRequestRow[];
+  access: ProcAccess;
+  vat_rate: number;
+};
+
+export type ProcOfferCell = {
+  id: string;
+  line_id: string;
+  supplier_name: string;
+  price_kzt: number;
+  vat_included: boolean | null;
+  qty_available: number | null;
+  source_doc_id: string | null;
+  source_label: string;
+  offer_date: string;
+  confirmed: boolean;
+  note: string;
+  delivery_term: string;
+  is_best: boolean;
+  is_selected: boolean;
+  short: boolean;
+};
+
+export type ProcSheetLine = {
+  id: string;
+  pos_no: string;
+  title: string;
+  unit: string;
+  qty: number;
+  note: string;
+  selected_offer_id: string | null;
+  status: string;
+  status_code: "no_price" | "one_offer" | "no_compare" | "compared";
+  comparable: boolean;
+  best_offer_id: string | null;
+  short_qty: boolean;
+  short_available: number | null;
+  short_need: number | null;
+  offers: ProcOfferCell[];
+  cells: Record<string, ProcOfferCell | null>;
+};
+
+export type ProcDocumentRow = {
+  id: string;
+  supplier_name: string;
+  doc_number: string;
+  doc_date: string;
+  amount_kzt: number | null;
+  duplicate_of: string | null;
+  duplicate_reason: string;
+  is_actual: boolean;
+};
+
+export type ProcSheet = {
+  request: {
+    id: string;
+    number: number;
+    title: string;
+    status: "draft" | "collecting" | "decided";
+  };
+  suppliers: { name: string; total_kzt: number; priced_lines: number; vat_mixed: boolean }[];
+  lines: ProcSheetLine[];
+  summary: { lines: number; closed: number; no_price: number };
+  documents: ProcDocumentRow[];
+  access: ProcAccess;
+  vat_rate: number;
+};
+
+export type ProcImportRow = {
+  row: number;
+  pos_no?: string;
+  title?: string;
+  unit?: string;
+  qty?: number | null;
+  note?: string;
+  supplier_name?: string;
+  price_kzt?: number | null;
+  errors: string[];
+};
+
+export type ProcImportResult = {
+  preview: boolean;
+  created: number;
+  updated: number;
+  skipped: number;
+  warnings: { row: number; code: string }[];
+  rows: ProcImportRow[];
+  contact_ignored: boolean;
+};
+
+export type ProcDocResult = {
+  document: ProcDocumentRow;
+  duplicate: boolean;
+  duplicate_of: string | null;
+  duplicate_reason: string;
+  new_version_of_supplier: boolean;
+};
+
+export type ProcPickItem = {
+  id?: string;
+  title: string;
+  unit: string;
+  qty?: number;
+  source: "recent" | "catalog";
+};
+
+export type ProcPicker = {
+  recent: ProcPickItem[];
+  catalog: ProcPickItem[];
+};
+
+export type ProcRepeatLine = {
+  id: string;
+  pos_no: string;
+  title: string;
+  unit: string;
+  qty: number;
+  note: string;
+  selected_offer_id: string | null;
+};

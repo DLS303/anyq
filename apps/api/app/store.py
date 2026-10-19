@@ -105,6 +105,7 @@ from app.site_models import (
     Timesheet,
     VoiceNote,
 )
+from app.store_procurement import dump_lists, load_into
 from app.transitions import (
     MATERIAL_ORDER_TRANSITIONS,
     SERVICE_ORDER_TRANSITIONS,
@@ -298,6 +299,10 @@ class MemoryStore:
         self.crm_invoices: dict[str, CrmInvoice] = {}
         self.files: dict[str, StoredUpload] = {}
         self.consents: list[ConsentRecord] = []
+        self.proc_requests = {}
+        self.proc_lines = {}
+        self.proc_offers = {}
+        self.proc_docs = {}
         self._load()
         self._ensure_seed_users()
         self._ensure_demo_passwords()
@@ -421,6 +426,7 @@ class MemoryStore:
         self.schedule = {item["id"]: ScheduleTask.model_validate(item) for item in raw.get("schedule", [])}
         self.budget_lines = {item["id"]: BudgetLine.model_validate(item) for item in raw.get("budget_lines", [])}
         self.change_orders = {item["id"]: ChangeOrder.model_validate(item) for item in raw.get("change_orders", [])}
+        load_into(self, raw)
         self.timesheets = {item["id"]: Timesheet.model_validate(item) for item in raw.get("timesheets", [])}
         self.meetings = {item["id"]: Meeting.model_validate(item) for item in raw.get("meetings", [])}
         self.directory = {item["id"]: DirectoryRow.model_validate(item) for item in raw.get("directory", [])}
@@ -484,6 +490,7 @@ class MemoryStore:
             "directory": [x.model_dump() for x in self.directory.values()],
             "files": [x.model_dump() for x in self.files.values()],
             "consents": [x.model_dump() for x in self.consents],
+            **dump_lists(self),
         }
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
