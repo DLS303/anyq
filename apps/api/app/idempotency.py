@@ -10,6 +10,7 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
 
 from sqlalchemy import delete, select
@@ -41,11 +42,20 @@ def _load_row(user_id: str, key: str):
 
     with store._sql.factory() as session:
         return session.scalar(
-            select(IdempotencyKey).where(IdempotencyKey.user_id == user_id, IdempotencyKey.key == key)
+            select(IdempotencyKey).where(
+                IdempotencyKey.user_id == user_id, IdempotencyKey.key == key
+            )
         )
 
 
-def run_idempotent(user_id: str, key: str | None, fingerprint: str, create: Callable[[], T]) -> T:
+def run_idempotent(
+    user_id: str,
+    key: str | None,
+    fingerprint: str,
+    create: Callable[[], T],
+    *,
+    persist: Callable[[T], Any] | None = None,
+) -> T:
     cleaned = (key or "").strip()
     if not cleaned:
         return create()
@@ -109,16 +119,64 @@ def run_idempotent(user_id: str, key: str | None, fingerprint: str, create: Call
         data = create()
     except Exception:
         with store._sql.factory() as session:
-            session.execute(delete(IdempotencyKey).where(IdempotencyKey.user_id == user_id, IdempotencyKey.key == cleaned))
+            session.execute(
+                delete(IdempotencyKey).where(
+                    IdempotencyKey.user_id == user_id, IdempotencyKey.key == cleaned
+                )
+            )
             session.commit()
         raise
 
-    encoded = json.dumps(_encode(data), ensure_ascii=False)
+    stored = data if persist is None else persist(data)
+    encoded = json.dumps(_encode(stored), ensure_ascii=False)
     with store._sql.factory() as session:
-        row = session.scalar(select(IdempotencyKey).where(IdempotencyKey.user_id == user_id, IdempotencyKey.key == cleaned))
+        row = session.scalar(
+            select(IdempotencyKey).where(
+                IdempotencyKey.user_id == user_id, IdempotencyKey.key == cleaned
+            )
+        )
         if row is not None:
             row.response_json = encoded
             session.commit()
     with _lock:
-        _rows[token] = {"fp": fingerprint, "data": data}
+        _rows[token] = {"fp": fingerprint, "data": stored}
     return data
+
+
+def purge_idempotency_keys(older_than_hours: int = 24) -> int:
+    """Delete idempotency rows whose created_at is older than the retention window."""
+    cutoff = (datetime.now(UTC) - timedelta(hours=older_than_hours)).isoformat(
+        timespec="seconds"
+    )
+    from app.sql_backend import IdempotencyKey
+    from app.store import store
+
+    with store._sql.factory() as session:
+        stale = session.scalars(
+            select(IdempotencyKey).where(IdempotencyKey.created_at < cutoff)
+        ).all()
+        tokens = [(row.user_id, row.key) for row in stale]
+        if tokens:
+            session.execute(
+                delete(IdempotencyKey).where(IdempotencyKey.created_at < cutoff)
+            )
+            session.commit()
+    with _lock:
+        for item in tokens:
+            _rows.pop(item, None)
+    return len(tokens)
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Delete idempotency keys older than 24 hours"
+    )
+    parser.add_argument("--older-than-hours", type=int, default=24)
+    args = parser.parse_args()
+    print(purge_idempotency_keys(args.older_than_hours))
+
+
+if __name__ == "__main__":
+    main()

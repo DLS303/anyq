@@ -34,18 +34,31 @@ class PublicRobotsMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not str(scope.get("path", "")).startswith("/v1/public/"):
+        if scope["type"] != "http" or not str(scope.get("path", "")).startswith(
+            "/v1/public/"
+        ):
             await self.app(scope, receive, send)
             return
 
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers") or [])
-                existing = {name.lower() for name, _value in headers}
-                extra = (
-                    (b"x-robots-tag", b"noindex, nofollow"),
-                    (b"cache-control", b"private, max-age=300"),
+                path = str(scope.get("path", ""))
+                rfi_path = (
+                    path.startswith("/v1/public/rfi/") or path == "/v1/public/rfi"
                 )
+                if rfi_path:
+                    headers = [
+                        (name, value)
+                        for name, value in headers
+                        if name.lower() not in (b"referrer-policy", b"cache-control")
+                    ]
+                    headers.append((b"referrer-policy", b"no-referrer"))
+                    headers.append((b"cache-control", b"no-store"))
+                existing = {name.lower() for name, _value in headers}
+                extra = [(b"x-robots-tag", b"noindex, nofollow")]
+                if not rfi_path:
+                    extra.append((b"cache-control", b"private, max-age=300"))
                 for name, value in extra:
                     if name not in existing:
                         headers.append((name, value))

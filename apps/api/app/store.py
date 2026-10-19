@@ -1994,6 +1994,8 @@ class MemoryStore:
         kind: str = "upload",
         daily_log_id: str | None = None,
         file_id: str | None = None,
+        size: int = 0,
+        sha256: str = "",
     ) -> StoredUpload:
         item = StoredUpload(
             id=file_id or f"f-{uuid4().hex[:12]}",
@@ -2004,6 +2006,8 @@ class MemoryStore:
             project_id=project_id,
             kind=kind,  # type: ignore[arg-type]
             daily_log_id=daily_log_id,
+            size=size,
+            sha256=sha256,
         )
         with self._lock:
             self.files[item.id] = item
@@ -2595,7 +2599,13 @@ class MemoryStore:
             return [project for project in self.projects.values() if self.is_assigned_supervisor(user, project)]
         return [project for project in self.projects.values() if self.can_access_project(user, project)]
 
-    def project_snapshot(self, pid: str, flags: dict | None = None) -> dict | None:
+    def project_snapshot(
+        self,
+        pid: str,
+        flags: dict | None = None,
+        *,
+        open_rfi_counts: dict[str, int] | None = None,
+    ) -> dict | None:
         p = self.get_project(pid)
         if not p:
             return None
@@ -2603,7 +2613,13 @@ class MemoryStore:
         budget = sum(b.budget_kzt for b in lines) or p.budget_kzt
         committed = sum(b.committed_kzt for b in lines)
         actual = sum(b.actual_kzt for b in lines)
+        from app.rfi_service import count_open
+
         open_rfi = sum(1 for x in self.rfis.values() if x.project_id == p.id and x.status == "open")
+        if open_rfi_counts is None:
+            open_rfi += count_open(p.id)
+        else:
+            open_rfi += int(open_rfi_counts.get(p.id, 0))
         open_punch = sum(1 for x in self.punches.values() if x.project_id == p.id and x.status == "open")
         open_inc = sum(1 for x in self.incidents.values() if x.project_id == p.id and not x.closed)
         fail_insp = sum(1 for x in self.inspections.values() if x.project_id == p.id and x.result == "fail")

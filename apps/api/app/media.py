@@ -8,6 +8,7 @@ inside opencv-python-headless; nothing is downloaded at runtime.
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,8 +32,96 @@ _FACE_CASCADES = (
 _PLATE_CASCADE = "haarcascade_russian_plate_number.xml"
 
 
+_PDF_INFO_KEYS = (b"/Author", b"/Creator", b"/Producer")
+
+
+def _skip_pdf_literal(raw: bytes, start: int) -> int:
+    i = start + 1
+    while i < len(raw):
+        if raw[i] == 0x5C:
+            i += 2
+            continue
+        if raw[i] == 0x28:
+            i = _skip_pdf_literal(raw, i)
+            continue
+        if raw[i] == 0x29:
+            return i + 1
+        i += 1
+    return len(raw)
+
+
+def _blank_pdf_key(raw: bytes, key: bytes) -> bytes:
+    out = bytearray()
+    start = 0
+    while True:
+        pos = raw.find(key, start)
+        if pos < 0:
+            out.extend(raw[start:])
+            return bytes(out)
+        after = pos + len(key)
+        boundary = after >= len(raw) or raw[after : after + 1] in (
+            b" ",
+            b"\t",
+            b"\r",
+            b"\n",
+            b"/",
+            b">",
+            b"(",
+            b"<",
+        )
+        if not boundary:
+            out.extend(raw[start : pos + 1])
+            start = pos + 1
+            continue
+        cursor = after
+        while cursor < len(raw) and raw[cursor] in b" \t\r\n":
+            cursor += 1
+        out.extend(raw[start:pos])
+        out.extend(key)
+        if cursor < len(raw) and raw[cursor] == 0x28:
+            out.extend(b" ()")
+            start = _skip_pdf_literal(raw, cursor)
+            continue
+        if (
+            cursor < len(raw)
+            and raw[cursor] == 0x3C
+            and not raw.startswith(b"<<", cursor)
+        ):
+            end = raw.find(b">", cursor)
+            if end < 0:
+                out.extend(raw[pos:])
+                return bytes(out)
+            out.extend(b" <>")
+            start = end + 1
+            continue
+        out.extend(raw[pos:after])
+        start = after
+
+
+def strip_pdf_author(raw: bytes) -> bytes:
+    """Return PDF bytes with author, creator, and producer metadata cleared."""
+    if not raw or not raw.startswith(b"%PDF"):
+        raise ValueError("Нужен PDF")
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise ValueError("Файл больше 10 МБ")
+    cleaned = raw
+    for key in _PDF_INFO_KEYS:
+        cleaned = _blank_pdf_key(cleaned, key)
+    cleaned = re.sub(
+        rb"<dc:creator>.*?</dc:creator>",
+        b"<dc:creator></dc:creator>",
+        cleaned,
+        flags=re.DOTALL,
+    )
+    cleaned = re.sub(rb"pdf:Author=\"[^\"]*\"", b'pdf:Author=""', cleaned)
+    return cleaned
+
+
 def strip_image(raw: bytes) -> tuple[bytes, str, str]:
     """Return image bytes without embedded metadata, plus content type and suffix."""
+    Image.MAX_IMAGE_PIXELS = 178_956_970
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise ValueError("Файл больше 10 МБ")
     try:
         img = Image.open(io.BytesIO(raw))
         img.load()
@@ -92,7 +181,11 @@ def _scale_down(bgr: np.ndarray) -> tuple[np.ndarray, float]:
     if longest <= _DETECT_LONG_SIDE:
         return bgr, 1.0
     ratio = _DETECT_LONG_SIDE / longest
-    resized = cv2.resize(bgr, (max(1, int(width * ratio)), max(1, int(height * ratio))), interpolation=cv2.INTER_AREA)
+    resized = cv2.resize(
+        bgr,
+        (max(1, int(width * ratio)), max(1, int(height * ratio))),
+        interpolation=cv2.INTER_AREA,
+    )
     return resized, ratio
 
 
@@ -102,11 +195,16 @@ def _boxes(found: np.ndarray | tuple) -> list[tuple[int, int, int, int]]:
     return [(int(x), int(y), int(w), int(h)) for x, y, w, h in found]
 
 
-def _unmap(rects: list[tuple[int, int, int, int]], ratio: float) -> list[tuple[int, int, int, int]]:
+def _unmap(
+    rects: list[tuple[int, int, int, int]], ratio: float
+) -> list[tuple[int, int, int, int]]:
     if ratio == 1.0:
         return rects
     inv = 1 / ratio
-    return [(int(x * inv), int(y * inv), max(1, int(w * inv)), max(1, int(h * inv))) for x, y, w, h in rects]
+    return [
+        (int(x * inv), int(y * inv), max(1, int(w * inv)), max(1, int(h * inv)))
+        for x, y, w, h in rects
+    ]
 
 
 def detect_faces(bgr: np.ndarray) -> list[tuple[int, int, int, int]]:
@@ -115,7 +213,11 @@ def detect_faces(bgr: np.ndarray) -> list[tuple[int, int, int, int]]:
     found: list[tuple[int, int, int, int]] = []
     for cascade in _faces():
         found.extend(
-            _boxes(cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)))
+            _boxes(
+                cascade.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+                )
+            )
         )
     return _unmap(found, ratio)
 
@@ -123,7 +225,11 @@ def detect_faces(bgr: np.ndarray) -> list[tuple[int, int, int, int]]:
 def detect_plates(bgr: np.ndarray) -> list[tuple[int, int, int, int]]:
     work, ratio = _scale_down(bgr)
     gray = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
-    found = _boxes(_plates().detectMultiScale(gray, scaleFactor=1.05, minNeighbors=4, minSize=(50, 15)))
+    found = _boxes(
+        _plates().detectMultiScale(
+            gray, scaleFactor=1.05, minNeighbors=4, minSize=(50, 15)
+        )
+    )
     return _unmap(found, ratio)
 
 

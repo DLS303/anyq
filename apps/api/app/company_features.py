@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import and_, case, inspect, or_, select, true, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import aliased
 
 from app.audit import write as audit_write
@@ -364,12 +364,51 @@ def resolve_path_company(collection: str, doc_id: str, user: User) -> str | None
     )
     with store._sql.factory() as session:
         found = session.execute(stmt).first()
+        if found is None and collection == "rfis":
+            found = _sql_rfi_company(session, doc_id, user)
     if found is None:
         return None
     owner = store.get_user(str(found[0] or ""))
     if owner is None:
         return ""
     return company_key(owner)
+
+
+def _sql_rfi_company(session, doc_id: str, user: User):
+    """Questions live in their own table. Same membership rule as the records query.
+
+    Returns the project owner id so the caller reads that user's stored company key.
+    """
+    from app.rfi_tables import rfis
+
+    project = aliased(Record)
+    member = aliased(Record)
+    access = or_(
+        member.user_id == user.id,
+        project.owner_id == user.id,
+        project.company_key == company_key(user),
+    )
+    if user.role == "admin":
+        access = true()
+    stmt = (
+        select(project.owner_id)
+        .select_from(rfis)
+        .join(project, and_(project.collection == "projects", project.doc_id == rfis.c.project_id))
+        .outerjoin(
+            member,
+            and_(
+                member.collection == "directory",
+                member.project_id == project.doc_id,
+                member.user_id == user.id,
+            ),
+        )
+        .where(rfis.c.id == doc_id, rfis.c.deleted_at.is_(None), access)
+        .limit(1)
+    )
+    try:
+        return session.execute(stmt).first()
+    except (OperationalError, ProgrammingError):
+        return None
 
 
 def _path_target(path_params) -> tuple[str, str] | None:
@@ -391,8 +430,9 @@ def require_feature(key: str):
         if target is None:
             raise HTTPException(status_code=404, detail="Не найдено")
         company_id = resolve_path_company(target[0], target[1], user)
-        if company_id is None:
+        if not company_id:
             raise HTTPException(status_code=404, detail="Не найдено")
+        request.state.feature_company_id = company_id
         ensure_feature(company_id, key)
         return user
 

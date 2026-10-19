@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.authutil import load_secret
 from app.config import settings
+from app.log_redact import install_token_log_filter
 from app.routers import (
     acts,
     auth,
@@ -23,6 +24,7 @@ from app.routers import (
     plots,
     procurement,
     public,
+    rfi,
     site,
     specialists,
 )
@@ -30,6 +32,7 @@ from app.security import PublicRobotsMiddleware, SecurityHeadersMiddleware
 from app.sql_backend import ChangedByOther
 
 load_secret()
+install_token_log_filter()
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 
@@ -62,6 +65,8 @@ app.include_router(invitations.router)
 app.include_router(budget.router)
 app.include_router(procurement.router)
 app.include_router(public.router)
+app.include_router(rfi.router)
+app.include_router(rfi.public)
 app.include_router(files.router)
 
 
