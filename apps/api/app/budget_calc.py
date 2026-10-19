@@ -4,15 +4,24 @@ Procurement fact is the chosen offer (price × qty, grossed up when VAT is
 excluded). An invoice amount is used only when that request has no chosen
 offer, so a header total is not added on top of the lines. Manual expenses
 are added by category. Savings stay in procurement_calc and are not part of fact.
+
+The forecast is fact divided by the elapsed share of the planned dates.
+It is omitted before 20% of that span, and a result above twice the plan
+is withheld from the card number (the raw figure stays available for the
+explanation).
 """
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from app.budget_models import CATEGORIES
 from app.money import as_decimal, round_kzt
 from app.procurement_models import ProcDocument, ProcLine, ProcOffer
+
+MIN_ELAPSED = Decimal("0.20")
+SANE_MULTIPLE = 2
 
 
 def _split() -> dict[str, int]:
@@ -81,26 +90,112 @@ def signal_for(fact: int, plan: int) -> tuple[str, float | None]:
     return "green", pct
 
 
-def mean_progress(pcts: list[int]) -> float | None:
-    if not pcts:
+def _parse_date(value: str | None) -> date | None:
+    text = (value or "").strip()
+    if len(text) < 10:
         return None
-    return sum(pcts) / len(pcts)
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
 
 
-def forecast_overrun(plan: int, fact: int, progress_pct: float | None) -> dict:
-    """Project fact to 100% of the schedule. Overrun is how far that sits past the plan.
+def planned_window(project_start: str, project_finish: str, tasks: list[tuple[str, str]]) -> tuple[date, date] | None:
+    """Object start/finish when both are set. Otherwise the schedule span."""
+    start = _parse_date(project_start)
+    finish = _parse_date(project_finish)
+    if start and finish and finish > start:
+        return start, finish
+    begins: list[date] = []
+    ends: list[date] = []
+    for raw_start, raw_finish in tasks:
+        task_start = _parse_date(raw_start)
+        task_finish = _parse_date(raw_finish)
+        if task_start and task_finish and task_finish > task_start:
+            begins.append(task_start)
+            ends.append(task_finish)
+    if not begins:
+        return None
+    begin, end = min(begins), max(ends)
+    if end <= begin:
+        return None
+    return begin, end
 
-    When fact is already past the plan, the overrun is the current gap.
+
+def _forecast_payload(**extra: object) -> dict:
+    payload = {
+        "forecast_kzt": None,
+        "overrun_kzt": 0,
+        "overrun_kind": "none",
+        "elapsed_share": None,
+        "elapsed_days": None,
+        "span_days": None,
+        "forecast_reason": "no_dates",
+        "forecast_raw_kzt": None,
+        "forecast_bound_kzt": None,
+        "schedule_start": "",
+        "schedule_finish": "",
+    }
+    payload.update(extra)
+    return payload
+
+
+def forecast_overrun(plan: int, fact: int, start: date | None, finish: date | None, today: date) -> dict:
+    """Forecast = fact / elapsed share of the planned dates.
+
+    No dates, or less than 20% of the span elapsed: no forecast.
+    Fact already above the plan: the overrun is the current gap, not an extrapolation.
+    A straight-line result above twice the plan is not shown as the card number.
     """
+    bound = plan * SANE_MULTIPLE if plan > 0 else None
+    elapsed_days = None
+    span_days = None
+    share: Decimal | None = None
+    schedule_start = ""
+    schedule_finish = ""
+    if start and finish and finish > start:
+        span_days = (finish - start).days
+        gone = min(max((today - start).days, 0), span_days)
+        elapsed_days = gone
+        share = Decimal(gone) / Decimal(span_days) if span_days else Decimal(0)
+        schedule_start = start.isoformat()
+        schedule_finish = finish.isoformat()
+    window = {
+        "elapsed_share": float(share) if share is not None else None,
+        "elapsed_days": elapsed_days,
+        "span_days": span_days,
+        "forecast_bound_kzt": bound,
+        "schedule_start": schedule_start,
+        "schedule_finish": schedule_finish,
+    }
     if fact > plan > 0:
-        return {"forecast_kzt": fact, "overrun_kzt": fact - plan, "overrun_kind": "actual"}
-    if plan <= 0 or fact <= 0 or progress_pct is None or progress_pct <= 0 or progress_pct >= 100:
-        return {"forecast_kzt": None, "overrun_kzt": 0, "overrun_kind": "none"}
-    forecast = round_kzt(Decimal(fact) / (as_decimal(progress_pct) / Decimal(100)))
-    overrun = forecast - plan
+        return _forecast_payload(
+            forecast_kzt=fact,
+            overrun_kzt=fact - plan,
+            overrun_kind="actual",
+            forecast_reason="actual",
+            **window,
+        )
+    if share is None:
+        return _forecast_payload(**window, forecast_reason="no_dates")
+    if share < MIN_ELAPSED:
+        return _forecast_payload(**window, forecast_reason="early")
+    if fact <= 0 or plan <= 0 or share >= 1:
+        return _forecast_payload(**window, forecast_reason="ok", forecast_kzt=fact if share >= 1 else None)
+    raw = round_kzt(Decimal(fact) / share)
+    if bound is not None and raw > bound:
+        return _forecast_payload(**window, forecast_reason="above_bound", forecast_raw_kzt=raw)
+    overrun = raw - plan
     if overrun > 0:
-        return {"forecast_kzt": forecast, "overrun_kzt": overrun, "overrun_kind": "forecast"}
-    return {"forecast_kzt": forecast, "overrun_kzt": 0, "overrun_kind": "none"}
+        return _forecast_payload(
+            **window,
+            forecast_kzt=raw,
+            overrun_kzt=overrun,
+            overrun_kind="forecast",
+            forecast_reason="ok",
+            forecast_raw_kzt=raw,
+        )
+    return _forecast_payload(**window, forecast_kzt=raw, forecast_reason="ok", forecast_raw_kzt=raw)
 
 
 def combine_savings(parts: list[dict]) -> dict:

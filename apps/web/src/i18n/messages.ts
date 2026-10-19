@@ -306,6 +306,11 @@ export const messages = {
     budgetSignalClose: "близко к лимиту",
     budgetSignalOver: "перерасход",
     budgetForecast: "Прогноз перерасхода",
+    budgetOverrunNow: "Перерасход",
+    budgetForecastFormula: "Факт {fact} ÷ {days} из {span} дн. срока = {forecast}",
+    budgetForecastActualTip: "Факт уже больше плана. Это текущая разница, без прогноза по сроку.",
+    budgetForecastBound:
+      "По формуле вышло бы {raw} — больше двукратного плана ({bound}). На карточке эту сумму не показываем.",
     budgetUnset: "Бюджет не задан",
     budgetPlanPh: "План, ₸",
     budgetSavePlan: "Сохранить план",
@@ -837,6 +842,11 @@ export const messages = {
     budgetSignalClose: "шекке жақын",
     budgetSignalOver: "артық шығын",
     budgetForecast: "Артық шығын болжамы",
+    budgetOverrunNow: "Артық шығын",
+    budgetForecastFormula: "Нақты {fact} ÷ мерзімнің {days}/{span} күні = {forecast}",
+    budgetForecastActualTip: "Нақты жоспардан асқан. Бұл ағымдағы айырма, мерзім бойынша болжам емес.",
+    budgetForecastBound:
+      "Формула бойынша {raw} шығады — бұл жоспардың екі есесінен ({bound}) көп. Карточкада сома жоқ.",
     budgetUnset: "Бюджет енгізілмеген",
     budgetPlanPh: "Жоспар, ₸",
     budgetSavePlan: "Жоспарды сақтау",

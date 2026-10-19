@@ -61,6 +61,52 @@ function categoryLabel(category: BudgetCategory, m: ReturnType<typeof t>) {
   return m.budgetCatMaterials;
 }
 
+function ForecastLine({
+  data,
+  locale,
+  m,
+}: {
+  data: ObjectBudgetView;
+  locale: Locale;
+  m: ReturnType<typeof t>;
+}) {
+  if (data.overrun_kind === "actual" && data.overrun_kzt > 0) {
+    return (
+      <p className="text-sm font-medium" title={m.budgetForecastActualTip} data-forecast="actual">
+        {m.budgetOverrunNow}: {money(data.overrun_kzt, locale)}
+      </p>
+    );
+  }
+  if (data.forecast_reason === "above_bound" && data.forecast_raw_kzt != null && data.forecast_bound_kzt != null) {
+    const note = fill(m.budgetForecastBound, {
+      raw: money(data.forecast_raw_kzt, locale),
+      bound: money(data.forecast_bound_kzt, locale),
+    });
+    return (
+      <p className="text-sm" title={note} data-forecast="bound">
+        {note}
+      </p>
+    );
+  }
+  if (data.overrun_kind !== "forecast" || data.forecast_kzt == null || data.overrun_kzt <= 0) return null;
+  const formula = fill(m.budgetForecastFormula, {
+    fact: money(data.fact_kzt, locale),
+    days: data.elapsed_days ?? 0,
+    span: data.span_days ?? 0,
+    forecast: money(data.forecast_kzt, locale),
+  });
+  return (
+    <p className="text-sm font-medium" data-forecast="ok">
+      <span title={formula}>
+        {m.budgetForecast}: {money(data.overrun_kzt, locale)}
+      </span>
+      <span className="mt-1 block text-xs font-normal text-ink/70" title={formula}>
+        {formula}
+      </span>
+    </p>
+  );
+}
+
 function Line({ label, value }: { label: string; value: string }) {
   return (
     <p className="flex items-baseline justify-between gap-3 text-sm">
@@ -172,11 +218,7 @@ export function ObjectBudgetCard({ locale, projectId }: { locale: Locale; projec
             <p className="text-sm font-medium">
               {m.budgetUsed} {used} · {signalText(data.signal, m)}
             </p>
-            {data.overrun_kzt > 0 ? (
-              <p className="text-sm font-medium">
-                {m.budgetForecast}: {money(data.overrun_kzt, locale)}
-              </p>
-            ) : null}
+            <ForecastLine data={data} locale={locale} m={m} />
           </>
         ) : (
           <p className="text-sm">{m.budgetUnset}</p>

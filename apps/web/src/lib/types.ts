@@ -572,8 +572,15 @@ export type ObjectBudgetView = {
   remaining_kzt: number | null;
   used_pct: number | null;
   signal: "green" | "yellow" | "red";
-  progress_pct: number | null;
+  elapsed_share: number | null;
+  elapsed_days: number | null;
+  span_days: number | null;
+  schedule_start: string;
+  schedule_finish: string;
   forecast_kzt: number | null;
+  forecast_raw_kzt: number | null;
+  forecast_bound_kzt: number | null;
+  forecast_reason: "no_dates" | "early" | "actual" | "above_bound" | "ok";
   overrun_kzt: number;
   overrun_kind: "actual" | "forecast" | "none";
   savings: SavingsTotal;

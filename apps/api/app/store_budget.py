@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,8 +10,8 @@ from app.budget_calc import (
     combine_savings,
     forecast_overrun,
     manual_actual,
-    mean_progress,
     merge_fact,
+    planned_window,
     procurement_actual,
     signal_for,
 )
@@ -28,6 +28,10 @@ class BudgetConflict(Exception):
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def today_date() -> date:
+    return date.today()
 
 
 def load_budget(store, raw: dict) -> None:
@@ -163,8 +167,10 @@ def object_budget_view(store, project, user) -> dict:
     else:
         tone, pct = signal_for(fact, planned)
         remaining = planned - fact
-    progress = mean_progress([task.pct for task in store.schedule.values() if task.project_id == project.id])
-    forecast = forecast_overrun(planned if plan else 0, fact, progress)
+    tasks = [task for task in store.schedule.values() if task.project_id == project.id]
+    window = planned_window(project.start, project.finish, [(task.start, task.finish) for task in tasks])
+    start, finish = window if window else (None, None)
+    forecast = forecast_overrun(planned if plan else 0, fact, start, finish, today_date())
     savings = project_savings(store, project.id)
     company = company_savings(store, user)
     return {
@@ -183,8 +189,15 @@ def object_budget_view(store, project, user) -> dict:
         "remaining_kzt": remaining,
         "used_pct": pct,
         "signal": tone,
-        "progress_pct": progress,
+        "elapsed_share": forecast["elapsed_share"],
+        "elapsed_days": forecast["elapsed_days"],
+        "span_days": forecast["span_days"],
+        "schedule_start": forecast["schedule_start"],
+        "schedule_finish": forecast["schedule_finish"],
         "forecast_kzt": forecast["forecast_kzt"],
+        "forecast_raw_kzt": forecast["forecast_raw_kzt"],
+        "forecast_bound_kzt": forecast["forecast_bound_kzt"],
+        "forecast_reason": forecast["forecast_reason"],
         "overrun_kzt": forecast["overrun_kzt"],
         "overrun_kind": forecast["overrun_kind"],
         "savings": _savings_brief(savings),
