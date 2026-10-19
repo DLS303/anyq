@@ -83,7 +83,7 @@ def test_change_approval_is_only_for_the_assigned_supervisor():
     change_id = created.json()["data"]["id"]
     assert created.json()["data"]["status"] == "submitted"
 
-    for token in (contractor, owner, outsider):
+    for token in (contractor, owner):
         denied = client.post(
             f"/v1/site/changes/{change_id}/status",
             json={"status": "approved"},
@@ -91,6 +91,13 @@ def test_change_approval_is_only_for_the_assigned_supervisor():
         )
         assert denied.status_code == 403, denied.text
         assert store.change_orders[change_id].status == "submitted"
+    missing = client.post(
+        f"/v1/site/changes/{change_id}/status",
+        json={"status": "approved"},
+        headers=_auth(outsider),
+    )
+    assert missing.status_code == 404, missing.text
+    assert store.change_orders[change_id].status == "submitted"
 
     approved = client.post(
         f"/v1/site/changes/{change_id}/status",

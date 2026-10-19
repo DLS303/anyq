@@ -1,6 +1,6 @@
 /**
  * Navigation outside the object screen. The object screen does not read this flag:
- * its pilot layout is the default, and the full screen appears in demo mode or when a company flag is on.
+ * its pilot layout stays on, and enabled features only add more-menu tabs. Demo mode uses the full screen.
  */
 export const PILOT_MODE = process.env.NEXT_PUBLIC_PILOT_MODE === "1";
 

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.deps import require_user
 from app.schemas import MessageCreate, ThreadCreate, User
+from app.sql_backend import page_body
 from app.store import store
 
 router = APIRouter(prefix="/v1/chat", tags=["chat"])
@@ -18,7 +19,7 @@ def threads(
         items.sort(key=lambda t: t.updated_at, reverse=True)
         return {"ok": True, "data": items, "total": len(items)}
     items, total = store.page_threads(user, limit=limit, offset=offset)
-    return {"ok": True, "data": items, "total": total, "limit": limit, "offset": offset}
+    return page_body(items, total, limit, offset)
 
 
 @router.get("/peers")

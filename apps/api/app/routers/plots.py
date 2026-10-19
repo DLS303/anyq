@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.calc import development_estimate
 from app.deps import current_user
 from app.schemas import InquiryCreate, User
+from app.sql_backend import page_body
 from app.store import store
 
 router = APIRouter(prefix="/v1", tags=["marketplace"])
@@ -40,7 +41,7 @@ def list_plots(
         items = store.list_plots(**filters)
         return {"ok": True, "data": items, "total": len(items)}
     items, total = store.page_plots(limit=limit, offset=offset, **filters)
-    return {"ok": True, "data": items, "total": total, "limit": limit, "offset": offset}
+    return page_body(items, total, limit, offset)
 
 
 @router.get("/plots/suggest")

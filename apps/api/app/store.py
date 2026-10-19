@@ -110,11 +110,19 @@ from app.site_models import (
     VoiceNote,
 )
 from app.sql_backend import (
+    COLLECTION_OF,
     DICT_ATTRS,
+    ConsentEvent,
+    Record,
     SqlRuntime,
     TrackedDict,
     TrackedList,
+    _dump,
+    bump_revisions,
+    consent_event_from_record,
+    index_values,
     json_db_file,
+    utc_now,
 )
 from app.store_budget import dump_budget, load_budget
 from app.store_procurement import dump_lists, load_into
@@ -125,6 +133,31 @@ from app.transitions import (
 )
 from app.trust import trust_score
 
+# Reads that hit indexed SQL and must not take the process lock or reload memory.
+SQL_DIRECT = frozenset(
+    {
+        "page_plots",
+        "page_materials",
+        "page_specialists",
+        "page_queue",
+        "page_deals",
+        "page_contacts",
+        "page_threads",
+        "get_user",
+        "get_user_by_email",
+        "has_current_pd_consent",
+        "has_ai_consent",
+        "login",
+        "material_public",
+        "specialist_public",
+        "public_materials",
+        "public_specialists",
+        "has_verification",
+        "rating_of",
+        "accept_invitation",
+    }
+)
+
 CADASTRE = re.compile(r"^\d{2}-\d{3}-\d{3}-\d{3}$")
 DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SITE_ROLES = set(get_args(SiteRole))
@@ -132,13 +165,9 @@ CHECK_RESULTS = {"pass", "fail", "na"}
 
 
 def company_key(user: User) -> str:
-    bin_no = re.sub(r"\D", "", user.company_bin or "")
-    if len(bin_no) == 12:
-        return f"bin:{bin_no}"
-    name = re.sub(r"\s+", " ", (user.company or "").strip().casefold())
-    if name:
-        return f"name:{name}"
-    return f"user:{user.id}"
+    from app.tenant import company_key as stored_company_key
+
+    return stored_company_key(user)
 
 
 def _role(value: object) -> str:
@@ -292,6 +321,7 @@ class MemoryStore:
         object.__setattr__(self, "favorites", TrackedList(lambda item: f"{item.user_id}:{item.plot_id}"))
         object.__setattr__(self, "consents", TrackedList(lambda item: item.id))
         self._sql = SqlRuntime()
+        self._bind_reads()
         boot = self._sql.bootstrap_lock()
         try:
             self._load()
@@ -303,7 +333,88 @@ class MemoryStore:
                 self._ensure_crm()
         finally:
             self._sql.bootstrap_unlock(boot)
+        self._stamp_revs(self._sql.revisions())
         object.__setattr__(self, "_ready", True)
+
+    def _bind_reads(self) -> None:
+        def hook(bag) -> None:
+            self._sync_bag(bag)
+
+        for name in DICT_ATTRS:
+            bag = object.__getattribute__(self, name)
+            bag.on_read = hook
+            bag.collection = COLLECTION_OF[name]
+        for name in ("favorites", "consents"):
+            bag = object.__getattribute__(self, name)
+            bag.on_read = hook
+            bag.collection = name
+
+    def _collection_of(self, bag, name: str | None = None) -> str | None:
+        collection = getattr(bag, "collection", None)
+        if collection:
+            return collection
+        if name:
+            return COLLECTION_OF.get(name)
+        return None
+
+    def _stamp_revs(self, revs: dict) -> None:
+        for name in DICT_ATTRS:
+            bag = object.__getattribute__(self, name)
+            collection = self._collection_of(bag, name)
+            bag.synced_rev = int(revs.get(collection, revs.get("rev", 0)))
+        for name in ("favorites", "consents"):
+            bag = object.__getattribute__(self, name)
+            bag.synced_rev = int(revs.get(name, revs.get("rev", 0)))
+
+    def _mark_synced(self, collections: set[str], revs: dict) -> None:
+        if not collections:
+            return
+        for name in DICT_ATTRS:
+            bag = object.__getattribute__(self, name)
+            collection = self._collection_of(bag, name)
+            if collection in collections:
+                bag.synced_rev = int(revs.get(collection, 0))
+        for name in ("favorites", "consents"):
+            if name in collections:
+                bag = object.__getattribute__(self, name)
+                bag.synced_rev = int(revs.get(name, 0))
+
+    def _sync_bag(self, bag) -> None:
+        local = object.__getattribute__(self, "_local")
+        if getattr(local, "suspend", False):
+            return
+        revs = getattr(local, "revs", None)
+        if not revs:
+            return
+        collection = getattr(bag, "collection", None)
+        if not collection:
+            return
+        current = int(revs.get(collection, 0))
+        if getattr(bag, "synced_rev", None) == current:
+            return
+        if collection == "users":
+            by_id = object.__getattribute__(self, "users_by_id")
+            emails = object.__getattribute__(self, "users")
+            if by_id.dirty or by_id.deleted or emails.dirty or emails.deleted:
+                bag.synced_rev = current
+                return
+            target = by_id
+        elif isinstance(bag, TrackedDict) and (bag.dirty or bag.deleted) or isinstance(bag, TrackedList) and bag.mutated:
+            bag.synced_rev = current
+            return
+        else:
+            target = bag
+        local.suspend = True
+        try:
+            since = int(getattr(target, "last_seq", 0) or 0)
+            object.__getattribute__(self, "_sql").load_changes(self, collection, since)
+        finally:
+            local.suspend = False
+        if collection == "users":
+            object.__getattribute__(self, "users_by_id").synced_rev = current
+            object.__getattribute__(self, "users").synced_rev = current
+        else:
+            bag.synced_rev = current
 
     def _index_user(self, user: User) -> None:
         self.users[user.email.lower()] = user
@@ -406,6 +517,8 @@ class MemoryStore:
             return cached
 
         def wrapped(*args, **kwargs):
+            if name in SQL_DIRECT:
+                return attr(*args, **kwargs)
             self._enter()
             try:
                 return attr(*args, **kwargs)
@@ -435,9 +548,12 @@ class MemoryStore:
             try:
                 if self._pending():
                     self._save_unlocked()
-                self._reload_if_stale()
+                local.revs = object.__getattribute__(self, "_sql").revisions()
+                local.rev = int(local.revs.get("rev", 0))
             except Exception:
                 local.depth = 0
+                local.rev = None
+                local.revs = None
                 self._lock.release()
                 raise
             return
@@ -447,15 +563,36 @@ class MemoryStore:
         local = object.__getattribute__(self, "_local")
         local.depth = max(0, getattr(local, "depth", 1) - 1)
         if local.depth == 0:
+            local.rev = None
+            local.revs = None
             self._lock.release()
 
     def _reload_if_stale(self) -> None:
         sql = object.__getattribute__(self, "_sql")
-        current = sql.revision()
-        if current == object.__getattribute__(self, "_seen_rev"):
-            return
-        sql.load_into(self)
-        object.__setattr__(self, "_seen_rev", current)
+        revs = sql.revisions()
+        local = object.__getattribute__(self, "_local")
+        previous = getattr(local, "suspend", False)
+        local.suspend = True
+        try:
+            for name in DICT_ATTRS:
+                bag = object.__getattribute__(self, name)
+                collection = self._collection_of(bag, name)
+                if not collection or bag.dirty or bag.deleted:
+                    continue
+                current = int(revs.get(collection, 0))
+                if bag.synced_rev != current:
+                    sql.load_changes(self, collection, int(bag.last_seq or 0))
+                    bag.synced_rev = current
+            for name in ("favorites", "consents"):
+                bag = object.__getattribute__(self, name)
+                current = int(revs.get(name, 0))
+                if bag.mutated or bag.synced_rev == current:
+                    continue
+                sql.load_changes(self, name, int(bag.last_seq or 0))
+                bag.synced_rev = current
+        finally:
+            local.suspend = previous
+        object.__setattr__(self, "_seen_rev", int(revs.get("rev", 0)))
 
     def _seed_phase2(self) -> None:
         self.specialists = {s.id: deepcopy(s) for s in SPECIALISTS}
@@ -542,8 +679,10 @@ class MemoryStore:
             self._save_unlocked()
 
     def _save_unlocked(self) -> None:
-        self._sql.flush(self)
-        self._seen_rev = self._sql.revision()
+        touched = self._sql.flush(self)
+        revs = self._sql.revisions()
+        self._seen_rev = int(revs.get("rev", 0))
+        self._mark_synced(touched, revs)
 
     def _save(self) -> None:
         with self._lock:
@@ -592,15 +731,43 @@ class MemoryStore:
             "files": [x.model_dump() for x in self.files.values()],
             "consents": [x.model_dump() for x in self.consents],
             "verifications": [x.model_dump() for x in self.verifications.values()],
+            "company_features": self._feature_export(),
             **dump_lists(self),
             **dump_budget(self),
         }
 
+    def _feature_export(self) -> list[dict]:
+        from app.company_features import export_features
+
+        return export_features()
+
     def get_user_by_email(self, email: str) -> User | None:
-        return self.users.get(email.lower().strip())
+        key = email.lower().strip()
+        emails = object.__getattribute__(self, "users")
+        if key in emails.deleted:
+            return None
+        if key in emails.dirty:
+            return emails.peek(key)
+        by_id = object.__getattribute__(self, "users_by_id")
+        for user_id in by_id.dirty:
+            user = by_id.peek(user_id)
+            if user is not None and user.email.lower() == key:
+                return user
+        payload = self._sql.fetch_user_by_email(key)
+        if payload is None:
+            return None
+        return User.model_validate(payload)
 
     def get_user(self, user_id: str) -> User | None:
-        return self.users_by_id.get(user_id)
+        by_id = object.__getattribute__(self, "users_by_id")
+        if user_id in by_id.deleted:
+            return None
+        if user_id in by_id.dirty:
+            return by_id.peek(user_id)
+        payload = self._sql.fetch_payload("users", user_id)
+        if payload is None:
+            return None
+        return User.model_validate(payload)
 
     def list_plots(
         self,
@@ -913,27 +1080,41 @@ class MemoryStore:
 
 
     def rating_of(self, specialist_id: str) -> tuple[float, int]:
-        stars = [r.stars for r in self.reviews.values() if r.specialist_id == specialist_id]
-        if not stars:
+        total, count = self._sql.review_stats([specialist_id]).get(specialist_id, (0, 0))
+        if not count:
             return 0.0, 0
-        return round(sum(stars) / len(stars), 2), len(stars)
+        return round(total / count, 2), count
 
     def specialist_public(self, spec: Specialist) -> dict:
-        avg, n = self.rating_of(spec.id)
-        data = spec.model_dump()
-        data["license_verified"] = self.has_verification("specialist", spec.id, "license")
-        return {**data, "rating": avg, "reviews_count": n}
+        return self.public_specialists([spec])[0]
+
+    def public_specialists(self, items: list[Specialist]) -> list[dict]:
+        ids = [item.id for item in items]
+        flagged = self._sql.subject_ids("specialist", "license", ids)
+        stats = self._sql.review_stats(ids)
+        out = []
+        for item in items:
+            data = item.model_dump()
+            data["license_verified"] = item.id in flagged
+            total, count = stats.get(item.id, (0, 0))
+            avg = round(total / count, 2) if count else 0.0
+            out.append({**data, "rating": avg, "reviews_count": count})
+        return out
 
     def material_public(self, item: Material) -> dict:
-        data = item.model_dump()
-        data["certified_rk"] = self.has_verification("material", item.id, "certification_rk")
-        return data
+        return self.public_materials([item])[0]
+
+    def public_materials(self, items: list[Material]) -> list[dict]:
+        flagged = self._sql.subject_ids("material", "certification_rk", [item.id for item in items])
+        out = []
+        for item in items:
+            data = item.model_dump()
+            data["certified_rk"] = item.id in flagged
+            out.append(data)
+        return out
 
     def has_verification(self, subject_type: str, subject_id: str, kind: str) -> bool:
-        return any(
-            row.subject_type == subject_type and row.subject_id == subject_id and row.kind == kind
-            for row in self.verifications.values()
-        )
+        return subject_id in self._sql.subject_ids(subject_type, kind, [subject_id])
 
     def grant_verification(self, user: User, body: VerificationCreate) -> VerificationRecord:
         if user.role not in ("admin", "moderator"):
@@ -976,9 +1157,7 @@ class MemoryStore:
             return False
         left = company_key(user)
         right = company_key(other)
-        if left.startswith("user:") or right.startswith("user:"):
-            return False
-        return left == right
+        return bool(left) and left == right
 
     def get_specialist(self, sid: str) -> Specialist | None:
         if sid in self.specialists:
@@ -1884,11 +2063,26 @@ class MemoryStore:
     def _consent_is_active(self, row: ConsentRecord | None) -> bool:
         return row is not None and row.action == "grant" and not row.revoked_at
 
+    def _consent_active(self, user_id: str, kind: str, version: str) -> bool:
+        consents = object.__getattribute__(self, "consents")
+        if consents.mutated:
+            return self._consent_is_active(self._latest_consent(user_id, kind, version))
+        latest = None
+        for payload in self._sql.consent_payloads(user_id):
+            if payload.get("user_id") != user_id or payload.get("type") != kind:
+                continue
+            if payload.get("text_version") != version:
+                continue
+            latest = payload
+        if latest is None:
+            return False
+        return latest.get("action") == "grant" and not latest.get("revoked_at")
+
     def has_current_pd_consent(self, user_id: str) -> bool:
-        return self._consent_is_active(self._latest_consent(user_id, "offer_pd", PD_VERSION))
+        return self._consent_active(user_id, "offer_pd", PD_VERSION)
 
     def has_ai_consent(self, user_id: str) -> bool:
-        return self._consent_is_active(self._latest_consent(user_id, "ai", ai_document().version))
+        return self._consent_active(user_id, "ai", ai_document().version)
 
     def _append_consent_unlocked(self, user: User, ip: str, user_agent: str) -> ConsentRecord:
         privacy = privacy_document()
@@ -2022,7 +2216,7 @@ class MemoryStore:
             raise ValueError("БИН должен быть из 12 цифр")
         if len(phone) < 6:
             raise ValueError("Укажите телефон")
-        first_owner = not self.users_by_id
+        first_owner = self._sql.count_collection("users") == 0
         if first_owner:
             role = "owner"
         elif body.role not in ("buyer", "contractor", "supplier"):
@@ -2039,8 +2233,19 @@ class MemoryStore:
         if self.get_user_by_email(email):
             raise ValueError("Такой email уже зарегистрирован")
         pilot = _pilot_flag(body.pilot)
+        password_hash = hash_password(body.password)
         with self._lock:
+            if self.get_user_by_email(email):
+                raise ValueError("Такой email уже зарегистрирован")
             uid = f"u-{uuid4().hex[:8]}"
+            from app.tenant import assign_company_key
+
+            taken = {
+                item.company_key
+                for item in self.users_by_id.values()
+                if (item.company_key or "").startswith("bin:")
+            }
+            key, review = assign_company_key(uid, bin_no, taken)
             user = User(
                 id=uid,
                 email=email,
@@ -2049,11 +2254,13 @@ class MemoryStore:
                 phone=phone,
                 company=company,
                 company_bin=bin_no,
+                company_key=key,
+                company_review=review,
                 city=body.city.strip() or "Алматы",
                 pilot=pilot,
             )
             self._index_user(user)
-            self.credentials[uid] = hash_password(body.password)
+            self.credentials[uid] = password_hash
             if role == "supplier":
                 mid = f"mat-{uuid4().hex[:8]}"
                 title = body.sku_title.strip()
@@ -2093,10 +2300,18 @@ class MemoryStore:
         ip: str = "",
         user_agent: str = "",
     ) -> tuple[User, str]:
+        if self._pending():
+            with self._lock:
+                if self._pending():
+                    self._save_unlocked()
         user = self.get_user_by_email(email)
         if not user:
             raise ValueError("Неверный email или пароль")
-        stored = self.credentials.get(user.id, "")
+        if user.id in object.__getattribute__(self, "credentials").dirty:
+            stored = object.__getattribute__(self, "credentials").peek(user.id, "")
+        else:
+            payload = self._sql.fetch_payload("credentials", user.id) or {}
+            stored = str(payload.get("password_hash") or "")
         if not stored or not verify_password(password, stored):
             raise ValueError("Неверный email или пароль")
         if not self.has_current_pd_consent(user.id):
@@ -2349,7 +2564,7 @@ class MemoryStore:
             return [project for project in self.projects.values() if self.is_assigned_supervisor(user, project)]
         return [project for project in self.projects.values() if self.can_access_project(user, project)]
 
-    def project_snapshot(self, pid: str) -> dict | None:
+    def project_snapshot(self, pid: str, flags: dict | None = None) -> dict | None:
         p = self.get_project(pid)
         if not p:
             return None
@@ -2361,6 +2576,24 @@ class MemoryStore:
         open_punch = sum(1 for x in self.punches.values() if x.project_id == p.id and x.status == "open")
         open_inc = sum(1 for x in self.incidents.values() if x.project_id == p.id and not x.closed)
         fail_insp = sum(1 for x in self.inspections.values() if x.project_id == p.id and x.result == "fail")
+        rfi_count = sum(1 for x in self.rfis.values() if x.project_id == p.id)
+        insp_count = sum(1 for x in self.inspections.values() if x.project_id == p.id)
+        drawing_count = sum(1 for x in self.drawings.values() if x.project_id == p.id and x.current)
+        from app.config import demo_mode
+
+        if not demo_mode():
+            if flags is None:
+                from app.company_features import flag_map, project_company_id
+
+                flags = flag_map(project_company_id(p))
+            if not flags.get("rfi"):
+                open_rfi = 0
+                rfi_count = 0
+            if not flags.get("checklists"):
+                fail_insp = 0
+                insp_count = 0
+            if not flags.get("drawings"):
+                drawing_count = 0
         health = "green"
         over_budget = isinstance(budget, int) and budget > 0 and actual > budget * 0.85
         if open_inc or fail_insp:
@@ -2379,10 +2612,10 @@ class MemoryStore:
             "fail_inspections": fail_insp,
             "counts": {
                 "daily": sum(1 for x in self.daily_logs.values() if x.project_id == p.id),
-                "rfi": sum(1 for x in self.rfis.values() if x.project_id == p.id),
+                "rfi": rfi_count,
                 "punch": sum(1 for x in self.punches.values() if x.project_id == p.id),
-                "inspections": sum(1 for x in self.inspections.values() if x.project_id == p.id),
-                "drawings": sum(1 for x in self.drawings.values() if x.project_id == p.id and x.current),
+                "inspections": insp_count,
+                "drawings": drawing_count,
             },
         }
 
@@ -2696,24 +2929,22 @@ class MemoryStore:
             filters["company_key"] = company_key(user)
         return self._sql.page(self, "crm_contacts", limit=limit, offset=offset, **filters)
 
-    def create_invited_account(
+    def accept_invitation(
         self,
+        row,
         *,
         email: str,
         password: str,
         full_name: str,
         phone: str,
-        role: str,
-        company: str,
-        company_bin: str,
-        project_id: str | None,
         ip: str = "",
         user_agent: str = "",
     ) -> tuple[User, str]:
-        from app.invitations import INVITE_ROLES
+        from sqlalchemy import func, select, text
+        from sqlalchemy.exc import IntegrityError
 
-        if role not in INVITE_ROLES:
-            raise ValueError("Роль приглашения недоступна")
+        from app.invitations import InvitationClosed
+
         normalized = email.lower().strip()
         contact = full_name.strip()
         phone_text = phone.strip()
@@ -2725,36 +2956,130 @@ class MemoryStore:
             raise ValueError("Укажите контактное лицо")
         if len(phone_text) < 6:
             raise ValueError("Укажите телефон")
-        if self.get_user_by_email(normalized):
-            raise ValueError("Такой email уже зарегистрирован")
-        with self._lock:
-            if self.get_user_by_email(normalized):
-                raise ValueError("Такой email уже зарегистрирован")
-            uid = f"u-{uuid4().hex[:8]}"
-            user = User(
-                id=uid,
-                email=normalized,
-                full_name=contact,
-                role=role,  # type: ignore[arg-type]
-                phone=phone_text,
-                company=company,
-                company_bin=company_bin,
-                city="Алматы",
+        password_hash = hash_password(password)
+        uid = f"u-{uuid4().hex[:8]}"
+        inherited = str(getattr(row, "company_key", "") or "").strip()
+        if not inherited.startswith(("bin:", "user:")):
+            inherited = f"user:{uid}"
+        user = User(
+            id=uid,
+            email=normalized,
+            full_name=contact,
+            role=row.role,  # type: ignore[arg-type]
+            phone=phone_text,
+            company=row.company or "",
+            company_bin=row.company_bin or "",
+            company_key=inherited,
+            city="Алматы",
+        )
+        privacy = privacy_document()
+        consent = ConsentRecord(
+            id=f"c-{uuid4().hex[:12]}",
+            user_id=uid,
+            type="offer_pd",
+            text_version=PD_VERSION,
+            text_sha256=pd_sha256(),
+            granted_at=_now(),
+            action="grant",
+            ip=ip,
+            user_agent=user_agent,
+            login=user.email,
+            privacy_version=privacy.version,
+            privacy_sha256=privacy.sha256,
+        )
+        directory = None
+        if row.project_id:
+            directory = DirectoryRow(
+                id=f"dir-{uuid4().hex[:8]}",
+                project_id=row.project_id,
+                user_id=uid,
+                company=row.company or "",
+                role_on_site=row.role,
             )
-            self._index_user(user)
-            self.credentials[uid] = hash_password(password)
-            self._append_consent_unlocked(user, ip, user_agent)
-            if project_id:
-                directory_id = f"dir-{uuid4().hex[:8]}"
-                self.directory[directory_id] = DirectoryRow(
-                    id=directory_id,
-                    project_id=project_id,
-                    user_id=uid,
-                    company=company,
-                    role_on_site=role,
+        now = utc_now()
+        session = self._sql.factory()
+        user_seq = cred_seq = dir_seq = consent_seq = 0
+        try:
+            result = session.execute(
+                text(
+                    """
+                    UPDATE invitations
+                    SET used_at = :now, used_by = :uid
+                    WHERE id = :id
+                      AND used_at IS NULL
+                      AND revoked_at IS NULL
+                      AND expires_at > :now
+                    """
+                ),
+                {"now": now, "uid": uid, "id": row.id},
+            )
+            if result.rowcount != 1:
+                session.rollback()
+                raise InvitationClosed("closed", "Ссылка недействительна")
+            taken = session.scalar(
+                select(Record.doc_id).where(Record.collection == "users", Record.email == normalized).limit(1)
+            )
+            if taken:
+                session.rollback()
+                raise ValueError("Такой email уже зарегистрирован")
+            seq = int(session.scalar(select(func.max(Record.seq))) or 0)
+
+            def put(collection: str, doc_id: str, value) -> int:
+                nonlocal seq
+                seq += 1
+                payload = _dump(value)
+                fields = index_values(self, collection, doc_id, payload)
+                session.add(
+                    Record(
+                        collection=collection,
+                        doc_id=doc_id,
+                        seq=seq,
+                        row_version=1,
+                        payload=payload,
+                        **fields,
+                    )
                 )
-            self._save_unlocked()
-            return user, make_token(uid)
+                return seq
+
+            user_seq = put("users", uid, user)
+            cred_seq = put("credentials", uid, password_hash)
+            company_id = company_key(user)
+            session.add(consent_event_from_record(consent, company_id))
+            if directory is not None:
+                dir_seq = put("directory", directory.id, directory)
+            session.flush()
+            consent_seq = int(
+                session.scalar(select(ConsentEvent.id).where(ConsentEvent.legacy_id == consent.id)) or 0
+            )
+            collections = {"users", "credentials", "consents"}
+            if directory is not None:
+                collections.add("directory")
+            bump_revisions(session, collections)
+            session.commit()
+        except (InvitationClosed, ValueError):
+            raise
+        except IntegrityError as exc:
+            session.rollback()
+            raise ValueError("Такой email уже зарегистрирован") from exc
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+        with self._lock:
+            local = self._local
+            local.suspend = True
+            try:
+                self.users_by_id.adopt(uid, user, 1, user_seq)
+                self.users.adopt(normalized, user, 1, user_seq)
+                self.credentials.adopt(uid, password_hash, 1, cred_seq)
+                self.consents.adopt_item(consent, consent_seq)
+                if directory is not None:
+                    self.directory.adopt(directory.id, directory, 1, dir_seq)
+                self._mark_synced({"users", "credentials", "consents", "directory"}, self._sql.revisions())
+            finally:
+                local.suspend = False
+        return user, make_token(uid)
 
     def page_threads(self, user: User, *, limit: int, offset: int):
         items, total = self._sql.page(

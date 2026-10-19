@@ -4,8 +4,10 @@ import {
   featureOn,
   features,
   menuTabVisible,
+  objectMenus,
   objectUsesPilotLayout,
   ORG_FEATURE_KEYS,
+  PILOT_MAIN_TABS,
 } from "./features";
 
 describe("release visibility", () => {
@@ -33,11 +35,22 @@ describe("release visibility", () => {
     expect(buildFeatures(null, true).ksActs).toBe(true);
   });
 
-  it("keeps the pilot object layout unless demo mode or a company flag is on", () => {
+  it("keeps pilot tabs when features are enabled", () => {
     expect(objectUsesPilotLayout(null, { demo: false })).toBe(true);
     expect(objectUsesPilotLayout({}, { demo: false })).toBe(true);
-    expect(objectUsesPilotLayout({ meetings: true }, { demo: false })).toBe(false);
+    expect(objectUsesPilotLayout({ meetings: true }, { demo: false })).toBe(true);
     expect(objectUsesPilotLayout({}, { demo: true })).toBe(false);
+    const menus = objectMenus({ meetings: true, rfi: true }, { demo: false });
+    expect(menus.pilot).toBe(true);
+    expect(menus.main).toEqual([...PILOT_MAIN_TABS]);
+    expect(menus.main).toContain("today");
+    expect(menus.main).toContain("procurement");
+    expect(menus.more).toContain("meet");
+    expect(menus.more).toContain("rfi");
+    expect(menus.more).not.toContain("draw");
+    expect(menus.more).not.toContain("gantt");
+    expect(objectMenus({}, { demo: true }).pilot).toBe(false);
+    expect(objectMenus({}, { demo: true }).main).not.toContain("today");
   });
 
   it("hides a menu item while its flag is off", () => {

@@ -9,7 +9,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.sql_backend import LISTS, PERSISTED, Meta, Record, SqlRuntime, index_values
+from app.sql_backend import (
+    LISTS,
+    PERSISTED,
+    Record,
+    SqlRuntime,
+    bump_revisions,
+    index_values,
+)
 
 
 def _iter(raw: dict, users: dict, specs: dict):
@@ -72,14 +79,13 @@ def import_payload(raw: dict, *, dry_run: bool = False, runtime: SqlRuntime | No
             if dry_run:
                 continue
             current.payload = stored
+            current.row_version = int(current.row_version or 1) + 1
+            current.seq = int(current.seq or 0) + 1
             for field, value in index_values(bag, collection, doc_id, stored).items():
                 setattr(current, field, value)
-        if not dry_run and docs:
-            meta = session.get(Meta, "rev")
-            if meta is None:
-                session.add(Meta(id="rev", revision=1))
-            else:
-                meta.revision = int(meta.revision) + 1
+        changed = [name for name, bucket in collections.items() if bucket["insert"] or bucket["update"]]
+        if not dry_run and changed:
+            bump_revisions(session, set(changed))
             session.commit()
         else:
             session.rollback()

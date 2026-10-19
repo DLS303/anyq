@@ -64,12 +64,41 @@ export const features = buildFeatures(null);
 
 export const DEMO_ONLY_TABS = ["sub", "draw", "ks"] as const;
 
-/** Object screen: pilot tabs unless demo mode or any company flag is on. */
-export function objectUsesPilotLayout(flags: CompanyFlags | null | undefined, options?: { demo?: boolean }) {
+export const PILOT_MAIN_TABS = ["today", "punch", "procurement", "money", "qa"] as const;
+export const PILOT_MORE_TABS = ["rfi", "gantt", "crew", "meet", "dir", "sub", "draw", "ks"] as const;
+export const LEGACY_OBJECT_TABS = [
+  "home",
+  "daily",
+  "rfi",
+  "sub",
+  "punch",
+  "qa",
+  "draw",
+  "gantt",
+  "money",
+  "crew",
+  "meet",
+  "dir",
+  "ks",
+] as const;
+
+/** Object screen stays on the pilot layout. Demo mode is the full legacy screen. */
+export function objectUsesPilotLayout(_flags: CompanyFlags | null | undefined, options?: { demo?: boolean }) {
   const demo = options?.demo ?? DEMO_MODE;
-  if (demo) return false;
-  if (!flags) return true;
-  return !ORG_FEATURE_KEYS.some((key) => Boolean(flags[key]));
+  return !demo;
+}
+
+/** Pilot main tabs always stay. Enabled flags only add items to the more menu. */
+export function objectMenus(flags: CompanyFlags | null | undefined, options?: { demo?: boolean }) {
+  const demo = options?.demo ?? DEMO_MODE;
+  if (!objectUsesPilotLayout(flags, { demo })) {
+    return { pilot: false, main: [...LEGACY_OBJECT_TABS], more: [] as string[] };
+  }
+  return {
+    pilot: true,
+    main: [...PILOT_MAIN_TABS],
+    more: PILOT_MORE_TABS.filter((tab) => menuTabVisible(tab, flags, demo)),
+  };
 }
 
 export function menuTabVisible(tab: string, flags: CompanyFlags | null | undefined, demo = DEMO_MODE) {

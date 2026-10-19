@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.deps import require_user
 from app.schemas import OrderCreate, OrderStatusUpdate, ReviewCreate, User
+from app.sql_backend import page_body
 from app.store import store
 from app.transitions import ConflictError
 
@@ -27,13 +28,7 @@ def list_specialists(
         items = store.list_specialists(category=category, q=q)
         return {"ok": True, "data": items, "total": len(items)}
     rows, total = store.page_specialists(limit=limit, offset=offset, category=category, q=q)
-    return {
-        "ok": True,
-        "data": [store.specialist_public(item) for item in rows],
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
+    return page_body(store.public_specialists(rows), total, limit, offset)
 
 
 @router.get("/specialists/{sid}")
