@@ -915,3 +915,172 @@ def test_requires_approval_clears_only_through_an_approved_card(monkeypatch):
     assert cleared.json()["data"]["approval_id"] == waiting["id"]
     paths = app.openapi()["paths"]
     assert not any("clear" in path and "approval" in path for path in paths)
+
+
+def test_enabling_submittals_does_not_block_inflight_lines(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    bin_no = "000000000091"
+    owner_token, owner = _owner("flight-owner@example.com", bin_no)
+    approver_token, approver = _person("flight-approver@example.com", bin_no, "supervisor")
+    buyer_token, _buyer = _person("flight-buyer@example.com", bin_no, "procurement")
+    pid = _project(owner_token, "Flight yard")
+    _join(owner_token, pid, approver.email, "supervisor")
+    _join(owner_token, pid, "flight-buyer@example.com", "procurement")
+
+    sent = client.post(
+        f"/v1/procurement/projects/{pid}/quick",
+        json={"title": "Sent board", "unit": "шт", "qty": 2},
+        headers=_auth(owner_token),
+    )
+    assert sent.status_code == 200, sent.text
+    sent_line = sent.json()["data"]["line"]["id"]
+    sent_request = sent.json()["data"]["request"]["id"]
+    assert sent.json()["data"]["line"]["requires_approval"] is False
+    assert sent.json()["data"]["request"]["status"] == "collecting"
+
+    paying = client.post(
+        f"/v1/procurement/projects/{pid}/quick",
+        json={"title": "Pay board", "unit": "шт", "qty": 1},
+        headers=_auth(owner_token),
+    )
+    pay_line = paying.json()["data"]["line"]["id"]
+    pay_request = paying.json()["data"]["request"]["id"]
+    offer = client.post(
+        f"/v1/procurement/lines/{pay_line}/offers",
+        json={"supplier_name": FIXTURE["suppliers"][0]["name"], "price_kzt": 100, "vat_included": True},
+        headers=_auth(owner_token),
+    )
+    assert offer.status_code == 200, offer.text
+    chosen = client.post(
+        f"/v1/procurement/lines/{pay_line}/select",
+        json={"offer_id": offer.json()["data"]["id"]},
+        headers=_auth(owner_token),
+    )
+    assert chosen.status_code == 200, chosen.text
+    assert store.proc_requests[pay_request].status == "decided"
+
+    from app.procurement_models import ProcLine
+
+    def _draft_line(title: str) -> str:
+        created_request = client.post(
+            f"/v1/procurement/projects/{pid}/requests",
+            json={"title": title},
+            headers=_auth(owner_token),
+        )
+        assert created_request.status_code == 200, created_request.text
+        line_id = uuid4().hex
+        store.proc_lines[line_id] = ProcLine(
+            id=line_id,
+            request_id=created_request.json()["data"]["id"],
+            pos_no="1",
+            title=title,
+            unit="шт",
+            qty=1,
+        )
+        assert store.proc_requests[created_request.json()["data"]["id"]].status == "draft"
+        return line_id
+
+    waiting_id = _draft_line("Loose board")
+    linked_id = _draft_line("Marked board")
+
+    _flag(owner_token, True, 0)
+    assert store.proc_lines[sent_line].requires_approval is False
+    assert store.proc_lines[pay_line].requires_approval is False
+    assert store.proc_lines[waiting_id].requires_approval is False
+
+    supplier = User(
+        id="u-flight-sup",
+        email="flight-sup@example.com",
+        full_name=FIXTURE["suppliers"][0]["name"],
+        role="supplier",
+        company=FIXTURE["suppliers"][0]["name"],
+        phone=FIXTURE["suppliers"][0]["phone"],
+    )
+    store._index_user(supplier)
+    from app.authutil import hash_password
+
+    store.credentials[supplier.id] = hash_password("secret12")
+    supplier_login = client.post(
+        "/v1/auth/login",
+        json={"email": supplier.email, "password": "secret12", "consent_offer_pd": True},
+        headers={"User-Agent": "anyq-test"},
+    )
+    supplier_token = supplier_login.json()["data"]["token"]
+    inbox = client.get("/v1/procurement/inbox", headers=_auth(supplier_token))
+    visible = [line["id"] for row in inbox.json()["data"] for line in row["lines"]]
+    assert sent_line in visible
+    assert pay_line not in visible
+    still_open = client.post(
+        f"/v1/procurement/lines/{sent_line}/offers",
+        json={"supplier_name": FIXTURE["suppliers"][0]["name"], "price_kzt": 90, "vat_included": True},
+        headers=_auth(owner_token),
+    )
+    assert still_open.status_code == 200, still_open.text
+
+    for lid in (sent_line, pay_line):
+        denied = client.patch(
+            f"/v1/procurement/lines/{lid}",
+            json={"requires_approval": True},
+            headers=_auth(owner_token),
+        )
+        assert denied.status_code == 409, denied.text
+        assert store.proc_lines[lid].requires_approval is False
+    visible_after = [
+        line["id"]
+        for row in client.get("/v1/procurement/inbox", headers=_auth(supplier_token)).json()["data"]
+        for line in row["lines"]
+    ]
+    assert sent_line in visible_after
+    sheet = client.get(f"/v1/procurement/requests/{pay_request}/sheet", headers=_auth(owner_token))
+    assert sheet.status_code == 200, sheet.text
+    paid = next(row for row in sheet.json()["data"]["lines"] if row["id"] == pay_line)
+    assert not paid.get("needs_approval")
+
+    fresh = client.post(
+        f"/v1/procurement/projects/{pid}/quick",
+        json={"title": "New board", "unit": "шт", "qty": 1},
+        headers=_auth(owner_token),
+    )
+    assert fresh.status_code == 200, fresh.text
+    fresh_line = fresh.json()["data"]["line"]["id"]
+    assert fresh.json()["data"]["line"]["requires_approval"] is True
+    hidden = [
+        line["id"]
+        for row in client.get("/v1/procurement/inbox", headers=_auth(supplier_token)).json()["data"]
+        for line in row["lines"]
+    ]
+    assert fresh_line not in hidden
+
+    blocked = client.patch(
+        f"/v1/procurement/lines/{waiting_id}",
+        json={"requires_approval": True},
+        headers=_auth(buyer_token),
+    )
+    assert blocked.status_code == 403, blocked.text
+    assert store.proc_lines[waiting_id].requires_approval is False
+    marked = client.patch(
+        f"/v1/procurement/lines/{waiting_id}",
+        json={"requires_approval": True},
+        headers=_auth(owner_token),
+    )
+    assert marked.status_code == 200, marked.text
+    assert marked.json()["data"]["requires_approval"] is True
+
+    card = _create(owner_token, pid, approver.id)
+    store.proc_lines[linked_id].approval_id = card["id"]
+    assert store.proc_requests[store.proc_lines[linked_id].request_id].status == "draft"
+    assert store.proc_lines[linked_id].requires_approval is False
+    outsider = client.patch(
+        f"/v1/procurement/lines/{linked_id}",
+        json={"requires_approval": True},
+        headers=_auth(buyer_token),
+    )
+    assert outsider.status_code == 403, outsider.text
+    by_approver = client.patch(
+        f"/v1/procurement/lines/{linked_id}",
+        json={"requires_approval": True},
+        headers=_auth(approver_token),
+    )
+    assert by_approver.status_code == 200, by_approver.text
+    assert by_approver.json()["data"]["requires_approval"] is True
+    del owner, sent_request

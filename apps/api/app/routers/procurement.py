@@ -499,7 +499,7 @@ def update_line(lid: str, body: LinePatch, user: User = Depends(require_user)):
     line, _req, project = _line(user, lid)
     _need(access_flags(store, user, project), "can_request")
     payload = body.model_dump(exclude_unset=True)
-    return {"ok": True, "data": _run(lambda: patch_line(store, line, payload))}
+    return {"ok": True, "data": _run(lambda: patch_line(store, line, payload, user))}
 
 
 @router.post("/lines/{lid}/offers")

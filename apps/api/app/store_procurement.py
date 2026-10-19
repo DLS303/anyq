@@ -88,6 +88,46 @@ def _docs(store, request_id: str) -> list[ProcDocument]:
     return [item for item in store.proc_docs.values() if item.request_id == request_id]
 
 
+def _submittals_on(project) -> bool:
+    """Stored company flag only. Demo mode must not mark old lines."""
+    if project is None:
+        return False
+    from app.company_features import flag_map, project_company_id
+
+    return bool(flag_map(project_company_id(project)).get("submittals"))
+
+
+def _line_sent(store, line: ProcLine) -> bool:
+    """Sent to suppliers, or the chosen offer is awaiting payment."""
+    req = store.proc_requests.get(line.request_id)
+    if req is None:
+        return False
+    if req.status == "decided":
+        return True
+    return bool(req.status == "collecting" and req.shared and not line.requires_approval)
+
+
+def _may_require_approval(store, user, project, line: ProcLine) -> bool:
+    if user is None or project is None:
+        return False
+    if project.owner_id == user.id:
+        return True
+    if not line.approval_id:
+        return False
+    from sqlalchemy import select
+
+    from app.submittal_tables import material_approval_steps
+
+    with store._sql.factory() as session:
+        approvers = session.scalars(
+            select(material_approval_steps.c.approver_user_id).where(
+                material_approval_steps.c.approval_id == line.approval_id,
+                material_approval_steps.c.deleted_at.is_(None),
+            )
+        ).all()
+    return user.id in set(approvers)
+
+
 def _refresh(request: ProcRequest, lines: list[ProcLine]) -> None:
     if not lines:
         request.status = "draft"
@@ -164,6 +204,7 @@ def quick_request(store, project, user, title: str, unit: str, qty: float) -> di
             title=name,
             unit=unit_text,
             qty=amount,
+            requires_approval=_submittals_on(project),
         )
         store.proc_requests[req.id] = req
         store.proc_lines[line.id] = line
@@ -186,6 +227,7 @@ def repeat_request(store, source: ProcRequest, user) -> dict:
             repeated_from=source.id,
         )
         copied: list[ProcLine] = []
+        flag_on = _submittals_on(store.get_project(source.project_id))
         for line in sorted(_lines(store, source.id), key=lambda item: (item.pos_no, item.id)):
             approval_id = line.approval_id
             if line.requires_approval and approval_id:
@@ -201,7 +243,7 @@ def repeat_request(store, source: ProcRequest, user) -> dict:
                 unit=line.unit,
                 qty=line.qty,
                 note=line.note,
-                requires_approval=line.requires_approval,
+                requires_approval=True if flag_on else line.requires_approval,
                 approval_id=approval_id,
                 brand=line.brand,
             )
@@ -376,6 +418,7 @@ def apply_lines(store, request: ProcRequest, rows: list[dict], contact_ignored: 
     with store._lock:
         existing = {line.pos_no: line for line in _lines(store, request.id)}
         created = updated = 0
+        require_new = _submittals_on(store.get_project(request.project_id))
         for row in valid:
             current = existing.get(row["pos_no"])
             if current:
@@ -393,6 +436,7 @@ def apply_lines(store, request: ProcRequest, rows: list[dict], contact_ignored: 
                     unit=row["unit"],
                     qty=float(row["qty"]),
                     note=row["note"] or "",
+                    requires_approval=require_new,
                 )
                 store.proc_lines[line.id] = line
                 existing[line.pos_no] = line
@@ -629,8 +673,17 @@ def delete_offer(store, offer: ProcOffer) -> dict:
         return {"id": offer.id}
 
 
-def patch_line(store, line: ProcLine, payload: dict) -> dict:
+def patch_line(store, line: ProcLine, payload: dict, user=None) -> dict:
     with store._lock:
+        if payload.get("requires_approval") is True:
+            project = store.get_project(_request_of_line(store, line).project_id)
+            if project is not None and _submittals_on(project):
+                from app.submittal_service import StatusConflict
+
+                if _line_sent(store, line):
+                    raise StatusConflict("Этот переход статуса недоступен")
+                if not _may_require_approval(store, user, project, line):
+                    raise PermissionError("Недостаточно прав")
         if payload.get("requires_approval") is False:
             project = store.get_project(_request_of_line(store, line).project_id)
             from app.company_features import (
