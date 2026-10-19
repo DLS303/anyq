@@ -20,17 +20,15 @@
 
 ## Что уже лежит в репозитории
 
-- `apps/api/Dockerfile` — образ API: Python 3.11, gunicorn и один worker Uvicorn, пользователь `anyq` (uid 10001).
+- `apps/api/Dockerfile` — образ API: Python 3.11, gunicorn и несколько worker Uvicorn, пользователь `anyq` (uid 10001).
 - `apps/web/Dockerfile` — образ сайта: Next.js standalone, пользователь `nextjs` (uid 1001). `NEXT_PUBLIC_PILOT_MODE` задаётся аргументом сборки.
-- `deploy/docker-compose.prod.yml` — API, сайт и Caddy. Порты 80 и 443 публикует только Caddy.
+- `deploy/docker-compose.prod.yml` — API, PostgreSQL, сайт и Caddy. Порты 80 и 443 публикует только Caddy. Порт 5432 наружу не публикуется.
 - `deploy/Caddyfile` — HTTPS для имени из переменной `DOMAIN`.
 - `deploy/.env.production.example` — перечень переменных без секретов.
 - `deploy/bootstrap_server.sh`, `deploy/deploy.sh`, `deploy/backup.sh`, `deploy/anyq-backup.cron`.
 - `.github/workflows/deploy.yml` — ручной деплой по SSH. Пока секреты не созданы, workflow ничего не делает.
 
-Один worker — не запас на будущее, а ограничение текущего хранилища. Блокировка `db.json` действует внутри процесса. Второй worker может повредить файл. `WEB_CONCURRENCY` обязан оставаться `1`, пока API пишет в этот файл.
-
-Сервис базы данных в compose-файле закомментирован. Пока он не включён, данные остаются в томе `anyq-data`.
+Данные приложения лежат в PostgreSQL. `WEB_CONCURRENCY` может быть от 1 до 8, по умолчанию 2: записи и ключи идемпотентности хранятся в базе с ограничением уникальности, а не в одном JSON-файле. Том `anyq-data` остаётся для загрузок и медиа. Файл `db.json` нужен только для одноразового импорта, описанного ниже.
 
 ## Чеклист
 
@@ -104,8 +102,9 @@ openssl rand -base64 48
 - `ACME_EMAIL` — почта для уведомлений выпуска сертификата.
 - `CORS_ORIGINS` — `https://` и то же имя, без пробелов. Если имён несколько, перечислите через запятую, и `https://<DOMAIN>` обязан быть в списке.
 - `ANYQ_DEMO_PASSWORD` оставьте пустым.
-- `DATABASE_URL` и `POSTGRES_PASSWORD` оставьте пустыми.
-- `WEB_CONCURRENCY` оставьте `1`.
+- `POSTGRES_PASSWORD` — длинный пароль с сервера (`openssl rand -base64 32`). Не используйте `anyq`, `postgres`, `superapp`, `changeme`.
+- `DATABASE_URL` — `postgresql+psycopg://anyq:<тот же пароль>@postgres:5432/anyq`. Compose подставляет пароль из `POSTGRES_PASSWORD` сам, но в файле адрес тоже должен быть адресом PostgreSQL.
+- `WEB_CONCURRENCY` оставьте `2` или поставьте число от 1 до 8.
 - `NEXT_PUBLIC_PILOT_MODE=1` включает пилотный интерфейс. Значение попадает в образ сайта на сборке. Смена потребует нового `deploy.sh`.
 - `INTERNAL_API_URL` оставьте `http://api:8010`.
 
@@ -143,10 +142,11 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml logs --t
 
 Тома:
 
-- `anyq-data` — `/data` в API: `db.json`, `uploads`, `private`, `public`.
+- `anyq-data` — `/data` в API: `uploads`, `private`, `public`. Старый `db.json` можно положить сюда для импорта.
+- `anyq-postgres` — данные PostgreSQL. Удаление тома стирает базу.
 - `anyq-caddy-data` и `anyq-caddy-config` — сертификаты. Удаление этих томов заставит Caddy запросить сертификат заново.
 
-Логи контейнеров пишутся драйвером `json-file`: не больше 10 МБ на файл и 5 файлов на сервис. Лимиты ресурсов в compose-файле рассчитаны на 2 vCPU и 4 ГБ: API до 1 CPU и 1536 МБ, сайт до 0.75 CPU и 768 МБ, Caddy до 0.25 CPU и 128 МБ. Политика перезапуска — `unless-stopped`.
+Логи контейнеров пишутся драйвером `json-file`: не больше 10 МБ на файл и 5 файлов на сервис. Лимиты ресурсов в compose-файле рассчитаны на 2 vCPU и 4 ГБ: API до 1 CPU и 1536 МБ, PostgreSQL до 0.5 CPU и 512 МБ, сайт до 0.75 CPU и 768 МБ, Caddy до 0.25 CPU и 128 МБ. Политика перезапуска — `unless-stopped`. При старте контейнер API выполняет `alembic upgrade head`.
 
 ## 5. Проверка HTTPS
 
@@ -173,7 +173,7 @@ curl -fsS -o /dev/null -w '%{http_code}\n' "https://<домен>/ru"
 ls -lh /var/backups/anyq
 ```
 
-Архив называется `anyq-data-<дата>.tar.gz` и содержит каталог `/data`. Срок хранения задаёт `BACKUP_RETENTION_DAYS` (по умолчанию 14).
+Появляются два файла: `anyq-data-<дата>.tar.gz` (каталог `/data`: загрузки и медиа) и `anyq-postgres-<дата>.sql.gz` (`pg_dump` базы `anyq`). Срок хранения задаёт `BACKUP_RETENTION_DAYS` (по умолчанию 14).
 
 Ежедневный запуск в 03:15 UTC от пользователя `deploy`:
 
@@ -184,7 +184,28 @@ sudo chmod 644 /etc/cron.d/anyq-backup
 
 Если репозиторий лежит не в `/opt/anyq`, поправьте путь в cron-файле до копирования.
 
-Восстановление описано в шапке `deploy/backup.sh`. Кратко: остановить API, распаковать архив в том `anyq-data`, снова выполнить `docker compose ... up -d`. Расписание и архивы держите на этом сервере или на другом диске в Казахстане.
+Восстановление описано в шапке `deploy/backup.sh`. Кратко: остановить API, распаковать архив в том `anyq-data`, загрузить SQL в уже запущенный PostgreSQL командой `psql`, снова выполнить `docker compose ... up -d`. Расписание и архивы держите на этом сервере или на другом диске в Казахстане.
+
+## Перенос db.json
+
+Один раз, после того как контейнер API уже прошёл `alembic upgrade head`. Скрипт идемпотентный: повторный запуск обновляет изменившиеся строки и оставляет совпавшие. В отчёте для каждой коллекции три числа: `insert`, `update`, `same`. Флаг `--dry-run` печатает те же числа и ничего не записывает.
+
+Положите прежний файл в том данных, например `/data/db.json` внутри контейнера API, и выполните из `/opt/anyq`:
+
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml exec -T api \
+  python scripts/import_json.py /data/db.json --dry-run
+docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml exec -T api \
+  python scripts/import_json.py /data/db.json
+```
+
+Локально, из каталога `apps/api`, тот же скрипт читает `DATABASE_URL`. Пустой `DATABASE_URL` пишет в SQLite рядом с путём `ANYQ_DB_PATH`.
+
+```bash
+cd apps/api
+python scripts/import_json.py ../../data/db.json --dry-run
+python scripts/import_json.py ../../data/db.json
+```
 
 ## 7. Обновление
 
@@ -240,6 +261,6 @@ docker logs anyq-api --tail 50
 - Не покупают сервер и домен и не создают DNS-запись.
 - Не генерируют боевой `JWT_SECRET` за вас: его нужно создать на сервере и оставить только в `deploy/.env`.
 - Не выключают парольный SSH. Это отдельное решение после проверки входа по ключу.
-- Не переносят данные в Postgres. Блок `postgres` в compose-файле оставлен комментарием.
+- Не копируют старый `db.json` сами. Импорт описан в разделе «Перенос db.json» и запускается отдельно.
 - Не публикуют порт API и порт сайта на хосте.
 - Не отправляют копии за пределы машины.

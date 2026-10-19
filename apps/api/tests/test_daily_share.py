@@ -108,8 +108,8 @@ def test_share_expiry_revoke_and_public_copy():
     pad = "=" * (-len(token) % 4)
     assert len(base64.urlsafe_b64decode(token + pad)) >= 16
     saved = store.db_path()
-    with open(saved, encoding="utf-8") as handle:
-        db_text = handle.read()
+    with open(saved, "rb") as handle:
+        db_text = handle.read().decode("latin-1")
     assert token not in db_text
     assert store.daily_logs[log["id"]].share_token_sha256 in db_text
     assert original_id in db_text
@@ -180,7 +180,9 @@ def test_share_expiry_revoke_and_public_copy():
     assert b"SECRET-GPS-99" not in cleaned.content
     assert len(Image.open(io.BytesIO(cleaned.content)).getexif()) == 0
 
-    store.daily_logs[log["id"]].share_expires_at = "2000-01-01T00:00:00+00:00"
+    log_row = store.daily_logs[log["id"]]
+    log_row.share_expires_at = "2000-01-01T00:00:00+00:00"
+    store.daily_logs[log_row.id] = log_row
     expired = client.get(f"/v1/public/daily/{token}")
     assert expired.status_code == 410
     assert "noindex" in expired.headers["x-robots-tag"]

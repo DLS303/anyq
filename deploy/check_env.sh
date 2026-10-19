@@ -99,8 +99,28 @@ validate_env() {
       ;;
   esac
 
-  if [ "${WEB_CONCURRENCY:-1}" != "1" ]; then
-    echo "anyq: WEB_CONCURRENCY must be 1 while data is stored in the JSON file" >&2
+  case "${DATABASE_URL:-}" in
+    postgresql://*|postgresql+psycopg://*|postgres://*) ;;
+    *)
+      echo "anyq: DATABASE_URL must be a PostgreSQL URL" >&2
+      return 1
+      ;;
+  esac
+
+  if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+    echo "anyq: POSTGRES_PASSWORD is missing" >&2
+    return 1
+  fi
+
+  workers="${WEB_CONCURRENCY:-2}"
+  case "$workers" in
+    ''|*[!0-9]*)
+      echo "anyq: WEB_CONCURRENCY must be a number from 1 to 8" >&2
+      return 1
+      ;;
+  esac
+  if [ "$workers" -lt 1 ] || [ "$workers" -gt 8 ]; then
+    echo "anyq: WEB_CONCURRENCY must be a number from 1 to 8" >&2
     return 1
   fi
 

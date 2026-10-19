@@ -3,10 +3,11 @@ import hmac
 import json
 import os
 import re
+import threading
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import get_args
 from uuid import uuid4
 
@@ -107,6 +108,13 @@ from app.site_models import (
     Submittal,
     Timesheet,
     VoiceNote,
+)
+from app.sql_backend import (
+    DICT_ATTRS,
+    SqlRuntime,
+    TrackedDict,
+    TrackedList,
+    json_db_file,
 )
 from app.store_budget import dump_budget, load_budget
 from app.store_procurement import dump_lists, load_into
@@ -242,10 +250,7 @@ class ConsentRequired(Exception):
 
 
 def db_file() -> Path:
-    override = os.getenv("ANYQ_DB_PATH", "").strip()
-    if override:
-        return Path(override)
-    return Path(__file__).resolve().parents[3] / "data" / "db.json"
+    return json_db_file()
 
 
 def mask_email(email: str) -> str:
@@ -277,56 +282,28 @@ def _now() -> str:
 
 class MemoryStore:
     def __init__(self) -> None:
-        self._lock = Lock()
-        self.users: dict[str, User] = {}
-        self.users_by_id: dict[str, User] = {}
-        self.plots: dict[str, Plot] = {}
-        self.inquiries: dict[str, Inquiry] = {}
-        self.favorites: list[Favorite] = []
-        self.searches: dict[str, SavedSearch] = {}
-        self.specialists: dict[str, Specialist] = {}
-        self.orders: dict[str, ServiceOrder] = {}
-        self.reviews: dict[str, Review] = {}
-        self.deals: dict[str, Deal] = {}
-        self.threads: dict[str, ChatThread] = {}
-        self.messages: dict[str, ChatMessage] = {}
-        self.credentials: dict[str, str] = {}
-        self.materials: dict[str, Material] = {}
-        self.material_orders: dict[str, MaterialOrder] = {}
-        self.projects: dict[str, Project] = {}
-        self.daily_logs: dict[str, DailyLog] = {}
-        self.rfis: dict[str, RFI] = {}
-        self.submittals: dict[str, Submittal] = {}
-        self.punches: dict[str, PunchItem] = {}
-        self.inspections: dict[str, Inspection] = {}
-        self.incidents: dict[str, Incident] = {}
-        self.drawings: dict[str, Drawing] = {}
-        self.schedule: dict[str, ScheduleTask] = {}
-        self.budget_lines: dict[str, BudgetLine] = {}
-        self.change_orders: dict[str, ChangeOrder] = {}
-        self.timesheets: dict[str, Timesheet] = {}
-        self.meetings: dict[str, Meeting] = {}
-        self.directory: dict[str, DirectoryRow] = {}
-        self.leads: dict[str, Lead] = {}
-        self.crm_contacts: dict[str, CrmContact] = {}
-        self.crm_activities: dict[str, CrmActivity] = {}
-        self.crm_invoices: dict[str, CrmInvoice] = {}
-        self.files: dict[str, StoredUpload] = {}
-        self.consents: list[ConsentRecord] = []
-        self.verifications: dict[str, VerificationRecord] = {}
-        self.proc_requests = {}
-        self.proc_lines = {}
-        self.proc_offers = {}
-        self.proc_docs = {}
-        self.object_budgets = {}
-        self.object_expenses = {}
-        self._load()
-        if demo_mode():
-            self._ensure_seed_users()
-            self._ensure_demo_passwords()
-            self._ensure_materials()
-            self._ensure_site()
-            self._ensure_crm()
+        object.__setattr__(self, "_ready", False)
+        self._lock = RLock()
+        self._local = threading.local()
+        self._seen_rev = -1
+        self._wraps: dict = {}
+        for name in DICT_ATTRS:
+            object.__setattr__(self, name, TrackedDict())
+        object.__setattr__(self, "favorites", TrackedList(lambda item: f"{item.user_id}:{item.plot_id}"))
+        object.__setattr__(self, "consents", TrackedList(lambda item: item.id))
+        self._sql = SqlRuntime()
+        boot = self._sql.bootstrap_lock()
+        try:
+            self._load()
+            if demo_mode():
+                self._ensure_seed_users()
+                self._ensure_demo_passwords()
+                self._ensure_materials()
+                self._ensure_site()
+                self._ensure_crm()
+        finally:
+            self._sql.bootstrap_unlock(boot)
+        object.__setattr__(self, "_ready", True)
 
     def _index_user(self, user: User) -> None:
         self.users[user.email.lower()] = user
@@ -407,6 +384,79 @@ class MemoryStore:
         if saved:
             self._save()
 
+    def __setattr__(self, name, value) -> None:
+        current = self.__dict__.get(name)
+        if isinstance(current, TrackedDict) and isinstance(value, dict) and not isinstance(value, TrackedDict):
+            current.replace(value)
+            return
+        if isinstance(current, TrackedList) and isinstance(value, list) and not isinstance(value, TrackedList):
+            current.replace(value)
+            return
+        object.__setattr__(self, name, value)
+
+    def __getattribute__(self, name):
+        attr = object.__getattribute__(self, name)
+        if name.startswith("_") or not callable(attr):
+            return attr
+        if not object.__getattribute__(self, "_ready"):
+            return attr
+        wraps = object.__getattribute__(self, "_wraps")
+        cached = wraps.get(name)
+        if cached is not None:
+            return cached
+
+        def wrapped(*args, **kwargs):
+            self._enter()
+            try:
+                return attr(*args, **kwargs)
+            finally:
+                self._leave()
+
+        wraps[name] = wrapped
+        return wrapped
+
+    def _pending(self) -> bool:
+        for name in DICT_ATTRS:
+            if name == "users":
+                continue
+            bag = object.__getattribute__(self, name)
+            if bag.dirty or bag.deleted:
+                return True
+        favorites = object.__getattribute__(self, "favorites")
+        consents = object.__getattribute__(self, "consents")
+        return bool(favorites.mutated or consents.mutated)
+
+    def _enter(self) -> None:
+        local = object.__getattribute__(self, "_local")
+        depth = getattr(local, "depth", 0)
+        if depth == 0:
+            self._lock.acquire()
+            local.depth = 1
+            try:
+                if self._pending():
+                    self._save_unlocked()
+                self._reload_if_stale()
+            except Exception:
+                local.depth = 0
+                self._lock.release()
+                raise
+            return
+        local.depth = depth + 1
+
+    def _leave(self) -> None:
+        local = object.__getattribute__(self, "_local")
+        local.depth = max(0, getattr(local, "depth", 1) - 1)
+        if local.depth == 0:
+            self._lock.release()
+
+    def _reload_if_stale(self) -> None:
+        sql = object.__getattribute__(self, "_sql")
+        current = sql.revision()
+        if current == object.__getattribute__(self, "_seen_rev"):
+            return
+        sql.load_into(self)
+        object.__setattr__(self, "_seen_rev", current)
+
     def _seed_phase2(self) -> None:
         self.specialists = {s.id: deepcopy(s) for s in SPECIALISTS}
         self.orders = {o.id: deepcopy(o) for o in ORDERS}
@@ -416,6 +466,15 @@ class MemoryStore:
         self.messages = {m.id: deepcopy(m) for m in MESSAGES}
 
     def _load(self) -> None:
+        if self._sql.count() > 0:
+            self._sql.load_into(self)
+            self._seen_rev = self._sql.revision()
+            return
+        self._load_json()
+        self._save_unlocked()
+        self._seen_rev = self._sql.revision()
+
+    def _load_json(self) -> None:
         path = db_file()
         if not path.exists():
             if demo_mode():
@@ -483,9 +542,21 @@ class MemoryStore:
             self._save_unlocked()
 
     def _save_unlocked(self) -> None:
-        path = db_file()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
+        self._sql.flush(self)
+        self._seen_rev = self._sql.revision()
+
+    def _save(self) -> None:
+        with self._lock:
+            self._save_unlocked()
+
+    def db_path(self) -> str:
+        if self._sql.path:
+            return self._sql.path
+        return self._sql.url
+
+    def snapshot(self) -> dict:
+        """JSON-shaped export used by the one-time import report and backups."""
+        return {
             "plots": [p.model_dump() for p in self.plots.values()],
             "inquiries": [i.model_dump() for i in self.inquiries.values()],
             "favorites": [f.model_dump() for f in self.favorites],
@@ -501,7 +572,7 @@ class MemoryStore:
             "threads": [t.model_dump() for t in self.threads.values()],
             "messages": [m.model_dump() for m in self.messages.values()],
             "users": [u.model_dump() for u in self.users_by_id.values()],
-            "credentials": self.credentials,
+            "credentials": dict(self.credentials),
             "materials": [m.model_dump() for m in self.materials.values()],
             "material_orders": [o.model_dump() for o in self.material_orders.values()],
             "projects": [p.model_dump() for p in self.projects.values()],
@@ -524,16 +595,6 @@ class MemoryStore:
             **dump_lists(self),
             **dump_budget(self),
         }
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
-
-    def _save(self) -> None:
-        with self._lock:
-            self._save_unlocked()
-
-    def db_path(self) -> str:
-        return str(db_file())
 
     def get_user_by_email(self, email: str) -> User | None:
         return self.users.get(email.lower().strip())
@@ -2577,6 +2638,134 @@ class MemoryStore:
             self.change_orders[item.id] = item
             self._save_unlocked()
             return item
+
+    def page_plots(self, *, limit: int, offset: int, **kwargs):
+        return self._sql.page(
+            self,
+            "plots",
+            limit=limit,
+            offset=offset,
+            order="price",
+            status=kwargs.get("status"),
+            owner_id=kwargs.get("owner_id"),
+            category=kwargs.get("purpose"),
+            district=kwargs.get("district"),
+            gas=kwargs.get("gas"),
+            electricity=kwargs.get("electricity"),
+            water=kwargs.get("water"),
+            verified=kwargs.get("verified"),
+            q=kwargs.get("q"),
+            lat=kwargs.get("lat"),
+            lng=kwargs.get("lng"),
+            radius_km=kwargs.get("radius_km"),
+        )
+
+    def page_materials(self, *, limit: int, offset: int, category: str | None = None, q: str | None = None):
+        return self._sql.page(
+            self,
+            "materials",
+            limit=limit,
+            offset=offset,
+            order="price",
+            category=category,
+            q=q,
+            published=True,
+        )
+
+    def page_specialists(self, *, limit: int, offset: int, category: str | None = None, q: str | None = None):
+        return self._sql.page(self, "specialists", limit=limit, offset=offset, category=category, q=q)
+
+    def page_queue(self, *, limit: int, offset: int):
+        return self._sql.page(
+            self,
+            "plots",
+            limit=limit,
+            offset=offset,
+            status=("pending", "needs_revision"),
+        )
+
+    def page_deals(self, user: User, *, limit: int, offset: int, funnel: str | None = None, q: str | None = None):
+        filters: dict = {"order": "created_desc", "category": funnel, "q": q}
+        if user.role != "admin":
+            filters["company_key_via_links"] = company_key(user)
+        return self._sql.page(self, "deals", limit=limit, offset=offset, **filters)
+
+    def page_contacts(self, user: User, *, limit: int, offset: int, q: str | None = None, ctype: str | None = None):
+        filters: dict = {"order": "created_desc", "category": ctype, "q": q}
+        if user.role != "admin":
+            filters["company_key"] = company_key(user)
+        return self._sql.page(self, "crm_contacts", limit=limit, offset=offset, **filters)
+
+    def create_invited_account(
+        self,
+        *,
+        email: str,
+        password: str,
+        full_name: str,
+        phone: str,
+        role: str,
+        company: str,
+        company_bin: str,
+        project_id: str | None,
+        ip: str = "",
+        user_agent: str = "",
+    ) -> tuple[User, str]:
+        from app.invitations import INVITE_ROLES
+
+        if role not in INVITE_ROLES:
+            raise ValueError("Роль приглашения недоступна")
+        normalized = email.lower().strip()
+        contact = full_name.strip()
+        phone_text = phone.strip()
+        if "@" not in normalized or "." not in normalized:
+            raise ValueError("Некорректный email")
+        if len(password) < 6:
+            raise ValueError("Пароль минимум 6 символов")
+        if len(contact) < 2:
+            raise ValueError("Укажите контактное лицо")
+        if len(phone_text) < 6:
+            raise ValueError("Укажите телефон")
+        if self.get_user_by_email(normalized):
+            raise ValueError("Такой email уже зарегистрирован")
+        with self._lock:
+            if self.get_user_by_email(normalized):
+                raise ValueError("Такой email уже зарегистрирован")
+            uid = f"u-{uuid4().hex[:8]}"
+            user = User(
+                id=uid,
+                email=normalized,
+                full_name=contact,
+                role=role,  # type: ignore[arg-type]
+                phone=phone_text,
+                company=company,
+                company_bin=company_bin,
+                city="Алматы",
+            )
+            self._index_user(user)
+            self.credentials[uid] = hash_password(password)
+            self._append_consent_unlocked(user, ip, user_agent)
+            if project_id:
+                directory_id = f"dir-{uuid4().hex[:8]}"
+                self.directory[directory_id] = DirectoryRow(
+                    id=directory_id,
+                    project_id=project_id,
+                    user_id=uid,
+                    company=company,
+                    role_on_site=role,
+                )
+            self._save_unlocked()
+            return user, make_token(uid)
+
+    def page_threads(self, user: User, *, limit: int, offset: int):
+        items, total = self._sql.page(
+            self,
+            "threads",
+            limit=limit,
+            offset=offset,
+            order="created_desc",
+            participant_id=user.id,
+        )
+        return items, total
 
 
 store = MemoryStore()

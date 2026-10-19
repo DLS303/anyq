@@ -12,6 +12,9 @@ Role = Literal[
     "contractor",
     "supplier",
     "supervisor",
+    "foreman",
+    "procurement",
+    "customer",
 ]
 
 PlotStatus = Literal[

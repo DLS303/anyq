@@ -4,8 +4,8 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { PlotCard } from "@/components/plots/PlotCard";
 import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
-import { PageNav, usePaged } from "@/components/ui/PagedList";
-import { fetchPlots, saveSearch, suggestPlots } from "@/lib/api";
+import { PageNav, useServerPaged } from "@/components/ui/PagedList";
+import { fetchPlots, fetchPlotsPage, saveSearch, suggestPlots } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { PURPOSE } from "@/lib/format";
 import { useDebounced } from "@/lib/useDebounced";
@@ -57,7 +57,7 @@ export function CatalogClient({ locale }: { locale: Locale }) {
   );
   const query = useAsync((signal) => fetchPlots(params, signal), [params]);
   const plots = query.data ?? [];
-  const paged = usePaged(plots, JSON.stringify(params));
+  const paged = useServerPaged(JSON.stringify(params), (page, signal) => fetchPlotsPage(params, page, 24, signal));
 
   useEffect(() => {
     if (q.trim().length < 2) {
@@ -203,14 +203,14 @@ export function CatalogClient({ locale }: { locale: Locale }) {
             <PlotMap plots={plots} locale={locale} onPick={setPick} pick={pick} />
           </WidgetBoundary>
         </div>
-        {query.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
-        {query.status === "error" ? (
-          <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />
+        {paged.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
+        {paged.status === "error" ? (
+          <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={paged.reload} />
         ) : null}
-        {!query.loading && query.status !== "error" && plots.length === 0 ? (
+        {!paged.loading && paged.status !== "error" && paged.total === 0 ? (
           <p className="text-ink/60">{m.empty}</p>
         ) : null}
-        {query.status !== "error" && paged.slice.length > 0 ? (
+        {paged.status !== "error" && paged.slice.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2">
             {paged.slice.map((plot) => (
               <PlotCard key={plot.id} plot={plot} locale={locale} />

@@ -1,4 +1,4 @@
-"""In-memory login failure window. One API worker is enough for the pilot."""
+"""In-memory login failure window. Each worker keeps its own window."""
 
 from __future__ import annotations
 

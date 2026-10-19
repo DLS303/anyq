@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -6,8 +7,15 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.deps import require_user
 from app.idempotency import IdempotencyConflict, run_idempotent
-from app.media import process_upload
 from app.paths import write_stored_file
+from app.photo_jobs import (
+    PHOTO_POOL,
+    create_job,
+    get_job,
+    mark,
+    photo_timeout,
+    process_in_pool,
+)
 from app.schemas import User
 from app.shares import (
     DEFAULT_SHARE_DAYS,
@@ -392,15 +400,34 @@ async def add_daily_photos(
         raise HTTPException(400, "Нужно фото")
     if len(log.photos) + len(files) > 10:
         raise HTTPException(400, "Не больше 10 фото")
-    processed = []
+    payloads: list[tuple[str, bytes]] = []
     for upload in files:
         raw = await upload.read()
+        job_id = f"job-{uuid4().hex[:12]}"
+        create_job(job_id=job_id, owner_id=user.id, project_id=project.id, daily_log_id=log.id)
+        payloads.append((job_id, raw))
+    loop = asyncio.get_running_loop()
+    processed = []
+    for job_id, raw in payloads:
+        future = loop.run_in_executor(PHOTO_POOL, process_in_pool, raw, job_id)
         try:
-            processed.append(process_upload(raw))
+            item = await asyncio.wait_for(future, timeout=photo_timeout())
+        except TimeoutError as exc:
+            mark(job_id, "timeout", error="Превышено время обработки фото")
+            raise HTTPException(408, "Обработка фото не успела завершиться") from exc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        mark(
+            job_id,
+            "done",
+            has_people=item.has_people,
+            has_plates=item.has_plates,
+            taken_at=item.taken_at,
+            error="",
+        )
+        processed.append((job_id, item))
     added = []
-    for item in processed:
+    for job_id, item in processed:
         original_id = f"f-{uuid4().hex[:12]}"
         public_id = f"f-{uuid4().hex[:12]}"
         write_stored_file("original", f"{project.id}/{original_id}.jpg", item.original)
@@ -433,8 +460,24 @@ async def add_daily_photos(
                 taken_at=item.taken_at,
             ),
         )
-        added.append({"has_people": item.has_people, "has_plates": item.has_plates, "taken_at": item.taken_at})
+        added.append(
+            {
+                "job_id": job_id,
+                "status": "done",
+                "has_people": item.has_people,
+                "has_plates": item.has_plates,
+                "taken_at": item.taken_at,
+            }
+        )
     return {"ok": True, "data": {"log": member_daily(store.daily_logs[log.id]), "added": added}}
+
+
+@router.get("/photos/jobs/{job_id}")
+def photo_job(job_id: str, user: User = Depends(require_user)):
+    row = get_job(job_id)
+    if row is None or (row["owner_id"] != user.id and user.role != "admin"):
+        raise HTTPException(404, "Задача не найдена")
+    return {"ok": True, "data": row}
 
 
 @router.post("/daily/{log_id}/voice")

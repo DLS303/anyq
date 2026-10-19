@@ -43,7 +43,7 @@ npm run dev
 docker compose up -d
 ```
 
-Поднимутся PostgreSQL + PostGIS и Redis. Схема: `infra/postgres/init.sql`. API пока всё ещё memory — коннектор к PostGIS следующий шаг.
+Поднимутся PostgreSQL + PostGIS и Redis для GIS-контура. Схема: `infra/postgres/init.sql`. Приложение хранит свои данные в SQLite, если `DATABASE_URL` пустой, и в PostgreSQL, если он задан. Рабочий запуск описан в `docs/DEPLOY.md`.
 
 ## Что сознательно не сделано
 

@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { PageNav, usePaged } from "@/components/ui/PagedList";
+import { PageNav, useServerPaged } from "@/components/ui/PagedList";
 import { useAuth } from "@/lib/auth";
-import { createContact, fetchContacts } from "@/lib/api";
+import { createContact, fetchContactsPage } from "@/lib/api";
 import { useDebounced } from "@/lib/useDebounced";
-import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
+import { ErrorRetry, useSubmitLock } from "@/lib/useAsync";
 import { t } from "@/i18n/messages";
 import { CONTACT_TYPE, money } from "@/lib/format";
 import type { ContactType, CrmContact, Locale } from "@/lib/types";
@@ -17,17 +17,13 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
   const debouncedSearch = useDebounced(search, 300);
   const [typeFilter, setTypeFilter] = useState<string>("");
   const createLock = useSubmitLock();
-  const contactsQuery = useAsync(
-    (signal) =>
-      user
-        ? fetchContacts(user.email, { q: debouncedSearch || undefined, ctype: typeFilter || undefined }, signal)
-        : Promise.resolve([] as CrmContact[]),
-    [user?.email, typeFilter, debouncedSearch],
+  const paged = useServerPaged(`${user?.email ?? ""}:${typeFilter}:${debouncedSearch}`, (page, signal) =>
+    user
+      ? fetchContactsPage(user.email, page, 24, { q: debouncedSearch || undefined, ctype: typeFilter || undefined }, signal)
+      : Promise.resolve({ items: [] as CrmContact[], total: 0 }),
   );
-  const contacts = contactsQuery.data ?? [];
-  const paged = usePaged(contacts, `${typeFilter}:${debouncedSearch}`);
-  const loading = contactsQuery.loading;
-  const load = contactsQuery.reload;
+  const loading = paged.loading;
+  const load = paged.reload;
 
   // New Contact Modal
   const [isCreating, setIsCreating] = useState(false);
@@ -133,7 +129,7 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
 
       {/* Contacts Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {contactsQuery.status === "error" && !contactsQuery.data ? (
+        {paged.status === "error" ? (
           <div className="col-span-full">
             <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={load} />
           </div>
@@ -141,7 +137,7 @@ export function CrmContactsView({ locale }: { locale: Locale }) {
           <div className="col-span-full py-12 text-center text-xs text-ink/40">
             Загрузка контактов...
           </div>
-        ) : contacts.length === 0 ? (
+        ) : paged.total === 0 ? (
           <div className="col-span-full py-12 text-center text-xs text-ink/40 italic">
             Контактов не найдено
           </div>

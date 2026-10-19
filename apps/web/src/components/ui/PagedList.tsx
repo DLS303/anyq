@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useAsync } from "@/lib/useAsync";
 
 export const PAGE_SIZE = 24;
 
@@ -20,6 +21,31 @@ export function usePaged<T>(items: readonly T[], resetKey: string, pageSize = PA
     total: items.length,
     slice: items.slice(start, start + pageSize),
     setPage,
+  };
+}
+
+export function useServerPaged<T>(
+  resetKey: string,
+  loader: (page: number, signal: AbortSignal) => Promise<{ items: T[]; total: number }>,
+  pageSize = PAGE_SIZE,
+) {
+  const [state, setState] = useState({ key: resetKey, page: 0 });
+  const page = state.key === resetKey ? state.page : 0;
+  if (state.key !== resetKey) {
+    setState({ key: resetKey, page: 0 });
+  }
+  const query = useAsync((signal) => loader(page, signal), [resetKey, page, pageSize]);
+  const total = query.data?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  return {
+    page,
+    pages,
+    total,
+    slice: query.data?.items ?? [],
+    setPage: (next: number) => setState({ key: resetKey, page: next }),
+    loading: query.loading,
+    status: query.status,
+    reload: query.reload,
   };
 }
 

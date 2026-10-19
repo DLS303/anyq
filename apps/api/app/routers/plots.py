@@ -20,21 +20,27 @@ def list_plots(
     lat: float | None = None,
     lng: float | None = None,
     radius_km: float | None = None,
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
 ):
-    items = store.list_plots(
-        q=q,
-        purpose=purpose,
-        district=district,
-        gas=gas,
-        electricity=electricity,
-        water=water,
-        verified=verified,
-        status="published",
-        lat=lat,
-        lng=lng,
-        radius_km=radius_km,
-    )
-    return {"ok": True, "data": items, "total": len(items)}
+    filters = {
+        "q": q,
+        "purpose": purpose,
+        "district": district,
+        "gas": gas,
+        "electricity": electricity,
+        "water": water,
+        "verified": verified,
+        "status": "published",
+        "lat": lat,
+        "lng": lng,
+        "radius_km": radius_km,
+    }
+    if limit is None:
+        items = store.list_plots(**filters)
+        return {"ok": True, "data": items, "total": len(items)}
+    items, total = store.page_plots(limit=limit, offset=offset, **filters)
+    return {"ok": True, "data": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/plots/suggest")

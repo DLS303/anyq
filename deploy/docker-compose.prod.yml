@@ -22,11 +22,16 @@ services:
       LEGAL_DIR: /app/legal
       PORT: "8010"
       DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      DATABASE_URL: postgresql+psycopg://anyq:${POSTGRES_PASSWORD}@postgres:5432/anyq
     volumes:
       - anyq-data:/data
       - ../apps/web/content/legal:/app/legal:ro
     expose:
       - "8010"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     init: true
     stop_grace_period: 40s
@@ -135,31 +140,39 @@ services:
     networks:
       - anyq
 
-  # Future database. The API still stores data in the JSON file on anyq-data.
-  # Leave this commented until that store is replaced. Then set POSTGRES_PASSWORD,
-  # point DATABASE_URL at postgres://anyq:<password>@postgres:5432/anyq, and
-  # uncomment the anyq-postgres volume below. Do not publish port 5432.
-  #
-  # postgres:
-  #   image: postgres:16-alpine
-  #   container_name: anyq-postgres
-  #   environment:
-  #     POSTGRES_USER: anyq
-  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-  #     POSTGRES_DB: anyq
-  #   volumes:
-  #     - anyq-postgres:/var/lib/postgresql/data
-  #   expose:
-  #     - "5432"
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U anyq -d anyq"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 10
-  #   logging: *json_logs
-  #   networks:
-  #     - anyq
+  postgres:
+    image: postgres:16-alpine
+    container_name: anyq-postgres
+    environment:
+      POSTGRES_USER: anyq
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: anyq
+    volumes:
+      - anyq-postgres:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anyq -d anyq"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *json_logs
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+        reservations:
+          cpus: "0.10"
+          memory: 128M
+    networks:
+      - anyq
 
 networks:
   anyq:
@@ -172,5 +185,5 @@ volumes:
     name: anyq-caddy-data
   caddy-config:
     name: anyq-caddy-config
-  # anyq-postgres:
-  #   name: anyq-postgres
+  anyq-postgres:
+    name: anyq-postgres

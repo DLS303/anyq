@@ -17,7 +17,7 @@ def health():
         "ok": True,
         "service": settings.app_name,
         "version": settings.version,
-        "store": "file",
-        "db": store.db_path(),
-        "database": bool(settings.database_url),
+        "store": "sql",
+        "db": store._sql.dialect(),
+        "database": store._sql.dialect() == "postgresql" or bool(settings.database_url),
     }

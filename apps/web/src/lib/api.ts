@@ -220,13 +220,37 @@ async function requestEnvelope<T>(path: string, init?: RequestInitExtra) {
   return json;
 }
 
-export function fetchPlots(params: Record<string, string | undefined> = {}, signal?: AbortSignal) {
-  const q = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v) q.set(k, v);
+export type PageResult<T> = { items: T[]; total: number };
+
+function queryString(params: Record<string, string | undefined>) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) query.set(key, value);
   }
-  const s = q.toString();
-  return request<Plot[]>(`/v1/plots${s ? `?${s}` : ""}`, { signal });
+  const text = query.toString();
+  return text ? `?${text}` : "";
+}
+
+async function requestPage<T>(path: string, init?: RequestInitExtra): Promise<PageResult<T>> {
+  const json = await requestEnvelope<T[]>(path, init);
+  const total = typeof json.total === "number" ? json.total : json.data.length;
+  return { items: json.data, total };
+}
+
+export function fetchPlots(params: Record<string, string | undefined> = {}, signal?: AbortSignal) {
+  return request<Plot[]>(`/v1/plots${queryString(params)}`, { signal });
+}
+
+export function fetchPlotsPage(
+  params: Record<string, string | undefined>,
+  page: number,
+  pageSize: number,
+  signal?: AbortSignal,
+) {
+  return requestPage<Plot>(
+    `/v1/plots${queryString({ ...params, limit: String(pageSize), offset: String(page * pageSize) })}`,
+    { signal },
+  );
 }
 
 export async function fetchPlot(id: string, email?: string, signal?: AbortSignal) {
@@ -257,6 +281,13 @@ export function createPlot(email: string, body: Record<string, unknown>) {
 
 export function fetchQueue(email: string, signal?: AbortSignal) {
   return request<Plot[]>("/v1/moderation/queue", { email, signal });
+}
+
+export function fetchQueuePage(email: string, page: number, pageSize: number, signal?: AbortSignal) {
+  return requestPage<Plot>(`/v1/moderation/queue${queryString({ limit: String(pageSize), offset: String(page * pageSize) })}`, {
+    email,
+    signal,
+  });
 }
 
 export function moderatePlot(
@@ -346,10 +377,19 @@ export function fetchSavedSearches(email: string, signal?: AbortSignal) {
 }
 
 export function fetchSpecialists(params: Record<string, string | undefined> = {}, signal?: AbortSignal) {
-  const q = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
-  const s = q.toString();
-  return request<Specialist[]>(`/v1/specialists${s ? `?${s}` : ""}`, { signal });
+  return request<Specialist[]>(`/v1/specialists${queryString(params)}`, { signal });
+}
+
+export function fetchSpecialistsPage(
+  params: Record<string, string | undefined>,
+  page: number,
+  pageSize: number,
+  signal?: AbortSignal,
+) {
+  return requestPage<Specialist>(
+    `/v1/specialists${queryString({ ...params, limit: String(pageSize), offset: String(page * pageSize) })}`,
+    { signal },
+  );
 }
 
 export async function fetchSpecialist(id: string, signal?: AbortSignal) {
@@ -411,6 +451,24 @@ export function fetchFunnels(signal?: AbortSignal) {
 export function fetchDeals(email: string, funnel?: string, signal?: AbortSignal) {
   const q = funnel ? `?funnel=${funnel}` : "";
   return request<Deal[]>(`/v1/crm/deals${q}`, { email, signal });
+}
+
+export function fetchDealsPage(
+  email: string,
+  page: number,
+  pageSize: number,
+  params: { funnel?: string; q?: string } = {},
+  signal?: AbortSignal,
+) {
+  return requestPage<Deal>(
+    `/v1/crm/deals${queryString({
+      funnel: params.funnel,
+      q: params.q,
+      limit: String(pageSize),
+      offset: String(page * pageSize),
+    })}`,
+    { email, signal },
+  );
 }
 
 export function moveDeal(email: string, id: string, stage: string) {
@@ -499,6 +557,24 @@ export function fetchContacts(
   return request<CrmContact[]>(`/v1/crm/contacts${qs ? `?${qs}` : ""}`, { email, signal });
 }
 
+export function fetchContactsPage(
+  email: string,
+  page: number,
+  pageSize: number,
+  params: { q?: string; ctype?: string } = {},
+  signal?: AbortSignal,
+) {
+  return requestPage<CrmContact>(
+    `/v1/crm/contacts${queryString({
+      q: params.q,
+      ctype: params.ctype,
+      limit: String(pageSize),
+      offset: String(page * pageSize),
+    })}`,
+    { email, signal },
+  );
+}
+
 export function createContact(
   email: string,
   body: {
@@ -580,6 +656,13 @@ export function fetchThreads(email: string, signal?: AbortSignal) {
   return request<ChatThread[]>("/v1/chat/threads", { email, signal });
 }
 
+export function fetchThreadsPage(email: string, page: number, pageSize: number, signal?: AbortSignal) {
+  return requestPage<ChatThread>(
+    `/v1/chat/threads${queryString({ limit: String(pageSize), offset: String(page * pageSize) })}`,
+    { email, signal },
+  );
+}
+
 export type ChatPeer = { id: string; full_name: string; role: string };
 
 export function fetchChatPeers(signal?: AbortSignal) {
@@ -635,10 +718,19 @@ export function registerRequest(body: {
 }
 
 export function fetchMaterials(params: Record<string, string | undefined> = {}, signal?: AbortSignal) {
-  const q = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
-  const s = q.toString();
-  return request<Material[]>(`/v1/materials${s ? `?${s}` : ""}`, { signal });
+  return request<Material[]>(`/v1/materials${queryString(params)}`, { signal });
+}
+
+export function fetchMaterialsPage(
+  params: Record<string, string | undefined>,
+  page: number,
+  pageSize: number,
+  signal?: AbortSignal,
+) {
+  return requestPage<Material>(
+    `/v1/materials${queryString({ ...params, limit: String(pageSize), offset: String(page * pageSize) })}`,
+    { signal },
+  );
 }
 
 export function fetchMaterial(id: string, signal?: AbortSignal) {
@@ -1049,4 +1141,55 @@ export async function openProcFile(path: string) {
   const url = URL.createObjectURL(blob);
   window.open(url, "_blank", "noopener");
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+export type Invitation = {
+  id: string;
+  role: string;
+  project_id?: string | null;
+  company?: string;
+  expires_at: string;
+  created_at?: string;
+  status: string;
+  token?: string;
+  path?: string;
+  project_title?: string;
+};
+
+export type InvitationPreview = Invitation;
+
+export function createInvitation(role: string, projectId?: string) {
+  if (projectId) {
+    return request<Invitation>(`/v1/site/projects/${projectId}/invitations`, {
+      method: "POST",
+      body: JSON.stringify({ role }),
+    });
+  }
+  return request<Invitation>("/v1/invitations", {
+    method: "POST",
+    body: JSON.stringify({ role }),
+  });
+}
+
+export function listInvitations(projectId?: string) {
+  if (projectId) return request<Invitation[]>(`/v1/site/projects/${projectId}/invitations`);
+  return request<Invitation[]>("/v1/invitations");
+}
+
+export function revokeInvitation(id: string) {
+  return request<Invitation>(`/v1/invitations/${id}/revoke`, { method: "POST" });
+}
+
+export function previewInvitation(token: string, signal?: AbortSignal) {
+  return request<InvitationPreview>(`/v1/invitations/token/${encodeURIComponent(token)}`, { signal });
+}
+
+export function acceptInvitation(
+  token: string,
+  body: { email: string; password: string; full_name: string; phone: string; consent_offer_pd: boolean },
+) {
+  return request<{ user: User; token: string }>(`/v1/invitations/token/${encodeURIComponent(token)}/accept`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

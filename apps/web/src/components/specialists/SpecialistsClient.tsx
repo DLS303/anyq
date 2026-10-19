@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { memo, useState } from "react";
 import { PhotoView } from "@/components/media/PhotoView";
-import { PageNav, usePaged } from "@/components/ui/PagedList";
-import { fetchSpecialists } from "@/lib/api";
-import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
+import { PageNav, useServerPaged } from "@/components/ui/PagedList";
+import { fetchSpecialistsPage } from "@/lib/api";
+import { ErrorRetry, LoadingSkeleton } from "@/lib/useAsync";
 import { CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import type { Locale, SpecCategory, Specialist } from "@/lib/types";
 import { t } from "@/i18n/messages";
@@ -16,9 +16,9 @@ const CATS: SpecCategory[] = ["survey", "legal", "architecture", "smr", "supervi
 export function SpecialistsClient({ locale }: { locale: Locale }) {
   const m = t(locale);
   const [category, setCategory] = useState("");
-  const query = useAsync((signal) => fetchSpecialists({ category: category || undefined }, signal), [category]);
-  const items = query.data ?? [];
-  const paged = usePaged(items, category);
+  const paged = useServerPaged(category, (page, signal) =>
+    fetchSpecialistsPage({ category: category || undefined }, page, 24, signal),
+  );
 
   return (
     <div className="space-y-6">
@@ -67,11 +67,11 @@ export function SpecialistsClient({ locale }: { locale: Locale }) {
         </div>
       </div>
 
-      {query.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
-      {query.status === "error" ? (
-        <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />
+      {paged.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
+      {paged.status === "error" ? (
+        <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={paged.reload} />
       ) : null}
-      {query.status !== "error" && paged.slice.length > 0 ? (
+      {paged.status !== "error" && paged.slice.length > 0 ? (
       <div className="grid gap-5 sm:grid-cols-2">
         {paged.slice.map((s) => (
           <SpecialistCard key={s.id} specialist={s} locale={locale} />
@@ -87,7 +87,7 @@ export function SpecialistsClient({ locale }: { locale: Locale }) {
         onPage={paged.setPage}
       />
 
-      {!query.loading && query.status !== "error" && items.length === 0 ? (
+      {!paged.loading && paged.status !== "error" && paged.total === 0 ? (
         <div className="py-12 text-center text-sm text-slate-400">
           В выбранной категории специалистов не найдено.
         </div>

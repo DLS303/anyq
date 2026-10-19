@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.deps import require_user
 from app.schemas import OrderCreate, OrderStatusUpdate, ReviewCreate, User
@@ -17,8 +17,23 @@ def _http(exc: Exception) -> HTTPException:
 
 
 @router.get("/specialists")
-def list_specialists(category: str | None = None, q: str | None = None):
-    return {"ok": True, "data": store.list_specialists(category=category, q=q)}
+def list_specialists(
+    category: str | None = None,
+    q: str | None = None,
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    if limit is None:
+        items = store.list_specialists(category=category, q=q)
+        return {"ok": True, "data": items, "total": len(items)}
+    rows, total = store.page_specialists(limit=limit, offset=offset, category=category, q=q)
+    return {
+        "ok": True,
+        "data": [store.specialist_public(item) for item in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/specialists/{sid}")

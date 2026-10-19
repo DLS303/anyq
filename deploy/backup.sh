@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Archive the production data volume (JSON store, uploads, and media).
+# Archive uploads and media, and dump PostgreSQL with pg_dump.
 #
 #   ./deploy/backup.sh
 #
@@ -10,6 +10,9 @@
 #     -v /var/backups/anyq:/backup:ro \
 #     alpine:3.20 \
 #     sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + && tar -C /data -xzf /backup/anyq-data-STAMP.tar.gz'
+#   gunzip -c /var/backups/anyq/anyq-postgres-STAMP.sql.gz \
+#     | docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml exec -T postgres \
+#       psql --username anyq --dbname anyq
 #   docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml up -d
 #
 # Keep the archives on this server, or on another disk in Kazakhstan.
@@ -47,5 +50,10 @@ docker run --rm \
   alpine:3.20 \
   tar -C /data -czf "/backup/anyq-data-$stamp.tar.gz" .
 
-find "$backup_dir" -type f -name 'anyq-data-*.tar.gz' -mtime +"$retention" -delete
+dump="$backup_dir/anyq-postgres-$stamp.sql.gz"
+docker compose --env-file "$ROOT/deploy/.env" -f "$ROOT/deploy/docker-compose.prod.yml" exec -T postgres \
+  pg_dump --username anyq --dbname anyq --no-owner --no-privileges | gzip > "$dump"
+
+find "$backup_dir" -type f \( -name 'anyq-data-*.tar.gz' -o -name 'anyq-postgres-*.sql.gz' \) -mtime +"$retention" -delete
 echo "anyq: wrote $archive"
+echo "anyq: wrote $dump"

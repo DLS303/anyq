@@ -22,7 +22,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
     PORT=8010 \
-    WEB_CONCURRENCY=1 \
+    WEB_CONCURRENCY=2 \
     GUNICORN_TIMEOUT=120 \
     GUNICORN_GRACEFUL_TIMEOUT=30 \
     OMP_NUM_THREADS=1 \
@@ -44,6 +44,9 @@ COPY --from=builder /opt/venv /opt/venv
 # (repo/apps/api/app/paths.py). Keep that depth so the import succeeds.
 WORKDIR /srv/anyq/apps/api
 COPY app ./app
+COPY alembic.ini ./alembic.ini
+COPY alembic ./alembic
+COPY scripts ./scripts
 COPY docker-entrypoint.sh /usr/local/bin/anyq-api-entrypoint
 RUN chmod 755 /usr/local/bin/anyq-api-entrypoint
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.deps import require_user
 from app.schemas import MessageCreate, ThreadCreate, User
@@ -8,10 +8,17 @@ router = APIRouter(prefix="/v1/chat", tags=["chat"])
 
 
 @router.get("/threads")
-def threads(user: User = Depends(require_user)):
-    items = store.list_threads(user)
-    items.sort(key=lambda t: t.updated_at, reverse=True)
-    return {"ok": True, "data": items}
+def threads(
+    user: User = Depends(require_user),
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    if limit is None:
+        items = store.list_threads(user)
+        items.sort(key=lambda t: t.updated_at, reverse=True)
+        return {"ok": True, "data": items, "total": len(items)}
+    items, total = store.page_threads(user, limit=limit, offset=offset)
+    return {"ok": True, "data": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/peers")

@@ -50,9 +50,17 @@ case "${DATABASE_URL:-}" in
     ;;
 esac
 
-# The JSON store lock is in-process. More than one worker can corrupt the file.
-if [ "${WEB_CONCURRENCY:-1}" != "1" ]; then
-  fail "WEB_CONCURRENCY must be 1 while data is stored in the JSON file"
+case "${DATABASE_URL:-}" in
+  postgresql://*|postgresql+psycopg://*|postgres://*) ;;
+  *) fail "DATABASE_URL must be a PostgreSQL URL" ;;
+esac
+
+workers="${WEB_CONCURRENCY:-2}"
+case "$workers" in
+  ''|*[!0-9]*) fail "WEB_CONCURRENCY must be a number from 1 to 8" ;;
+esac
+if [ "$workers" -lt 1 ] || [ "$workers" -gt 8 ]; then
+  fail "WEB_CONCURRENCY must be a number from 1 to 8"
 fi
 
 domain="${DOMAIN:-}"
@@ -66,11 +74,13 @@ fi
 mkdir -p /data/uploads /data/private /data/public
 chown -R anyq:anyq /data
 
+gosu anyq alembic upgrade head
+
 if [ "$#" -eq 0 ] || [ "${1:-}" = "gunicorn" ]; then
   set -- gunicorn app.main:app \
     --worker-class uvicorn.workers.UvicornWorker \
     --bind "0.0.0.0:${PORT:-8010}" \
-    --workers 1 \
+    --workers "$workers" \
     --timeout "${GUNICORN_TIMEOUT:-120}" \
     --graceful-timeout "${GUNICORN_GRACEFUL_TIMEOUT:-30}" \
     --keep-alive 5 \

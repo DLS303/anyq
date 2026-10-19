@@ -14,6 +14,7 @@ import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
 import { loadWithin } from "@/lib/loadWithin";
 import { ErrorRetry, LoadingSkeleton, isMissing, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { AuthImage } from "@/components/media/AuthImage";
+import { InvitePanel } from "@/components/invites/InvitePanel";
 import { ObjectBudgetCard } from "./ObjectBudgetCard";
 import { DailyReport, type DailyEntry } from "./DailyReport";
 import { InspectionForm } from "./InspectionForm";
@@ -881,6 +882,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
             </div>
           )}
         >
+          {bundle.can_manage_members ? <InvitePanel locale={locale} projectId={p.id} /> : null}
           {bundle.can_manage_members ? (
             <form
               className="mb-4 grid gap-2"

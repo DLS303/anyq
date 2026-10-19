@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConsentsPanel } from "@/components/cabinet/ConsentsPanel";
+import { InvitePanel } from "@/components/invites/InvitePanel";
 import { ProjectList } from "@/components/site/ProjectList";
 import { ErrorRetry, LoadingSkeleton, useAsync, useSubmitLock } from "@/lib/useAsync";
 import Link from "next/link";
@@ -215,6 +216,8 @@ export function CabinetView({ locale }: { locale: Locale }) {
         </div>
 
       </div>
+
+      {user.role === "owner" || user.role === "admin" ? <InvitePanel locale={locale} /> : null}
 
       {error ? <p className="text-sm font-semibold text-red-600 bg-red-50 p-3 rounded-xl border border-red-200">{error}</p> : null}
       {user.role === "supervisor" ? (

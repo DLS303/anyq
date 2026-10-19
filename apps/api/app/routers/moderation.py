@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.deps import require_roles
 from app.schemas import ModerateBody, User, VerificationCreate
@@ -8,9 +8,17 @@ router = APIRouter(prefix="/v1/moderation", tags=["moderation"])
 
 
 @router.get("/queue")
-def queue(user: User = Depends(require_roles("moderator", "admin"))):
+def queue(
+    user: User = Depends(require_roles("moderator", "admin")),
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
     _ = user
-    return {"ok": True, "data": store.queue()}
+    if limit is None:
+        items = store.queue()
+        return {"ok": True, "data": items, "total": len(items)}
+    items, total = store.page_queue(limit=limit, offset=offset)
+    return {"ok": True, "data": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/verifications")

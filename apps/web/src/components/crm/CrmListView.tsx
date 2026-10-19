@@ -1,20 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { PageNav, usePaged } from "@/components/ui/PagedList";
+import { PageNav, useServerPaged } from "@/components/ui/PagedList";
+import { fetchDealsPage } from "@/lib/api";
 import { FUNNEL, STAGE, money } from "@/lib/format";
 import { useDebounced } from "@/lib/useDebounced";
 import { t } from "@/i18n/messages";
 import type { Deal, Locale } from "@/lib/types";
 
 export function CrmListView({
-  deals,
+  email,
+  funnel,
+  refreshKey,
   stages,
   locale,
   onSelectDeal,
   onMoveDeal,
 }: {
-  deals: Deal[];
+  email: string;
+  funnel: string;
+  refreshKey: string;
   stages: Record<string, string[]>;
   locale: Locale;
   onSelectDeal: (deal: Deal) => void;
@@ -23,18 +28,11 @@ export function CrmListView({
   const m = t(locale);
   const [search, setSearch] = useState("");
   const debounced = useDebounced(search, 300);
-
-  const filtered = deals.filter((d) => {
-    if (!debounced.trim()) return true;
-    const q = debounced.toLowerCase();
-    return (
-      d.title.toLowerCase().includes(q) ||
-      (d.client_name && d.client_name.toLowerCase().includes(q)) ||
-      (d.client_phone && d.client_phone.includes(q)) ||
-      (d.plot_title && d.plot_title.toLowerCase().includes(q))
-    );
-  });
-  const paged = usePaged(filtered, debounced);
+  const paged = useServerPaged(`${email}:${funnel}:${debounced}:${refreshKey}`, (page, signal) =>
+    email
+      ? fetchDealsPage(email, page, 24, { funnel, q: debounced || undefined }, signal)
+      : Promise.resolve({ items: [] as Deal[], total: 0 }),
+  );
 
   return (
     <div className="bg-white rounded-xl border border-ink/10 shadow-xs overflow-hidden">
@@ -50,7 +48,7 @@ export function CrmListView({
           />
           <span className="absolute left-2.5 top-2 text-xs text-ink/40">🔍</span>
         </div>
-        <span className="text-xs text-ink/50">Найдено: {filtered.length}</span>
+        <span className="text-xs text-ink/50">Найдено: {paged.total}</span>
       </div>
 
       {/* Table */}
@@ -69,7 +67,7 @@ export function CrmListView({
             </tr>
           </thead>
           <tbody className="divide-y divide-ink/5">
-            {filtered.length === 0 ? (
+            {paged.total === 0 ? (
               <tr>
                 <td colSpan={8} className="py-8 text-center text-ink/40 italic">
                   Сделок не найдено

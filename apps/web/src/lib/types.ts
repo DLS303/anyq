@@ -9,7 +9,10 @@ export type Role =
   | "specialist"
   | "contractor"
   | "supplier"
-  | "supervisor";
+  | "supervisor"
+  | "foreman"
+  | "procurement"
+  | "customer";
 
 export type PlotStatus =
   | "draft"
