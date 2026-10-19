@@ -193,16 +193,29 @@ def _load_contact(session, contact_id: str | None):
 
 
 def count_open(project_id: str) -> int:
+    return count_open_by_project([project_id]).get(project_id, 0)
+
+
+def count_open_by_project(project_ids: list[str]) -> dict[str, int]:
+    """One grouped read for a project list. Missing tables count as zero."""
+    wanted = [item for item in project_ids if item]
+    if not wanted:
+        return {}
     try:
         with store._sql.factory() as session:
-            found = session.scalar(
-                select(func.count())
-                .select_from(rfis)
-                .where(rfis.c.project_id == project_id, rfis.c.status == "open", rfis.c.deleted_at.is_(None))
-            )
-            return int(found or 0)
+            rows = session.execute(
+                select(rfis.c.project_id, func.count())
+                .where(
+                    rfis.c.project_id.in_(wanted),
+                    rfis.c.status == "open",
+                    rfis.c.deleted_at.is_(None),
+                )
+                .group_by(rfis.c.project_id)
+            ).all()
     except (OperationalError, ProgrammingError):
-        return 0
+        return {item: 0 for item in wanted}
+    found = {str(project_id): int(total) for project_id, total in rows}
+    return {item: found.get(item, 0) for item in wanted}
 
 
 def list_for_user(user, project_id: str) -> list[dict]:
@@ -249,74 +262,85 @@ def create_rfi(user, access: dict, body: dict) -> dict:
     revision = _revision(body.get("drawing_revision_id"))
     stamp = _now()
     contact_id = None
-    session = store._sql.factory()
-    try:
-        if contact_body:
-            contact_id = _uuid(str(contact_body.get("id") or ""), "contact")
-            phone = str(contact_body.get("phone") or "").strip()[:32]
+    if contact_body:
+        contact_id = _uuid(str(contact_body.get("id") or ""), "contact")
+    saved = False
+    last_error: IntegrityError | None = None
+    for _attempt in range(8):
+        session = store._sql.factory()
+        try:
+            if contact_body and contact_id:
+                phone = str(contact_body.get("phone") or "").strip()[:32]
+                session.execute(
+                    external_contacts.insert().values(
+                        id=contact_id,
+                        company_id=company_id,
+                        project_id=project.id,
+                        author_id=user.id,
+                        full_name=str(contact_body.get("full_name") or "").strip()[:200] or None,
+                        phone_e164=phone or None,
+                        phone_hash=_phone_hash(phone),
+                        email=str(contact_body.get("email") or "").strip()[:200] or None,
+                        organization=str(contact_body.get("organization") or "").strip()[:200] or None,
+                        created_by=user.id,
+                        updated_by=user.id,
+                        created_at=stamp,
+                        updated_at=stamp,
+                        row_version=1,
+                        deleted_at=None,
+                    )
+                )
+            taken = int(
+                session.scalar(select(func.count()).select_from(rfis).where(rfis.c.project_id == project.id)) or 0
+            )
             session.execute(
-                external_contacts.insert().values(
-                    id=contact_id,
+                rfis.insert().values(
+                    id=record_id,
                     company_id=company_id,
                     project_id=project.id,
+                    number=f"RFI-{taken + 1:03d}",
+                    title=title,
+                    question=question,
+                    answer="",
+                    status="open",
+                    assignee_user_id=assignee,
+                    assignee_contact_id=contact_id,
+                    due_date=due,
+                    drawing_revision_id=revision,
+                    attachments="[]",
                     author_id=user.id,
-                    full_name=str(contact_body.get("full_name") or "").strip()[:200] or None,
-                    phone_e164=phone or None,
-                    phone_hash=_phone_hash(phone),
-                    email=str(contact_body.get("email") or "").strip()[:200] or None,
-                    organization=str(contact_body.get("organization") or "").strip()[:200] or None,
                     created_by=user.id,
                     updated_by=user.id,
+                    answered_at=None,
+                    answered_via_token_id=None,
                     created_at=stamp,
                     updated_at=stamp,
                     row_version=1,
                     deleted_at=None,
                 )
             )
-        number = int(
-            session.scalar(select(func.count()).select_from(rfis).where(rfis.c.project_id == project.id)) or 0
-        )
-        session.execute(
-            rfis.insert().values(
-                id=record_id,
+            _audit(
+                session,
+                "rfi.create",
+                record_id,
+                project.id,
+                {"status": "open", "due_date": due, "drawing_revision_id": revision, "assignee_user_id": assignee},
                 company_id=company_id,
-                project_id=project.id,
-                number=f"RFI-{number + 1:03d}",
-                title=title,
-                question=question,
-                answer="",
-                status="open",
-                assignee_user_id=assignee,
-                assignee_contact_id=contact_id,
-                due_date=due,
-                drawing_revision_id=revision,
-                attachments="[]",
-                author_id=user.id,
-                created_by=user.id,
-                updated_by=user.id,
-                answered_at=None,
-                answered_via_token_id=None,
-                created_at=stamp,
-                updated_at=stamp,
-                row_version=1,
-                deleted_at=None,
+                actor_user_id=user.id,
             )
-        )
-        _audit(
-            session,
-            "rfi.create",
-            record_id,
-            project.id,
-            {"status": "open", "due_date": due, "drawing_revision_id": revision, "assignee_user_id": assignee},
-            company_id=company_id,
-            actor_user_id=user.id,
-        )
-        session.commit()
-    except IntegrityError as exc:
-        session.rollback()
-        raise HTTPException(status_code=409, detail="Изменено другим") from exc
-    finally:
-        session.close()
+            session.commit()
+            saved = True
+            break
+        except IntegrityError as exc:
+            session.rollback()
+            last_error = exc
+            if _number_conflict(exc):
+                continue
+            raise HTTPException(status_code=409, detail="Изменено другим") from exc
+        finally:
+            session.close()
+    if not saved:
+        raise HTTPException(status_code=409, detail="Изменено другим") from last_error
     with store._sql.factory() as session:
         row = _load(session, record_id)
         contact = _load_contact(session, contact_id)
@@ -327,6 +351,11 @@ def create_rfi(user, access: dict, body: dict) -> dict:
 
 def _conflict():
     raise HTTPException(status_code=409, detail="Изменено другим")
+
+
+def _number_conflict(exc: IntegrityError) -> bool:
+    text_value = str(getattr(exc, "orig", exc))
+    return "uq_rfis_project_number" in text_value or "rfis.project_id, rfis.number" in text_value
 
 
 def _cas(session, rfi_id: str, version: int, values: dict, *, updated_by: str) -> None:
@@ -435,6 +464,7 @@ def set_status(user, rfi_id: str, status: str, row_version: int) -> dict:
             _conflict()
         previous = row.status
         _cas(session, rfi_id, int(row_version), {"status": "closed"}, updated_by=user.id)
+        _revoke_live_links(session, rfi_id, _now(), user.id)
         _audit(
             session,
             "rfi.status_change",
@@ -464,6 +494,7 @@ def tombstone(user, rfi_id: str, row_version: int) -> dict:
             _conflict()
         stamp = _now()
         _cas(session, rfi_id, int(row_version), {"deleted_at": stamp}, updated_by=user.id)
+        _revoke_live_links(session, rfi_id, stamp, user.id)
         _audit(
             session,
             "rfi.delete",
@@ -555,6 +586,9 @@ def attach_file(user, access: dict, rfi_id: str, file_id: str, raw: bytes, conte
         session.commit()
         publish_exclusive("upload", tmp, storage_key)
         published = True
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Изменено другим") from exc
     except Exception:
         session.rollback()
         raise
@@ -656,6 +690,70 @@ def create_link(user, access: dict, rfi_id: str, body: dict) -> dict:
     return {"id": link_id, "token": token, "expires_at": expires.isoformat(timespec="seconds")}
 
 
+def _revoke_live_links(session, rfi_id: str, stamp: str, updated_by: str) -> None:
+    session.execute(
+        update(access_tokens)
+        .where(
+            access_tokens.c.entity_id == rfi_id,
+            access_tokens.c.purpose == "rfi_reply",
+            access_tokens.c.deleted_at.is_(None),
+        )
+        .values(
+            deleted_at=stamp,
+            updated_by=updated_by,
+            updated_at=stamp,
+            row_version=access_tokens.c.row_version + 1,
+        )
+    )
+
+
+def revoke_link(user, access: dict, rfi_id: str, link_id: str) -> dict:
+    record_id = _uuid(link_id)
+    stamp = _now()
+    session = store._sql.factory()
+    try:
+        row = _load(session, rfi_id)
+        if (
+            row is None
+            or row.deleted_at
+            or row.project_id != access["project_id"]
+            or row.company_id != access["company_id"]
+        ):
+            raise HTTPException(status_code=404, detail="Не найдено")
+        spent = session.execute(
+            update(access_tokens)
+            .where(
+                access_tokens.c.id == record_id,
+                access_tokens.c.entity_id == rfi_id,
+                access_tokens.c.company_id == access["company_id"],
+                access_tokens.c.purpose == "rfi_reply",
+                access_tokens.c.deleted_at.is_(None),
+            )
+            .values(
+                deleted_at=stamp,
+                updated_by=user.id,
+                updated_at=stamp,
+                row_version=access_tokens.c.row_version + 1,
+            )
+        )
+        if spent.rowcount != 1:
+            session.rollback()
+            raise HTTPException(status_code=404, detail="Не найдено")
+        _audit(
+            session,
+            "rfi.link_revoke",
+            rfi_id,
+            access["project_id"],
+            {},
+            company_id=access["company_id"],
+            actor_user_id=user.id,
+        )
+        session.commit()
+    finally:
+        session.close()
+    return {"id": record_id, "deleted_at": stamp}
+
+
 def _token_row(token: str):
     if not token or len(token) < 20:
         return None, 404
@@ -698,7 +796,7 @@ def public_read(token: str) -> dict:
     link = _public_or_error(token, writing=False)
     with store._sql.factory() as session:
         row = _load(session, link.entity_id)
-    if row is None or row.deleted_at:
+    if row is None or row.deleted_at or row.status == "closed":
         raise HTTPException(status_code=404, detail="Ссылка не найдена")
     project = store.get_project(row.project_id)
     return {
@@ -718,7 +816,7 @@ def public_answer(token: str, answer: str) -> dict:
     link = _public_or_error(token, writing=True)
     with store._sql.factory() as session:
         current = _load(session, link.entity_id)
-    if current is None or current.deleted_at:
+    if current is None or current.deleted_at or current.status == "closed":
         raise HTTPException(status_code=404, detail="Ссылка не найдена")
     data = answer_rfi(
         None,
@@ -735,7 +833,7 @@ def public_file(token: str, file_id: str) -> tuple[str, str]:
     link = _public_or_error(token, writing=False)
     with store._sql.factory() as session:
         row = _load(session, link.entity_id)
-    if row is None or row.deleted_at or file_id not in _attachments(row.attachments):
+    if row is None or row.deleted_at or row.status == "closed" or file_id not in _attachments(row.attachments):
         raise HTTPException(status_code=404, detail="Файл не найден")
     return read_file(row.project_id, row.id, file_id)
 

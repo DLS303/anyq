@@ -12,7 +12,6 @@ from app.company_features import (
     project_company_id,
     require_feature,
 )
-from app.config import demo_mode
 from app.deps import require_user
 from app.idempotency import IdempotencyConflict, run_idempotent
 from app.paths import write_stored_file
@@ -272,7 +271,11 @@ def _guard_item(user: User, table: dict, item_id: str) -> None:
 
 @router.get("/projects")
 def list_projects(user: User = Depends(require_user)):
-    snaps = [store.project_snapshot(p.id) for p in store.projects_for(user)]
+    projects = store.projects_for(user)
+    from app.rfi_service import count_open_by_project
+
+    counts = count_open_by_project([project.id for project in projects])
+    snaps = [store.project_snapshot(project.id, open_rfi_counts=counts) for project in projects]
     return {"ok": True, "data": snaps}
 
 
@@ -325,10 +328,12 @@ def bundle(pid: str, user: User = Depends(require_user)):
         "can_approve_changes": store.is_assigned_supervisor(user, p),
     }
     data = apply_bundle_flags(p, data, flags)
-    if flags.get("rfi") or demo_mode():
+    if flags.get("rfi"):
         from app.rfi_service import list_for_user
 
-        data["rfis"] = [*data.get("rfis", []), *list_for_user(user, p.id)]
+        data["rfis"] = list_for_user(user, p.id)
+    else:
+        data["rfis"] = []
     return {"ok": True, "data": data}
 
 

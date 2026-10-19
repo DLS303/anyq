@@ -1,6 +1,9 @@
+import logging
 import os
 from pathlib import Path
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -86,11 +89,10 @@ def publish_exclusive(kind: str, tmp: Path, storage_key: str) -> Path:
     final = resolve_stored_file(kind, storage_key)
     final.parent.mkdir(parents=True, exist_ok=True)
     try:
-        reserved = os.open(final, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError:
+        os.link(tmp, final)
+    except FileExistsError as exc:
         discard_temp(tmp)
-        return final
-    os.close(reserved)
-    os.unlink(final)
-    os.rename(tmp, final)
+        logger.warning("stored object already exists")
+        raise FileExistsError("stored object already exists") from exc
+    os.unlink(tmp)
     return final

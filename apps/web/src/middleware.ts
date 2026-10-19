@@ -30,7 +30,14 @@ export function middleware(request: NextRequest) {
     url.pathname = `/${locale}`;
     return NextResponse.redirect(url);
   }
-  return NextResponse.next();
+  const response = NextResponse.next();
+  if (/^\/(ru|kk)\/r\/rfi\/[^/]+/.test(pathname)) {
+    response.headers.set("Referrer-Policy", "no-referrer");
+    response.headers.set("X-Robots-Tag", "noindex, nofollow");
+  } else {
+    response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  }
+  return response;
 }
 
 export const config = {

@@ -53,6 +53,12 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=20), nullable=False),
         sa.Column("assignee_user_id", sa.String(length=80), nullable=True),
         sa.Column("assignee_contact_id", sa.String(length=36), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["assignee_contact_id"],
+            ["external_contacts.id"],
+            name="fk_rfis_assignee_contact",
+        ),
+        sa.UniqueConstraint("project_id", "number", name="uq_rfis_project_number"),
         sa.Column("due_date", sa.String(length=10), nullable=True),
         sa.Column("drawing_revision_id", sa.String(length=80), nullable=True),
         sa.Column("attachments", sa.Text(), nullable=False),
@@ -82,6 +88,7 @@ def upgrade() -> None:
         sa.Column("purpose", sa.String(length=32), nullable=False),
         sa.Column("token_sha256", sa.String(length=64), nullable=False),
         sa.Column("entity_id", sa.String(length=36), nullable=False),
+        sa.ForeignKeyConstraint(["entity_id"], ["rfis.id"], name="fk_access_tokens_entity"),
         sa.Column("expires_at", sa.String(length=40), nullable=False),
         sa.Column("used_at", sa.String(length=40), nullable=True),
         sa.Column("created_by", sa.String(length=80), nullable=False),
@@ -93,6 +100,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_access_tokens_token_sha256", "access_tokens", ["token_sha256"], unique=True)
     op.create_index("ix_access_tokens_company_updated", "access_tokens", ["company_id", "updated_at"])
+    op.create_index("ix_access_tokens_entity_id", "access_tokens", ["entity_id"])
     op.create_table(
         "rfi_files",
         sa.Column("id", sa.String(length=36), primary_key=True),
@@ -100,6 +108,7 @@ def upgrade() -> None:
         sa.Column("company_id", sa.String(length=180), nullable=False),
         sa.Column("project_id", sa.String(length=80), nullable=False),
         sa.Column("rfi_id", sa.String(length=36), nullable=False),
+        sa.ForeignKeyConstraint(["rfi_id"], ["rfis.id"], name="fk_rfi_files_rfi"),
         sa.Column("storage_key", sa.String(length=80), nullable=False),
         sa.Column("sha256", sa.String(length=64), nullable=False),
         sa.Column("size", sa.Integer(), nullable=False),
@@ -111,14 +120,22 @@ def upgrade() -> None:
         sa.Column("row_version", sa.Integer(), nullable=False),
         sa.Column("deleted_at", sa.String(length=40), nullable=True),
     )
-    op.create_index("ix_rfi_files_file_id", "rfi_files", ["file_id"])
+    op.create_index(
+        "uq_rfi_files_rfi_file",
+        "rfi_files",
+        ["rfi_id", "file_id"],
+        unique=True,
+        sqlite_where=sa.text("deleted_at IS NULL"),
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
     op.create_index("ix_rfi_files_company_updated", "rfi_files", ["company_id", "updated_at"])
 
 
 def downgrade() -> None:
     op.drop_index("ix_rfi_files_company_updated", table_name="rfi_files")
-    op.drop_index("ix_rfi_files_file_id", table_name="rfi_files")
+    op.drop_index("uq_rfi_files_rfi_file", table_name="rfi_files")
     op.drop_table("rfi_files")
+    op.drop_index("ix_access_tokens_entity_id", table_name="access_tokens")
     op.drop_index("ix_access_tokens_company_updated", table_name="access_tokens")
     op.drop_index("ix_access_tokens_token_sha256", table_name="access_tokens")
     op.drop_table("access_tokens")

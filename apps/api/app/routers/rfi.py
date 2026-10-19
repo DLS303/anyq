@@ -29,6 +29,7 @@ from app.rfi_service import (
     read_file,
     read_for_user,
     render_pdf,
+    revoke_link,
     set_status,
     tombstone,
 )
@@ -207,6 +208,20 @@ def post_link(
     if access["project_id"] != pid or access["entity_id"] != rid:
         raise HTTPException(status_code=404, detail="Не найдено")
     return {"ok": True, "data": create_link(user, access, rid, body.model_dump())}
+
+
+@router.post("/projects/{pid}/rfis/{rid}/link/revoke")
+def post_revoke(
+    pid: str,
+    rid: str,
+    body: LinkIn,
+    request: Request,
+    user: User = Depends(require_feature("rfi")),
+):
+    access = _access(request)
+    if access["project_id"] != pid or access["entity_id"] != rid:
+        raise HTTPException(status_code=404, detail="Не найдено")
+    return {"ok": True, "data": revoke_link(user, access, rid, body.id)}
 
 
 @router.get("/projects/{pid}/rfis/{rid}/pdf")
