@@ -1,0 +1,11 @@
+{
+  "globs": [
+    "deploy/INCIDENT.md",
+    "docs/runbooks/**/*.md",
+    "docs/incidents/**/*.md"
+  ],
+  "config": {
+    "default": true,
+    "MD013": false
+  }
+}

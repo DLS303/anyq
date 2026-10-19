@@ -44,3 +44,8 @@ yarn-error.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Filled incident cards stay out of the public repository.
+docs/incidents/*
+!docs/incidents/TEMPLATE.md
+!docs/incidents/POSTMORTEM.md
