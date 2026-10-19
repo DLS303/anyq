@@ -6,6 +6,11 @@ from app.store import store
 router = APIRouter(tags=["health"])
 
 
+@router.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
 @router.get("/health")
 def health():
     return {

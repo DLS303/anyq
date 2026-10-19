@@ -1,0 +1,21 @@
+# Build context for apps/web/Dockerfile (repository root).
+.git
+.github
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+**/node_modules
+**/.next
+data/db.json
+data/uploads
+data/private
+data/public
+backups
+*.log
+.env
+.env.*
+apps/api
+apps/mobile
+services
+infra
