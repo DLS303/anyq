@@ -1,0 +1,33 @@
+{
+  "name": "anyq-shell",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Capacitor shell for the Anyq web app",
+  "scripts": {
+    "stamp": "node scripts/stamp-config.mjs",
+    "sync": "npm run stamp && cap sync",
+    "sync:android": "npm run stamp && cap sync android",
+    "sync:ios": "npm run stamp && cap sync ios",
+    "assets": "python3 scripts/render_icon.py && capacitor-assets generate --android --ios --iconBackgroundColor '#2F5B8A' --iconBackgroundColorDark '#2F5B8A' --splashBackgroundColor '#2F5B8A' --splashBackgroundColorDark '#2F5B8A' --logoSplashScale 0.2",
+    "android:debug": "npm run sync:android && cd android && ./gradlew assembleDebug",
+    "android:aab": "npm run sync:android && cd android && ./gradlew bundleRelease"
+  },
+  "dependencies": {
+    "@capacitor/app": "8.1.2",
+    "@capacitor/camera": "8.2.6",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/geolocation": "8.2.4",
+    "@capacitor/network": "8.0.1",
+    "@capacitor/share": "8.0.3",
+    "@capacitor/splash-screen": "8.0.2",
+    "@capacitor/status-bar": "8.0.4",
+    "anyq-native": "file:plugins/anyq-native"
+  },
+  "devDependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "8.5.3",
+    "@capacitor/ios": "8.5.3",
+    "typescript": "5.9.2"
+  }
+}

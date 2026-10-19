@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Анык</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        min-height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+        background: #efe8de;
+        color: #1c1915;
+        font-family: Inter, "Segoe UI", sans-serif;
+      }
+      main { width: min(100%, 360px); text-align: center; }
+      .mark {
+        width: 72px;
+        height: 72px;
+        margin: 0 auto 20px;
+        border-radius: 18px;
+        background: #2f5b8a;
+        color: #f4f7fa;
+        display: grid;
+        place-items: center;
+        font-size: 28px;
+        font-weight: 650;
+      }
+      h1 { margin: 0; font-size: 28px; font-weight: 650; letter-spacing: -0.02em; }
+      p { margin: 12px 0 0; font-size: 16px; line-height: 1.45; color: rgba(28, 25, 21, 0.72); }
+      button {
+        margin-top: 28px;
+        min-height: 48px;
+        width: 100%;
+        border: 0;
+        border-radius: 999px;
+        background: #2f5b8a;
+        color: #f4f7fa;
+        font: inherit;
+        font-size: 16px;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark" aria-hidden="true">Ан</div>
+      <h1 id="title">Нет интернета</h1>
+      <p id="body">Проверьте соединение и попробуйте снова.</p>
+      <button id="retry" type="button">Повторить</button>
+    </main>
+    <script src="config.js"></script>
+    <script>
+      (function () {
+        var kk = (navigator.language || "").toLowerCase().indexOf("kk") === 0;
+        if (kk) {
+          document.documentElement.lang = "kk";
+          document.getElementById("title").textContent = "Интернет жоқ";
+          document.getElementById("body").textContent = "Байланысты тексеріп, қайта көріңіз.";
+          document.getElementById("retry").textContent = "Қайталау";
+        }
+        document.getElementById("retry").addEventListener("click", function () {
+          var next = window.ANYQ_APP_URL;
+          if (next) window.location.replace(next);
+          else window.location.reload();
+        });
+      })();
+    </script>
+  </body>
+</html>

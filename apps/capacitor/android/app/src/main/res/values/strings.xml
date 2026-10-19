@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Анык</string>
+    <string name="title_activity_main">Анык</string>
+    <string name="package_name">kz.dls.anyq</string>
+    <string name="custom_url_scheme">kz.dls.anyq</string>
+    <string name="perm_camera">Камера нужна, чтобы снимать фото для ежедневного отчёта и дефектов на объекте.</string>
+    <string name="perm_microphone">Микрофон нужен, чтобы записать голосовую заметку к ежедневному отчёту.</string>
+    <string name="perm_photos">Доступ к фото нужен, чтобы прикрепить уже снятый кадр к отчёту или замечанию.</string>
+    <string name="perm_location">Геолокация используется только пока приложение открыто, если страница её запрашивает.</string>
+</resources>

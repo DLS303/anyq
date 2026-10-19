@@ -1,3 +1,4 @@
+import { saveBlobDownload } from "./native";
 import { preparePhoto, preparePhotos } from "./photos";
 import type {
   ChatMessage,
@@ -978,6 +979,7 @@ async function authedBlob(path: string) {
 
 export async function downloadProc(path: string, filename: string) {
   const blob = await authedBlob(path);
+  if (await saveBlobDownload(filename, blob)) return;
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -990,6 +992,8 @@ export async function downloadProc(path: string, filename: string) {
 
 export async function openProcFile(path: string) {
   const blob = await authedBlob(path);
+  const filename = decodeURIComponent(path.split("/").pop() || "file");
+  if (await saveBlobDownload(filename, blob)) return;
   const url = URL.createObjectURL(blob);
   window.open(url, "_blank", "noopener");
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);

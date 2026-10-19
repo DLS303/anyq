@@ -1,0 +1,25 @@
+{
+  "name": "Анык",
+  "short_name": "Анык",
+  "description": "Объекты, закупки и ежедневные отчёты",
+  "start_url": "/ru",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#EFE8DE",
+  "theme_color": "#2F5B8A",
+  "lang": "ru",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

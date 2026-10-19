@@ -1,0 +1,124 @@
+name: Mobile
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: Server URL baked into the shell (ANYQ_APP_URL)
+        required: false
+        default: https://app.anyq.example
+  pull_request:
+    paths:
+      - "apps/capacitor/**"
+      - "apps/web/src/lib/native.ts"
+      - "apps/web/src/lib/native.test.ts"
+      - "apps/web/src/lib/pwa.ts"
+      - "apps/web/src/components/shell/NativeShell.tsx"
+      - "apps/web/public/sw.js"
+      - "apps/web/public/manifest.webmanifest"
+      - "apps/web/public/icons/**"
+      - "docs/MOBILE.md"
+      - ".github/workflows/mobile.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    env:
+      ANYQ_APP_URL: ${{ github.event.inputs.app_url || 'https://app.anyq.example' }}
+      HAS_ANDROID_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/capacitor/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+      - name: Install
+        working-directory: apps/capacitor
+        run: npm ci
+      - name: Sync the shell
+        working-directory: apps/capacitor
+        run: npm run sync:android
+      - name: Decode the release keystore when the secret exists
+        if: env.HAS_ANDROID_SIGNING == 'true'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/anyq.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/anyq.keystore" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+      - name: Debug APK
+        working-directory: apps/capacitor/android
+        run: ./gradlew assembleDebug --no-daemon
+      - name: Release AAB
+        working-directory: apps/capacitor/android
+        run: ./gradlew bundleRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anyq-android-debug-apk
+          path: apps/capacitor/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anyq-android-release-aab
+          path: apps/capacitor/android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+
+  ios:
+    runs-on: macos-latest
+    env:
+      ANYQ_APP_URL: ${{ github.event.inputs.app_url || 'https://app.anyq.example' }}
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/capacitor/package-lock.json
+      - name: Install
+        working-directory: apps/capacitor
+        run: npm ci
+      - name: Sync the shell
+        working-directory: apps/capacitor
+        run: npm run sync:ios
+      - name: Prepare Apple signing when the secrets exist
+        if: env.HAS_APPLE_SIGNING == 'true'
+        run: |
+          echo "Signing secrets are present (APPLE_CERTIFICATE_BASE64, APPLE_CERTIFICATE_PASSWORD, APPLE_TEAM_ID)."
+          echo "This simulator build stays unsigned. A later store build can import the certificate and pass DEVELOPMENT_TEAM."
+      - name: Simulator build
+        working-directory: apps/capacitor/ios/App
+        run: |
+          xcodebuild \
+            -project App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$GITHUB_WORKSPACE/apps/capacitor/ios/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+      - name: Zip the simulator app
+        run: |
+          APP=$(find apps/capacitor/ios/DerivedData -name 'App.app' -type d | head -1)
+          test -n "$APP"
+          ditto -c -k --keepParent "$APP" anyq-ios-simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anyq-ios-simulator
+          path: anyq-ios-simulator.zip
+          if-no-files-found: error

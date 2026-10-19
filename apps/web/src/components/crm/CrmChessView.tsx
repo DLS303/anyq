@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import type { Locale } from "@/lib/types";
+import { bytesToBlob, saveBlobDownload, XLSX_MIME } from "@/lib/native";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type UnitStatus = "free" | "reserved" | "sold" | "unavailable" | "construction";
@@ -268,7 +269,9 @@ export function CrmChessView({ locale }: { locale: Locale }) {
       ];
 
       XLSX.utils.book_append_sheet(wb, ws, building.name);
-      XLSX.writeFile(wb, `Shahmatka_${building.name.replace(/\s+/g, "_")}.xlsx`);
+      const filename = `Shahmatka_${building.name.replace(/\s+/g, "_")}.xlsx`;
+      const saved = await saveBlobDownload(filename, bytesToBlob(XLSX.write(wb, { bookType: "xlsx", type: "array" }), XLSX_MIME));
+      if (!saved) XLSX.writeFile(wb, filename);
     } catch (e: any) {
       alert("Ошибка экспорта: " + e.message);
     }

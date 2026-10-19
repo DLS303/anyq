@@ -1,12 +1,22 @@
 import type { Metadata, Viewport } from "next";
+import { NativeShell } from "@/components/shell/NativeShell";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "ANYQ · АНЫҚ — Премиальная цифровая экосистема девелопмента и строительства",
   description:
     "Безупречная точность в каждом метре и решении: аккредитованные генподрядчики, прямые поставки стройматериалов, автосмета и цифровой контроль стройплощадки в Казахстане.",
-  appleWebApp: { capable: true, title: "ANYQ", statusBarStyle: "default" },
+  applicationName: "Анык",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Анык", statusBarStyle: "default" },
   formatDetection: { telephone: false },
+  icons: {
+    icon: [
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180" }],
+  },
 };
 
 export const viewport: Viewport = {
@@ -20,7 +30,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ru">
-      <body className="font-sans">{children}</body>
+      <body className="font-sans">
+        <NativeShell />
+        {children}
+      </body>
     </html>
   );
 }

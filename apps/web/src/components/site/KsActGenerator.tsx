@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import type { Locale } from "@/lib/types";
 import { fetchActVat } from "@/lib/api";
+import { bytesToBlob, saveBlobDownload, XLSX_MIME } from "@/lib/native";
 import dynamic from "next/dynamic";
 
 const SignaturePad = dynamic(
@@ -534,9 +535,8 @@ export function KsActGenerator({
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
       pdf.addImage(imgData, "PNG", 8, 8, imgWidth, Math.min(imgHeight, pageHeight - 16));
-      pdf.save(
-        `${type === "ks2" ? "KS-2" : "KS-3"}_${(type === "ks2" ? header.act_num : header.ks3_num).replace(/[/\\?%*:|"<>]/g, "-")}.pdf`
-      );
+      const filename = `${type === "ks2" ? "KS-2" : "KS-3"}_${(type === "ks2" ? header.act_num : header.ks3_num).replace(/[/\\?%*:|"<>]/g, "-")}.pdf`;
+      if (!(await saveBlobDownload(filename, pdf.output("blob")))) pdf.save(filename);
     } catch (err: any) {
       console.error("PDF generation failed:", err);
       alert("Ошибка экспорта PDF: " + err.message);
@@ -618,7 +618,9 @@ export function KsActGenerator({
       ];
 
       XLSX.utils.book_append_sheet(wb, ws, "КС-2 Акт");
-      XLSX.writeFile(wb, `KS-2_${header.act_num.replace(/[/\\?%*:|"<>]/g, "-")}.xlsx`);
+      const filename = `KS-2_${header.act_num.replace(/[/\\?%*:|"<>]/g, "-")}.xlsx`;
+      const saved = await saveBlobDownload(filename, bytesToBlob(XLSX.write(wb, { bookType: "xlsx", type: "array" }), XLSX_MIME));
+      if (!saved) XLSX.writeFile(wb, filename);
     } catch (err: any) {
       console.error("Excel export error:", err);
       alert("Ошибка экспорта Excel: " + err.message);

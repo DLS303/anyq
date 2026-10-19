@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Calculator, Download, FileSpreadsheet, RefreshCw, Briefcase, CheckCircle2 } from "lucide-react";
 import { calculateEstimate, createDeal } from "@/lib/api";
+import { saveBlobDownload } from "@/lib/native";
 import { useAuth } from "@/lib/auth";
 import { features } from "@/lib/features";
 import { money } from "@/lib/format";
@@ -187,7 +188,7 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
     setForm((prev) => ({ ...prev, utilities: { ...prev.utilities, [key]: value } }));
   }
 
-  function downloadCsv() {
+  async function downloadCsv() {
     if (!result) return;
     const header = ["code", "section", "title", "unit", "qty", "unit_price_kzt", "total_kzt", "basis"];
     const rows = result.lines.map((x) =>
@@ -195,11 +196,13 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
         .map((v) => `"${String(v).replaceAll('"', '""')}"`)
         .join(","),
     );
+    const filename = `anyq-estimate-${form.region}-${form.area_m2}m2.csv`;
     const blob = new Blob([[header.join(","), ...rows].join("\n")], { type: "text/csv;charset=utf-8" });
+    if (await saveBlobDownload(filename, blob)) return;
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `anyq-estimate-${form.region}-${form.area_m2}m2.csv`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
   }
