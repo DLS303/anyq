@@ -2,8 +2,8 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
-import app.meeting_schema  # noqa: F401  registers meeting tables on Base.metadata
 from alembic import context
+from app.meeting_schema import MeetingBase
 from app.sql_backend import Base, resolve_database_url
 
 config = context.config
@@ -11,7 +11,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 config.set_main_option("sqlalchemy.url", resolve_database_url())
-target_metadata = Base.metadata
+target_metadata = [Base.metadata, MeetingBase.metadata]
 
 
 _SKIP_INDEXES = {
@@ -22,13 +22,21 @@ _SKIP_INDEXES = {
 }
 
 
+def _table_names() -> set[str]:
+    metas = target_metadata if isinstance(target_metadata, (list, tuple)) else (target_metadata,)
+    names: set[str] = set()
+    for meta in metas:
+        names.update(meta.tables)
+    return names
+
+
 def _ours(table) -> bool:
-    return table is not None and table.name in target_metadata.tables
+    return table is not None and table.name in _table_names()
 
 
 def include_object(object_, name, type_, reflected, compare_to):
     if type_ == "table":
-        return name in target_metadata.tables
+        return name in _table_names()
     if type_ == "index":
         if name in _SKIP_INDEXES:
             return False

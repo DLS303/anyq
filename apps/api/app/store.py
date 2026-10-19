@@ -11,7 +11,6 @@ from threading import RLock
 from typing import get_args
 from uuid import uuid4
 
-import app.meeting_schema  # noqa: F401  registers meeting tables before create_all
 from app.authutil import hash_password, make_token, verify_password
 from app.config import demo_mode
 from app.geo import centroid, haversine_km

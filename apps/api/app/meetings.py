@@ -294,7 +294,7 @@ def create_plan(access: Access, body: dict) -> dict:
     try:
         if session.get(MeetingRow, meeting_id) is not None:
             raise Conflict()
-        carried = _carry_copies(session, project.id, meeting_id, company_id, now)
+        carried = _carry_copies(session, project.id, meeting_id, company_id, now, access.user.id)
         for item in prepared:
             if session.get(ActionItemRow, item["id"]) is not None:
                 raise Conflict()
@@ -309,6 +309,8 @@ def create_plan(access: Access, body: dict) -> dict:
             participants=participants,
             created_at=now,
             updated_at=now,
+            created_by=access.user.id,
+            updated_by=access.user.id,
             row_version=1,
             deleted_at=None,
         )
@@ -323,13 +325,15 @@ def create_plan(access: Access, body: dict) -> dict:
                     user_id=user_id,
                     created_at=now,
                     updated_at=now,
+                    created_by=access.user.id,
+                    updated_by=access.user.id,
                     row_version=1,
                     deleted_at=None,
                 )
             )
         stored: list[ActionItemRow] = []
         for item in prepared:
-            row = _new_action(item, company_id, project.id, meeting_id, now, carried_from_id=None)
+            row = _new_action(item, company_id, project.id, meeting_id, now, access.user.id, carried_from_id=None)
             session.add(row)
             stored.append(row)
             audit_write(
@@ -388,7 +392,7 @@ def set_status(access: Access, status: str, row_version: int) -> dict:
     action = "meeting.action_item.close" if status == "done" else "meeting.action_item.cancel"
     return _cas(
         access,
-        {"status": status, "updated_at": now, "row_version": row_version + 1},
+        {"status": status, "updated_at": now, "updated_by": access.user.id, "row_version": row_version + 1},
         row_version,
         action,
         {"status": [current, status]},
@@ -399,7 +403,7 @@ def tombstone(access: Access, row_version: int) -> dict:
     now = _stamp()
     return _cas(
         access,
-        {"deleted_at": now, "updated_at": now, "row_version": row_version + 1},
+        {"deleted_at": now, "updated_at": now, "updated_by": access.user.id, "row_version": row_version + 1},
         row_version,
         "record.delete",
         {"deleted_at": ["", "set"]},
@@ -466,7 +470,7 @@ def _cas(access: Access, values: dict, row_version: int, action: str, changes: d
         session.close()
 
 
-def _carry_copies(session, project_id: str, meeting_id: str, company_id: str, now: str) -> list[ActionItemRow]:
+def _carry_copies(session, project_id: str, meeting_id: str, company_id: str, now: str, actor: str) -> list[ActionItemRow]:
     rows = session.scalars(
         select(ActionItemRow).where(
             ActionItemRow.project_id == project_id,
@@ -494,6 +498,8 @@ def _carry_copies(session, project_id: str, meeting_id: str, company_id: str, no
                 carried_from_id=row.id,
                 created_at=now,
                 updated_at=now,
+                created_by=actor,
+                updated_by=actor,
                 row_version=1,
                 deleted_at=None,
             )
@@ -501,7 +507,15 @@ def _carry_copies(session, project_id: str, meeting_id: str, company_id: str, no
     return copies
 
 
-def _new_action(item: dict, company_id: str, project_id: str, meeting_id: str, now: str, carried_from_id: str | None) -> ActionItemRow:
+def _new_action(
+    item: dict,
+    company_id: str,
+    project_id: str,
+    meeting_id: str,
+    now: str,
+    actor: str,
+    carried_from_id: str | None,
+) -> ActionItemRow:
     return ActionItemRow(
         id=item["id"],
         company_id=company_id,
@@ -516,6 +530,8 @@ def _new_action(item: dict, company_id: str, project_id: str, meeting_id: str, n
         carried_from_id=carried_from_id,
         created_at=now,
         updated_at=now,
+        created_by=actor,
+        updated_by=actor,
         row_version=1,
         deleted_at=None,
     )
@@ -589,6 +605,8 @@ def _meeting_public(row: MeetingRow) -> dict:
         "participants": [str(value) for value in participants],
         "created_at": row.created_at,
         "updated_at": row.updated_at,
+        "created_by": row.created_by,
+        "updated_by": row.updated_by,
         "row_version": int(row.row_version),
         "deleted_at": row.deleted_at,
     }
@@ -609,6 +627,8 @@ def _action_public(row: ActionItemRow) -> dict:
         "carried_from_id": row.carried_from_id,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
+        "created_by": row.created_by,
+        "updated_by": row.updated_by,
         "row_version": int(row.row_version),
         "deleted_at": row.deleted_at,
     }

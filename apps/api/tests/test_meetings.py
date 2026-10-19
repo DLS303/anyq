@@ -14,8 +14,10 @@ from sqlalchemy import text
 
 from app.company_features import project_company_id
 from app.main import app
+from app.meeting_schema import MeetingBase
 from app.meetings import pushes, tasks_for_assignee
 from app.pf0_tables import AuditLog
+from app.sql_backend import Base
 from app.store import store
 
 client = TestClient(app)
@@ -153,6 +155,10 @@ def test_member_can_create_and_foreign_company_is_404(yard):
     assert meeting["company_id"] == project_company_id(store.get_project(yard["pid"]))
     assert meeting["company_id"].startswith("bin:")
     assert meeting["created_at"].endswith("+00:00")
+    assert meeting["created_by"] == yard["owner_id"]
+    assert meeting["updated_by"] == yard["owner_id"]
+    assert item["created_by"] == yard["owner_id"]
+    assert item["updated_by"] == yard["owner_id"]
     assert meeting["row_version"] == 1
     assert meeting["deleted_at"] is None
     assert item["source"] == "meeting"
@@ -312,6 +318,12 @@ def test_company_id_from_body_is_ignored(yard):
     assert created.json()["data"]["meeting"]["company_id"] == f"bin:{yard['bin']}"
 
 
+def test_meeting_tables_come_from_alembic_not_create_all():
+    assert "meetings" not in Base.metadata.tables
+    assert "action_items" not in Base.metadata.tables
+    assert {"meetings", "action_items", "meeting_participants"} <= set(MeetingBase.metadata.tables)
+
+
 def test_alembic_meeting_revision_roundtrip(tmp_path):
     db = tmp_path / "meetings.sqlite"
     env = os.environ.copy()
@@ -331,8 +343,22 @@ def test_alembic_meeting_revision_roundtrip(tmp_path):
     tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"meetings", "action_items", "meeting_participants"} <= tables
     columns = {row[1] for row in connection.execute("PRAGMA table_info(action_items)")}
-    for name in ("company_id", "project_id", "created_at", "updated_at", "row_version", "deleted_at", "source", "carried_from_id"):
+    for name in (
+        "company_id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "created_by",
+        "updated_by",
+        "row_version",
+        "deleted_at",
+        "source",
+        "carried_from_id",
+    ):
         assert name in columns
+    for table in ("meetings", "meeting_participants"):
+        names = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        assert {"created_by", "updated_by"} <= names
     audit_columns = {row[1] for row in connection.execute("PRAGMA table_info(audit_log)")}
     assert {"entity_type", "entity_id", "project_id", "changes"} <= audit_columns
     index_sql = connection.execute(

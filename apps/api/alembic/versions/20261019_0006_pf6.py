@@ -34,6 +34,8 @@ def upgrade() -> None:
         sa.Column("participants", sa.JSON(), nullable=False),
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("updated_at", sa.String(length=40), nullable=False),
+        sa.Column("created_by", sa.String(length=80), nullable=False),
+        sa.Column("updated_by", sa.String(length=80), nullable=False),
         sa.Column("row_version", sa.Integer(), nullable=False),
         sa.Column("deleted_at", sa.String(length=40), nullable=True),
     )
@@ -48,6 +50,8 @@ def upgrade() -> None:
         sa.Column("user_id", sa.String(length=80), nullable=False),
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("updated_at", sa.String(length=40), nullable=False),
+        sa.Column("created_by", sa.String(length=80), nullable=False),
+        sa.Column("updated_by", sa.String(length=80), nullable=False),
         sa.Column("row_version", sa.Integer(), nullable=False),
         sa.Column("deleted_at", sa.String(length=40), nullable=True),
     )
@@ -72,6 +76,8 @@ def upgrade() -> None:
         sa.Column("carried_from_id", sa.String(length=36), nullable=True),
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("updated_at", sa.String(length=40), nullable=False),
+        sa.Column("created_by", sa.String(length=80), nullable=False),
+        sa.Column("updated_by", sa.String(length=80), nullable=False),
         sa.Column("row_version", sa.Integer(), nullable=False),
         sa.Column("deleted_at", sa.String(length=40), nullable=True),
         sa.CheckConstraint("status IN ('open', 'done', 'cancelled')", name="ck_action_items_status"),
