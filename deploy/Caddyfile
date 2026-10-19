@@ -26,7 +26,8 @@ http://127.0.0.1:8080 {
 		-Server
 	}
 
-	handle /v1/health/ready {
+	@ready path /v1/health/ready /v1/health/ready/*
+	handle @ready {
 		respond 404
 	}
 

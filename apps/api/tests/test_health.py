@@ -2,8 +2,8 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
-from types import SimpleNamespace
 
 from alembic.config import Config
 from fastapi.testclient import TestClient
@@ -30,6 +30,7 @@ def _alembic_config() -> Config:
 
 
 def _stamp_head() -> None:
+    _drop_alembic_version()
     command.stamp(_alembic_config(), "head")
 
 
@@ -95,13 +96,56 @@ def test_ready_503_when_uploads_dir_is_missing(tmp_path, monkeypatch):
     assert "absent-volume" not in res.text
 
 
-def test_ready_names_alembic_when_revision_is_not_head():
-    _drop_alembic_version()
-    res = client.get("/v1/health/ready")
-    assert res.status_code == 503
-    assert res.json() == {"ok": False, "checks": ["alembic"]}
-    assert "20261019_0001" not in res.text
-    assert "sqlite" not in res.text.lower()
+def _set_db_revision(revision: str | None) -> None:
+    with store._sql.engine.begin() as conn:
+        conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)"))
+        conn.execute(text("DELETE FROM alembic_version"))
+        if revision is not None:
+            conn.execute(text("INSERT INTO alembic_version (version_num) VALUES (:revision)"), {"revision": revision})
+
+
+def _two_revision_scripts(tmp_path: Path):
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    (versions / "001_ancestor.py").write_text(
+        'revision = "001"\ndown_revision = None\nbranch_labels = None\ndepends_on = None\n\n'
+        "def upgrade():\n    pass\n\ndef downgrade():\n    pass\n",
+        encoding="utf-8",
+    )
+    (versions / "002_head.py").write_text(
+        'revision = "002"\ndown_revision = "001"\nbranch_labels = None\ndepends_on = None\n\n'
+        "def upgrade():\n    pass\n\ndef downgrade():\n    pass\n",
+        encoding="utf-8",
+    )
+    cfg = Config()
+    cfg.set_main_option("script_location", str(tmp_path))
+    from alembic.script import ScriptDirectory
+
+    return ScriptDirectory.from_config(cfg)
+
+
+def test_schema_head_ancestor_and_unknown(tmp_path, monkeypatch):
+    script = _two_revision_scripts(tmp_path)
+    monkeypatch.setattr(health_router, "_script_directory", lambda: script)
+
+    _set_db_revision("002")
+    at_head = client.get("/v1/health/ready")
+    assert at_head.status_code == 200, at_head.text
+    assert at_head.json() == {"ok": True}
+    assert "002" not in at_head.text
+
+    _set_db_revision("001")
+    older = client.get("/v1/health/ready")
+    assert older.status_code == 503
+    assert older.json() == {"ok": False, "checks": ["schema"]}
+    assert "001" not in older.text
+
+    _set_db_revision("future001")
+    newer = client.get("/v1/health/ready")
+    assert newer.status_code == 200, newer.text
+    assert newer.json() == {"ok": True}
+    assert "future001" not in newer.text
+    _stamp_head()
 
 
 def test_ready_503_when_database_is_down(monkeypatch):
@@ -124,42 +168,57 @@ def test_ready_503_when_database_is_down(monkeypatch):
     assert info.status_code == 200
     assert set(info.json()) == {"ok", "version"}
 
+    def broken_probe():
+        raise OperationalError(
+            "SELECT 1",
+            {},
+            Exception(f"could not connect to {secret_host} at {secret_path} version {secret_version}"),
+        )
+
+    monkeypatch.setattr(health_router, "_probe_connection", broken_probe)
     res = client.get("/v1/health/ready")
     assert res.status_code == 503
-    assert res.json() == {"ok": False, "checks": ["db", "alembic"]}
+    assert res.json() == {"ok": False, "checks": ["db", "schema"]}
     for secret in (secret_host, secret_path, secret_version, "Traceback", "OperationalError", "SELECT"):
         assert secret not in res.text
 
 
-def test_postgres_probe_uses_select_1_with_two_second_timeout(monkeypatch):
-    class Conn:
-        def __init__(self):
-            self.statements: list[str] = []
-            self.dialect = SimpleNamespace(name="postgresql")
+def test_probe_uses_private_engine_with_two_second_timeout(monkeypatch):
+    seen: dict = {}
+    real_create = health_router.create_engine
 
-        def execute(self, statement, *_args, **_kwargs):
-            self.statements.append(str(statement))
-            return SimpleNamespace()
+    def spy(url, *args, **kwargs):
+        seen["url"] = url
+        seen["kwargs"] = kwargs
+        return real_create(url, *args, **kwargs)
 
-        def rollback(self):
-            self.statements.append("ROLLBACK")
-
-    class Connect:
-        def __init__(self, conn: Conn):
-            self.conn = conn
-
-        def __enter__(self):
-            return self.conn
-
-        def __exit__(self, *_args):
-            return False
-
-    conn = Conn()
-    monkeypatch.setattr(store._sql.engine, "connect", lambda: Connect(conn))
+    monkeypatch.setattr(health_router, "create_engine", spy)
     assert health_router._db_ok() is True
-    script = "\n".join(conn.statements)
-    assert "SET LOCAL statement_timeout = '2s'" in script
-    assert "SELECT 1" in script
+    assert seen["kwargs"]["poolclass"] is health_router.NullPool
+    assert seen["kwargs"]["connect_args"]["timeout"] == 2
+    assert seen["url"] == store._sql.url
+
+
+def test_probe_works_while_app_pool_is_exhausted():
+    _stamp_head()
+    engine = store._sql.engine
+    previous_timeout = engine.pool._timeout
+    engine.pool._timeout = 0.2
+    limit = engine.pool.size() + engine.pool._max_overflow
+    held = []
+    try:
+        for _ in range(limit):
+            held.append(engine.connect())
+        started = time.monotonic()
+        res = client.get("/v1/health/ready")
+        elapsed = time.monotonic() - started
+    finally:
+        for conn in held:
+            conn.close()
+        engine.pool._timeout = previous_timeout
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True}
+    assert elapsed < 2
 
 
 def test_dev_docs_remain_available():
@@ -234,11 +293,14 @@ def test_caddy_does_not_route_api_docs():
     assert "handle /docs" not in text
     assert "handle /redoc" not in text
     assert "handle /openapi.json" not in text
-    ready = re.search(r"handle /v1/health/ready \{(?P<body>.*?)\n\t\}", text, re.DOTALL)
+    assert "@ready path /v1/health/ready /v1/health/ready/*" in text
+    ready = re.search(r"handle @ready \{(?P<body>.*?)\n\t\}", text, re.DOTALL)
     assert ready is not None
     assert "respond 404" in ready.group("body")
     assert "reverse_proxy" not in ready.group("body")
-    assert text.index("handle /v1/health/ready") < text.index("handle /v1/*")
+    assert text.index("handle @ready") < text.index("handle /v1/*")
+    assert "handle /healthz" not in text
+    assert "reverse_proxy web:3000" in text
 
 
 def test_deploy_uses_readiness_and_build_identity():
