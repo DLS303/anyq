@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { fetchInvoices, payInvoice } from "@/lib/api";
+import { ErrorRetry, useAsync } from "@/lib/useAsync";
+import { t } from "@/i18n/messages";
 import { INVOICE_STATUS, money } from "@/lib/format";
 import type { CrmInvoice, Locale } from "@/lib/types";
 
@@ -14,22 +15,14 @@ export function CrmInvoicesView({
   onSelectDealId: (dealId: string) => void;
 }) {
   const { user } = useAuth();
-  const [invoices, setInvoices] = useState<CrmInvoice[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  function load() {
-    if (!user) return;
-    setLoading(true);
-    fetchInvoices(user.email)
-      .then(setInvoices)
-      .catch(() => setInvoices([]))
-      .finally(() => setLoading(false));
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  const m = t(locale);
+  const invoicesQuery = useAsync(
+    () => (user ? fetchInvoices(user.email) : Promise.resolve([] as CrmInvoice[])),
+    [user?.email],
+  );
+  const invoices = invoicesQuery.data ?? [];
+  const loading = invoicesQuery.loading;
+  const load = invoicesQuery.reload;
 
   async function handleMarkPaid(id: string) {
     if (!user) return;
@@ -85,7 +78,13 @@ export function CrmInvoicesView({
               </tr>
             </thead>
             <tbody className="divide-y divide-ink/5">
-              {loading ? (
+              {invoicesQuery.status === "error" && !invoicesQuery.data ? (
+                <tr>
+                  <td colSpan={7} className="py-8">
+                    <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={load} />
+                  </td>
+                </tr>
+              ) : loading ? (
                 <tr>
                   <td colSpan={7} className="py-8 text-center text-ink/40">Загрузка счетов...</td>
                 </tr>

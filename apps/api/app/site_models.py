@@ -5,9 +5,11 @@ from pydantic import BaseModel
 RfiStatus = Literal["open", "answered", "closed"]
 PunchStatus = Literal["open", "ready", "closed"]
 InspStatus = Literal["open", "fail", "pass"]
+CheckResult = Literal["pass", "fail", "na"]
 CoStatus = Literal["draft", "submitted", "approved", "rejected"]
 TaskStatus = Literal["not_started", "in_progress", "done", "blocked"]
 LogWeather = Literal["clear", "cloud", "rain", "snow", "wind"]
+SiteRole = Literal["buyer", "contractor", "supervisor", "architect", "surveyor", "supplier", "foreman"]
 
 
 class Project(BaseModel):
@@ -41,6 +43,7 @@ class DailyLog(BaseModel):
     workers: int = 0
     notes: str = ""
     delays: str = ""
+    delay_hours: float = 0
     author_id: str = ""
     author_role: str = ""
     photos: list[DailyPhoto] = []
@@ -85,15 +88,23 @@ class PunchItem(BaseModel):
     created_at: str = ""
 
 
+class CheckItem(BaseModel):
+    label: str
+    result: CheckResult
+    comment: str = ""
+
+
 class Inspection(BaseModel):
     id: str
     project_id: str
     title: str
     checklist: list[str] = []
+    items: list[CheckItem] = []
     result: InspStatus = "open"
     inspector: str = ""
     notes: str = ""
     day: str = ""
+    photo: str = ""
 
 
 class Incident(BaseModel):
@@ -158,6 +169,17 @@ class Timesheet(BaseModel):
     notes: str = ""
 
 
+class MeetingParticipant(BaseModel):
+    role: str
+    name: str = ""
+
+
+class MeetingDecision(BaseModel):
+    text: str
+    owner_role: str
+    due: str = ""
+
+
 class Meeting(BaseModel):
     id: str
     project_id: str
@@ -166,6 +188,9 @@ class Meeting(BaseModel):
     attendees: str = ""
     decisions: str = ""
     actions: str = ""
+    participants: list[MeetingParticipant] = []
+    agenda: str = ""
+    decision_items: list[MeetingDecision] = []
 
 
 class DirectoryRow(BaseModel):

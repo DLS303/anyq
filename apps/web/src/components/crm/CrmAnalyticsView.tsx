@@ -1,27 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { fetchCrmAnalytics } from "@/lib/api";
+import { ErrorRetry, useAsync } from "@/lib/useAsync";
+import { t } from "@/i18n/messages";
 import { FUNNEL, money } from "@/lib/format";
 import type { CrmAnalytics, Locale } from "@/lib/types";
 
 export function CrmAnalyticsView({ locale }: { locale: Locale }) {
   const { user } = useAuth();
-  const [data, setData] = useState<CrmAnalytics | null>(null);
-  const [loading, setLoading] = useState(true);
+  const m = t(locale);
+  const query = useAsync(() => (user ? fetchCrmAnalytics(user.email) : Promise.resolve(null)), [user?.email]);
+  const data = query.data;
 
-  useEffect(() => {
-    if (!user) return;
-    setLoading(true);
-    fetchCrmAnalytics(user.email)
-      .then(setData)
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
-  }, [user]);
-
-  if (loading) {
+  if (query.loading) {
     return <div className="py-16 text-center text-xs text-ink/40">Расчет аналитических показателей...</div>;
+  }
+
+  if (query.status === "error") {
+    return <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={query.reload} />;
   }
 
   if (!data) {

@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { ErrorRetry, useAsync } from "@/lib/useAsync";
 import { useAuth } from "@/lib/auth";
 import { convertLead, createLead, fetchLeads } from "@/lib/api";
 import { FUNNEL, LEAD_STATUS, PRODUCT_FUNNELS, money } from "@/lib/format";
 import type { Funnel, Lead, Locale } from "@/lib/types";
+import { t } from "@/i18n/messages";
 
 export function CrmLeadsView({
   locale,
@@ -14,9 +16,15 @@ export function CrmLeadsView({
   onDealCreated: () => void;
 }) {
   const { user } = useAuth();
-  const [leads, setLeads] = useState<Lead[]>([]);
+  const m = t(locale);
   const [statusFilter, setStatusFilter] = useState<string>("");
-  const [loading, setLoading] = useState(true);
+  const leadsQuery = useAsync(
+    () => (user ? fetchLeads(user.email, statusFilter || undefined) : Promise.resolve([] as Lead[])),
+    [user?.email, statusFilter],
+  );
+  const leads = leadsQuery.data ?? [];
+  const loading = leadsQuery.loading;
+  const load = leadsQuery.reload;
 
   // Convert modal
   const [convertingLead, setConvertingLead] = useState<Lead | null>(null);
@@ -34,20 +42,6 @@ export function CrmLeadsView({
   const [newFunnelTarget, setNewFunnelTarget] = useState<Funnel>("construction");
   const [newBudget, setNewBudget] = useState(0);
   const [newNotes, setNewNotes] = useState("");
-
-  function load() {
-    if (!user) return;
-    setLoading(true);
-    fetchLeads(user.email, statusFilter || undefined)
-      .then(setLeads)
-      .catch(() => setLeads([]))
-      .finally(() => setLoading(false));
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, statusFilter]);
 
   async function handleConvertSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -151,7 +145,13 @@ export function CrmLeadsView({
               </tr>
             </thead>
             <tbody className="divide-y divide-ink/5">
-              {loading ? (
+              {leadsQuery.status === "error" && !leadsQuery.data ? (
+                <tr>
+                  <td colSpan={8} className="py-8">
+                    <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={load} />
+                  </td>
+                </tr>
+              ) : loading ? (
                 <tr>
                   <td colSpan={8} className="py-8 text-center text-ink/40">
                     Загрузка лидов...

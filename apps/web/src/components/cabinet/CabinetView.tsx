@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { ProjectList } from "@/components/site/ProjectList";
+import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import {
@@ -44,34 +46,24 @@ function roleLabel(role: string) {
 export function CabinetView({ locale }: { locale: Locale }) {
   const m = t(locale);
   const { user } = useAuth();
-  const [orders, setOrders] = useState<ServiceOrder[]>([]);
-  const [matOrders, setMatOrders] = useState<MaterialOrder[]>([]);
-  const [skus, setSkus] = useState<Material[]>([]);
   const [error, setError] = useState("");
+  const loaded = useAsync(async () => {
+    if (!user) return { orders: [] as ServiceOrder[], matOrders: [] as MaterialOrder[], skus: [] as Material[] };
+    const [orders, matOrders, skus] = await Promise.all([
+      fetchOrders(user.email),
+      fetchMaterialOrders(user.email),
+      user.role === "supplier" || user.role === "admin" ? fetchSupplierMaterials(user.email) : Promise.resolve([]),
+    ]);
+    return { orders, matOrders, skus };
+  }, [user?.email, user?.role]);
+  const orders = loaded.data?.orders ?? [];
+  const matOrders = loaded.data?.matOrders ?? [];
+  const skus = loaded.data?.skus ?? [];
+  const load = loaded.reload;
   const [addingSku, setAddingSku] = useState(false);
   const [quotes, setQuotes] = useState<Record<string, { amount: string; term: string; comment: string }>>({});
   const [reviews, setReviews] = useState<Record<string, { stars: number; text: string }>>({});
   const [reviewed, setReviewed] = useState<Record<string, boolean>>({});
-
-  function load() {
-    if (!user) return;
-    Promise.all([
-      fetchOrders(user.email),
-      fetchMaterialOrders(user.email),
-      user.role === "supplier" || user.role === "admin" ? fetchSupplierMaterials(user.email) : Promise.resolve([]),
-    ])
-      .then(([o, mo, sku]) => {
-        setOrders(o);
-        setMatOrders(mo);
-        setSkus(sku);
-      })
-      .catch((err: Error) => setError(err.message));
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
 
   function quoteDraft(orderId: string) {
     return quotes[orderId] ?? { amount: "", term: "", comment: "" };
@@ -218,7 +210,20 @@ export function CabinetView({ locale }: { locale: Locale }) {
       </div>
 
       {error ? <p className="text-sm font-semibold text-red-600 bg-red-50 p-3 rounded-xl border border-red-200">{error}</p> : null}
+      {user.role === "supervisor" ? (
+        <section className="glass-strong rounded-3xl border border-slate-200/90 p-6 shadow-luxury sm:p-8">
+          <h2 className="text-xl font-bold text-slate-900">{m.myObjects}</h2>
+          <p className="mt-1 mb-4 text-sm text-slate-500">{m.myObjectsLead}</p>
+          <ProjectList locale={locale} />
+        </section>
+      ) : null}
+      {loaded.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
+      {loaded.status === "error" && !loaded.data ? (
+        <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={load} />
+      ) : null}
 
+      {loaded.loading || (loaded.status === "error" && !loaded.data) ? null : (
+      <>
       {/* Services / Contracting Orders */}
       <section className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
         <div className="flex items-center justify-between mb-5">
@@ -575,6 +580,8 @@ export function CabinetView({ locale }: { locale: Locale }) {
           </div>
         </section>
       ) : null}
+      </>
+      )}
     </div>
   );
 }

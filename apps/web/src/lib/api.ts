@@ -30,6 +30,16 @@ export const API = getApiBase();
 
 type Envelope<T> = { ok: boolean; data: T; total?: number; detail?: string };
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 function detailOf(json: unknown, fallback: string) {
   if (json && typeof json === "object" && "detail" in json) {
     const d = (json as { detail: unknown }).detail;
@@ -72,8 +82,13 @@ async function request<T>(path: string, init?: RequestInit & { email?: string })
     cache: "no-store",
   });
   sessionExpired(path, res, headers);
-  const json = (await res.json()) as Envelope<T>;
-  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  let json: Envelope<T>;
+  try {
+    json = (await res.json()) as Envelope<T>;
+  } catch {
+    throw new ApiError(res.statusText || "Ошибка сети", res.status || 0);
+  }
+  if (!res.ok) throw new ApiError(detailOf(json, res.statusText), res.status);
   return json.data;
 }
 
@@ -176,15 +191,16 @@ export function suggestPlots(q: string) {
   );
 }
 
-export async function uploadPhoto(email: string, file: File) {
+export async function uploadPhoto(email: string, file: File, projectId?: string) {
   void email;
   const headers = new Headers();
   applyAuth(headers);
   const fd = new FormData();
   fd.append("file", file);
+  if (projectId) fd.append("project_id", projectId);
   const res = await fetch(`${getApiBase()}/v1/cabinet/photos`, { method: "POST", headers, body: fd });
   const json = (await res.json()) as Envelope<{ url: string }>;
-  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  if (!res.ok) throw new ApiError(detailOf(json, res.statusText), res.status);
   return json.data.url;
 }
 
@@ -533,8 +549,15 @@ export function fetchSiteBundle(id: string) {
   return request<Record<string, unknown>>(`/v1/site/projects/${id}/bundle`);
 }
 
-export function postSite(path: string, email: string, body: Record<string, unknown> = {}) {
-  return request(`/v1/site/${path}`, { method: "POST", email, body: JSON.stringify(body) });
+export function postSite(
+  path: string,
+  email: string,
+  body: Record<string, unknown> = {},
+  idempotencyKey?: string,
+) {
+  const headers = new Headers();
+  if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
+  return request(`/v1/site/${path}`, { method: "POST", email, body: JSON.stringify(body), headers });
 }
 
 export function deleteSite(path: string) {

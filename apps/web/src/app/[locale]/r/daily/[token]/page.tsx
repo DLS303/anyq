@@ -12,6 +12,7 @@ type PublicDaily = {
   workers: number;
   notes: string;
   delays: string;
+  delay_hours?: number;
   project_title: string;
   author_role: string;
   photos: { url: string }[];
@@ -95,10 +96,13 @@ export default async function PublicDailyPage({
             <dd className="whitespace-pre-wrap">{data.notes}</dd>
           </div>
         ) : null}
-        {data.delays ? (
+        {data.delays || data.delay_hours ? (
           <div>
             <dt className="text-ink/45">{m.reportDelaysLabel}</dt>
-            <dd className="whitespace-pre-wrap">{data.delays}</dd>
+            <dd className="whitespace-pre-wrap">
+              {data.delays}
+              {data.delay_hours ? ` · ${data.delay_hours} ${m.hubHours}` : ""}
+            </dd>
           </div>
         ) : null}
       </dl>

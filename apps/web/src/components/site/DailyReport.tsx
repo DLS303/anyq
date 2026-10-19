@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AuthImage } from "@/components/media/AuthImage";
 import { t } from "@/i18n/messages";
 import { deleteSite, postSite, uploadDailyPhotos } from "@/lib/api";
@@ -20,6 +20,7 @@ export type DailyEntry = {
   workers: number;
   notes: string;
   delays: string;
+  delay_hours?: number;
   author_role?: string;
   photos?: Photo[];
   share_active?: boolean;
@@ -66,6 +67,7 @@ export function DailyReport({
   const [days, setDays] = useState<Record<string, number>>({});
   const [links, setLinks] = useState<Record<string, string>>({});
   const [faceNote, setFaceNote] = useState(false);
+  const lock = useRef(false);
 
   useEffect(() => {
     const urls = files.map((file) => URL.createObjectURL(file));
@@ -91,17 +93,26 @@ export function DailyReport({
   }
 
   async function save(form: HTMLFormElement) {
+    if (lock.current) return;
+    lock.current = true;
     const fd = new FormData(form);
+    const key = crypto.randomUUID();
     setBusy(true);
     try {
-      const created = (await postSite(`projects/${projectId}/daily`, "", {
-        day: String(fd.get("day") || todayAlmaty()),
-        workers: Number(fd.get("workers") || 0),
-        notes: String(fd.get("notes") || ""),
-        delays: String(fd.get("delays") || ""),
-        weather: String(fd.get("weather") || "clear"),
-        temp_c: Number(fd.get("temp_c") || 20),
-      })) as { id: string };
+      const created = (await postSite(
+        `projects/${projectId}/daily`,
+        "",
+        {
+          day: String(fd.get("day") || todayAlmaty()),
+          workers: Number(fd.get("workers") || 0),
+          notes: String(fd.get("notes") || ""),
+          delays: String(fd.get("delays") || ""),
+          delay_hours: Number(fd.get("delay_hours") || 0),
+          weather: String(fd.get("weather") || "clear"),
+          temp_c: Number(fd.get("temp_c") || 20),
+        },
+        key,
+      )) as { id: string };
       if (files.length) {
         const uploaded = await uploadDailyPhotos(created.id, files);
         if (uploaded.added.some((item) => item.has_people)) {
@@ -115,10 +126,12 @@ export function DailyReport({
       form.reset();
       setFiles([]);
       setOpen(true);
+      toast(m.hubSaved);
       onChange();
     } catch (err) {
       toast(err instanceof Error ? err.message : m.hubSaveError);
     } finally {
+      lock.current = false;
       setBusy(false);
     }
   }
@@ -214,7 +227,19 @@ export function DailyReport({
             <input name="workers" type="number" min={0} placeholder={m.hubWorkers} className={field} />
           </div>
           <textarea name="notes" placeholder={m.hubWorkNotes} className={`${field} min-h-24`} />
-          <input name="delays" placeholder={m.hubDelays} className={field} />
+          <div className="grid gap-2 sm:grid-cols-2">
+            <input name="delays" placeholder={m.hubDelayReason} aria-label={m.reportDelaysLabel} className={field} />
+            <input
+              name="delay_hours"
+              type="number"
+              min={0}
+              max={24}
+              step="0.5"
+              placeholder={m.hubDelayHours}
+              aria-label={m.hubDelayHours}
+              className={field}
+            />
+          </div>
           <p className="text-xs text-ink/50">{m.reportNoNames}</p>
           <label className={`${quiet} cursor-pointer`}>
             <input
@@ -263,9 +288,10 @@ export function DailyReport({
                 {typeof log.temp_c === "number" ? ` · ${log.temp_c}°` : ""} · {log.workers} {m.hubWorkers}
               </p>
               {log.notes ? <p className="mt-1">{log.notes}</p> : null}
-              {log.delays ? (
+              {log.delays || log.delay_hours ? (
                 <p className="mt-1 text-ink/60">
                   {m.reportDelaysLabel}: {log.delays}
+                  {log.delay_hours ? ` · ${log.delay_hours} ${m.hubHours}` : ""}
                 </p>
               ) : null}
               {log.author_role ? (
