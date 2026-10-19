@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.deps import require_user
 from app.idempotency import IdempotencyConflict, run_idempotent
@@ -77,6 +77,13 @@ def _audio_file(data: bytes, content_type: str | None) -> tuple[str, str]:
     raise ValueError("Нужен аудиофайл webm, ogg или mp4")
 
 
+def _required_text(value: str) -> str:
+    text = value.strip()
+    if not text:
+        raise ValueError("Укажите название")
+    return text
+
+
 class ShareIn(BaseModel):
     expires_in_days: int = Field(default=DEFAULT_SHARE_DAYS, ge=MIN_SHARE_DAYS, le=MAX_SHARE_DAYS)
 
@@ -86,6 +93,11 @@ class RfiIn(BaseModel):
     question: str
     drawing: str = ""
     assignee_id: str | None = None
+
+    @field_validator("title", "question")
+    @classmethod
+    def _filled(cls, value: str) -> str:
+        return _required_text(value)
 
 
 class AnswerIn(BaseModel):
@@ -97,6 +109,11 @@ class PunchIn(BaseModel):
     location: str = ""
     trade: str = ""
     photo: str = ""
+
+    @field_validator("title")
+    @classmethod
+    def _filled(cls, value: str) -> str:
+        return _required_text(value)
 
 
 class StatusIn(BaseModel):
@@ -126,6 +143,11 @@ class IncidentIn(BaseModel):
     description: str = ""
     actions: str = ""
     day: str = ""
+
+    @field_validator("title")
+    @classmethod
+    def _filled(cls, value: str) -> str:
+        return _required_text(value)
 
 
 class TsIn(BaseModel):
@@ -157,6 +179,11 @@ class MeetIn(BaseModel):
     agenda: str = ""
     decision_items: list[DecisionIn] = []
 
+    @field_validator("title")
+    @classmethod
+    def _filled(cls, value: str) -> str:
+        return _required_text(value)
+
 
 class PctIn(BaseModel):
     pct: int
@@ -170,6 +197,11 @@ class TaskCreateIn(BaseModel):
     pct: int = 0
     status: str = "not_started"
     depends: str = ""
+
+    @field_validator("title")
+    @classmethod
+    def _filled(cls, value: str) -> str:
+        return _required_text(value)
 
 
 class TaskUpdateIn(BaseModel):
@@ -185,6 +217,11 @@ class CoIn(BaseModel):
     title: str
     amount_kzt: int
     reason: str = ""
+
+    @field_validator("title")
+    @classmethod
+    def _filled(cls, value: str) -> str:
+        return _required_text(value)
 
 
 def _project_or_404(pid: str) -> Project:

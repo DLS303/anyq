@@ -319,6 +319,7 @@ export type Material = {
   description_ru: string;
   description_kk: string;
   published: boolean;
+  certified_rk?: boolean;
 };
 
 export type MaterialOrder = {

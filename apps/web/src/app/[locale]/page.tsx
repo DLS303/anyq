@@ -4,6 +4,7 @@ import { MATERIAL_CAT, CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/
 import { t } from "@/i18n/messages";
 import type { Locale } from "@/lib/types";
 import { PILOT_MODE } from "@/lib/pilot";
+import { DEMO_MODE } from "@/lib/features";
 import { PhotoView } from "@/components/media/PhotoView";
 import { HomeStage } from "@/components/home/HomeStage";
 import { HomeRise } from "@/components/home/HomeRise";
@@ -108,7 +109,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
           <div>
             <p className="text-xs uppercase tracking-wider text-pine font-bold flex items-center gap-1.5">
               <ShieldCheck className="h-4 w-4 text-emerald-600" />
-              <span>Лицензированные подрядчики</span>
+              <span>{m.navSpecialists}</span>
             </p>
             <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 mt-1">{m.navSpecialists}</h2>
           </div>
@@ -141,7 +142,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
                 {s.license_verified ? (
                   <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 text-[11px] font-semibold border border-emerald-200/60">
                     <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                    <span>Лицензия {s.license_cat}</span>
+                    <span>{m.licenseBadge.replace("{cat}", s.license_cat)}</span>
                   </div>
                 ) : null}
               </div>
@@ -167,7 +168,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
       </>
       )}
 
-      {/* Enterprise Standards & Trust Banner */}
+      {DEMO_MODE ? (
       <section className="home-rise bg-gradient-to-br from-slate-900 to-pine text-white rounded-3xl p-8 sm:p-10 shadow-2xl">
         <div className="grid md:grid-cols-3 gap-6 text-center sm:text-left">
           <div>
@@ -187,6 +188,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
           </div>
         </div>
       </section>
+      ) : null}
           </div>
         </div>
       </div>

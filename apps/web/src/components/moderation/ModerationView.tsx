@@ -53,7 +53,7 @@ export function ModerationView({ locale }: { locale: Locale }) {
       {query.status === "error" ? (
         <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />
       ) : null}
-      {!query.loading && query.status !== "error" && plots.length === 0 ? <p className="text-ink/50">{m.empty}</p> : null}
+      {!query.loading && query.status !== "error" && plots.length === 0 ? <p className="text-ink/50">{m.queueEmpty}</p> : null}
       {query.status !== "error"
         ? paged.slice.map((plot) => (
         <div key={plot.id} className="border border-ink/10 bg-white/60 p-4">
@@ -62,7 +62,7 @@ export function ModerationView({ locale }: { locale: Locale }) {
             {plot.cadastral_no} · {plot.district} · {plot.status} · Trust {plot.trust_score}
           </p>
           <p className="text-xs text-ink/45 mt-1">
-            газ {plot.gas} · свет {plot.electricity} · красные линии {plot.red_lines ? "да" : "нет"}
+            {m.modGas} {plot.gas} · {m.modLight} {plot.electricity} · {m.modRed} {plot.red_lines ? m.modYes : m.modNo}
           </p>
           <textarea
             className="mt-3 w-full border border-ink/15 px-3 py-2 text-sm"

@@ -33,13 +33,13 @@ export function MaterialsClient({ locale }: { locale: Locale }) {
         <div className="max-w-2xl">
           <p className="text-xs uppercase tracking-wider text-pine font-bold flex items-center gap-1.5 mb-1">
             <Truck className="h-4 w-4" />
-            <span>Прямые поставки от заводов-изготовителей</span>
+            <span>{m.matCatalogKicker}</span>
           </p>
           <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
-            Каталог строительных материалов
+            {m.matCatalogTitle}
           </h1>
           <p className="mt-2 text-sm text-slate-500 leading-relaxed">
-            Сертифицированные стройматериалы в Казахстане по оптовым ценам: бетон, газоблоки, кирпич, арматура, пиломатериалы.
+            {m.matCatalogLead}
           </p>
         </div>
 

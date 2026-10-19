@@ -14,10 +14,17 @@ def threads(user: User = Depends(require_user)):
     return {"ok": True, "data": items}
 
 
+@router.get("/peers")
+def peers(user: User = Depends(require_user)):
+    return {"ok": True, "data": store.chat_peers(user)}
+
+
 @router.post("/threads")
 def open_thread(body: ThreadCreate, user: User = Depends(require_user)):
     try:
         thread = store.open_thread(user, body)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "data": thread}

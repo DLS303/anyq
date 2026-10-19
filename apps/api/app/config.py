@@ -3,6 +3,11 @@ import os
 from pydantic import BaseModel
 
 
+def demo_mode() -> bool:
+    """Fictional seed and illustrations. Off unless ANYQ_DEMO_MODE is explicitly on."""
+    return os.getenv("ANYQ_DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def resolve_cors_origins() -> list[str]:
     env = os.getenv("ANYQ_ENV", "development").strip().lower()
     raw = os.getenv("CORS_ORIGINS", "")
@@ -19,6 +24,7 @@ class Settings(BaseModel):
     version: str = "0.1.0"
     database_url: str | None = os.getenv("DATABASE_URL")
     anyq_env: str = os.getenv("ANYQ_ENV", "development")
+    demo_mode: bool = demo_mode()
     cors_origins: list[str] = resolve_cors_origins()
     # Current Kazakhstan VAT. KS acts keep the date-based rate in tax.py.
     vat_rate: float = float(os.getenv("ANYQ_VAT_RATE", "0.16"))

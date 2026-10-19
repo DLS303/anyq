@@ -13,7 +13,7 @@ client = TestClient(app)
 PHONE = "+7 700 111 22 33"
 
 
-def _register(email: str) -> str:
+def _register(email: str, bin_no: str = "999888777666") -> str:
     res = client.post(
         "/v1/auth/register",
         json={
@@ -21,8 +21,8 @@ def _register(email: str) -> str:
             "password": "secret12",
             "full_name": "Test User",
             "phone": "+77001112233",
-            "company": "Test LLP",
-            "company_bin": "123456789012",
+            "company": "Outside LLP",
+            "company_bin": bin_no,
             "city": "Almaty",
             "role": "buyer",
             "consent_offer_pd": True,

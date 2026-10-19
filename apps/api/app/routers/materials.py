@@ -18,7 +18,7 @@ def _http(exc: Exception) -> HTTPException:
 
 @router.get("/materials")
 def list_materials(category: str | None = None, q: str | None = None):
-    return {"ok": True, "data": store.list_materials(category=category, q=q)}
+    return {"ok": True, "data": [store.material_public(item) for item in store.list_materials(category=category, q=q)]}
 
 
 @router.get("/materials/{mid}")
@@ -26,7 +26,7 @@ def get_material(mid: str):
     item = store.get_material(mid)
     if not item:
         raise HTTPException(status_code=404, detail="Позиция не найдена")
-    return {"ok": True, "data": item}
+    return {"ok": True, "data": store.material_public(item)}
 
 
 @router.post("/materials")
@@ -40,9 +40,9 @@ def add_material(body: MaterialCreate, user: User = Depends(require_user)):
 
 @router.get("/cabinet/materials")
 def my_materials(user: User = Depends(require_user)):
-    if user.role in ("admin", "moderator"):
-        return {"ok": True, "data": list(store.materials.values())}
-    return {"ok": True, "data": store.supplier_materials(user.id)}
+    if user.role == "admin":
+        return {"ok": True, "data": [store.material_public(item) for item in store.materials.values()]}
+    return {"ok": True, "data": [store.material_public(item) for item in store.supplier_materials(user.id)]}
 
 
 @router.post("/material-orders")

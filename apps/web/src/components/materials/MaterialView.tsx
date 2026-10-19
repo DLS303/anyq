@@ -82,10 +82,12 @@ export function MaterialView({ locale, item }: { locale: Locale; item: Material 
         <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
           <div className="flex items-center gap-2 mb-2">
             <span className="pill text-[11px] text-slate-600 font-semibold">{MATERIAL_CAT[item.category][locale]}</span>
-            <span className="pill text-[11px] text-emerald-800 bg-emerald-50 border-emerald-200 font-semibold flex items-center gap-1">
-              <CheckCircle2 className="h-3 w-3 text-emerald-600" />
-              Сертифицировано в РК
-            </span>
+            {item.certified_rk ? (
+              <span className="pill text-[11px] text-emerald-800 bg-emerald-50 border-emerald-200 font-semibold flex items-center gap-1">
+                <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                {m.certifiedBadge}
+              </span>
+            ) : null}
           </div>
 
           <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 mt-2">{title}</h1>

@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Role = Literal[
     "guest",
@@ -294,6 +294,14 @@ class LeadCreate(BaseModel):
     title: str
     name: str
     phone: str
+
+    @field_validator("title", "name", "phone")
+    @classmethod
+    def _filled(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("Заполните обязательное поле")
+        return text
     email: str = ""
     source: str = "Сайт"
     funnel_target: Funnel = "construction"
@@ -331,6 +339,14 @@ class CrmContact(BaseModel):
 class CrmContactCreate(BaseModel):
     name: str
     company_name: str = ""
+
+    @field_validator("name", "phone")
+    @classmethod
+    def _filled(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("Заполните обязательное поле")
+        return text
     bin_iin: str = ""
     phone: str
     email: str = ""
@@ -362,6 +378,14 @@ class CrmActivityCreate(BaseModel):
     lead_id: str | None = None
     activity_type: ActivityType = "note"
     title: str
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("Укажите название")
+        return text
     description: str = ""
     due_date: str = ""
 
@@ -431,6 +455,14 @@ class DealCreate(BaseModel):
     stage: str = "lead"
     title: str
     amount_kzt: int = 0
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("Укажите название")
+        return text
     client_name: str = ""
     client_phone: str = ""
     plot_id: str | None = None
@@ -545,7 +577,7 @@ class RegisterBody(BaseModel):
     company: str = ""
     company_bin: str = ""
     city: str = "Алматы"
-    role: Literal["buyer", "contractor", "supplier"]
+    role: Literal["buyer", "contractor", "supplier", "owner"]
     pilot: str = ""
     sku_title: str = ""
     sku_category: MaterialCat = "concrete"
@@ -579,6 +611,23 @@ class ConsentRecord(BaseModel):
     country: str = ""
     privacy_version: str = ""
     privacy_sha256: str = ""
+
+
+class VerificationRecord(BaseModel):
+    id: str
+    subject_type: Literal["material", "specialist"]
+    subject_id: str
+    kind: Literal["certification_rk", "license"]
+    granted_by: str
+    granted_at: str
+    note: str = ""
+
+
+class VerificationCreate(BaseModel):
+    subject_type: Literal["material", "specialist"]
+    subject_id: str
+    kind: Literal["certification_rk", "license"]
+    note: str = ""
 
 
 class CrossBorderConsentBody(BaseModel):

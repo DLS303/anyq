@@ -70,6 +70,9 @@ function detailOf(json: unknown, fallback: string) {
   if (json && typeof json === "object" && "detail" in json) {
     const d = (json as { detail: unknown }).detail;
     if (typeof d === "string") return d;
+    if (Array.isArray(d) && d.length && d[0] && typeof d[0] === "object" && "msg" in d[0]) {
+      return String((d[0] as { msg: unknown }).msg);
+    }
   }
   return fallback;
 }
@@ -575,6 +578,19 @@ export function fetchThreads(email: string, signal?: AbortSignal) {
   return request<ChatThread[]>("/v1/chat/threads", { email, signal });
 }
 
+export type ChatPeer = { id: string; full_name: string; role: string };
+
+export function fetchChatPeers(signal?: AbortSignal) {
+  return request<ChatPeer[]>("/v1/chat/peers", { signal });
+}
+
+export function openChatThread(peerId: string, title: string) {
+  return request<ChatThread>("/v1/chat/threads", {
+    method: "POST",
+    body: JSON.stringify({ peer_id: peerId, title }),
+  });
+}
+
 export async function fetchMessages(email: string, tid: string, signal?: AbortSignal) {
   void email;
   const json = await requestEnvelope<ChatMessage[]>(`/v1/chat/threads/${tid}/messages`, { signal });
@@ -600,7 +616,7 @@ export function registerRequest(body: {
   company: string;
   company_bin: string;
   city: string;
-  role: "buyer" | "contractor" | "supplier";
+  role: "buyer" | "contractor" | "supplier" | "owner";
   pilot: string;
   sku_title: string;
   sku_category: string;
@@ -779,6 +795,17 @@ export async function fetchAuthorizedBlob(path: string, signal?: AbortSignal) {
 
 export function grantAiConsent() {
   return request<ConsentRow>("/v1/auth/consents/ai", { method: "POST" });
+}
+
+export function grantCrossBorderConsent(provider: string, country: string) {
+  return request<ConsentRow>("/v1/auth/consents/cross-border", {
+    method: "POST",
+    body: JSON.stringify({ provider, country }),
+  });
+}
+
+export function fetchBootstrap(signal?: AbortSignal) {
+  return request<{ needs_owner: boolean; demo_mode: boolean }>("/v1/auth/bootstrap", { auth: false, signal });
 }
 
 export function revokeConsent(id: string) {

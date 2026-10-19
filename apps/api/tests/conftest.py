@@ -11,6 +11,7 @@ os.environ["ANYQ_DB_PATH"] = str(_root / "db.json")
 os.environ["ANYQ_UPLOADS_DIR"] = str(_root / "uploads")
 os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 os.environ["ANYQ_DEMO_PASSWORD"] = ""
+os.environ["ANYQ_DEMO_MODE"] = "1"
 
 
 @pytest.fixture(autouse=True)

@@ -95,7 +95,7 @@ export const FUNNEL: Record<string, { ru: string; kk: string }> = {
 export const PRODUCT_FUNNELS = ["construction", "design", "materials", "legal"] as const;
 
 export const STAGE: Record<string, { ru: string; kk: string; color?: string }> = {
-  lead: { ru: "Лид / Заявка", kk: "Лид / Өтінім", color: "border-blue-500 bg-blue-50/70 text-blue-900" },
+  lead: { ru: "Лид / Заявка", kk: "Өтінім", color: "border-blue-500 bg-blue-50/70 text-blue-900" },
   audit: { ru: "Аудит АИС ГЗК", kk: "АИС ГЗК аудиті", color: "border-cyan-500 bg-cyan-50/70 text-cyan-900" },
   viewing: { ru: "Осмотр / Выезд", kk: "Қарау / Шығу", color: "border-indigo-500 bg-indigo-50/70 text-indigo-900" },
   negotiation: { ru: "Переговоры", kk: "Келіссөз", color: "border-amber-500 bg-amber-50/70 text-amber-900" },

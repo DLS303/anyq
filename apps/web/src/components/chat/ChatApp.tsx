@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
-import { fetchMessages, fetchThreads, sendChat } from "@/lib/api";
+import { fetchChatPeers, fetchMessages, fetchThreads, openChatThread, sendChat, type ChatPeer } from "@/lib/api";
 import { PageNav, usePaged } from "@/components/ui/PagedList";
 import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
 import type { ChatMessage, Locale } from "@/lib/types";
@@ -16,6 +16,8 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
   const { user } = useAuth();
   const sendLock = useSubmitLock();
   const [text, setText] = useState("");
+  const [sendError, setSendError] = useState("");
+  const [starting, setStarting] = useState(false);
   const [extra, setExtra] = useState<ChatMessage[]>([]);
   const [shown, setShown] = useState(MESSAGE_PAGE);
   const threadsQuery = useAsync(
@@ -23,6 +25,11 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
     [user?.email],
   );
   const threads = threadsQuery.data ?? [];
+  const peersQuery = useAsync(
+    (signal) => (user ? fetchChatPeers(signal) : Promise.resolve([] as ChatPeer[])),
+    [user?.email],
+  );
+  const peers = peersQuery.data ?? [];
   const active = threadId || (typeof window !== "undefined" && window.innerWidth >= 768 ? threads[0]?.id : undefined);
   const messagesQuery = useAsync(
     async (signal) => {
@@ -51,12 +58,32 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
   async function send() {
     if (!user || !active || !text.trim() || sendLock.pending) return;
     const body = text.trim();
+    setSendError("");
     await sendLock.run(async () => {
-      const msg = await sendChat(user.email, active, body);
-      setExtra((cur) => [...cur, msg]);
-      setText("");
-      setShown((count) => Math.max(count, MESSAGE_PAGE));
+      try {
+        const msg = await sendChat(user.email, active, body);
+        setExtra((cur) => [...cur, msg]);
+        setText("");
+        setShown((count) => Math.max(count, MESSAGE_PAGE));
+      } catch (err) {
+        setSendError(err instanceof Error ? err.message : m.chatSendError);
+      }
     });
+  }
+
+  async function start(peer: ChatPeer) {
+    if (!user || starting) return;
+    setStarting(true);
+    setSendError("");
+    try {
+      const thread = await openChatThread(peer.id, peer.full_name);
+      await threadsQuery.reload();
+      window.location.assign(`/${locale}/chat/${thread.id}`);
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : m.chatSendError);
+    } finally {
+      setStarting(false);
+    }
   }
 
   const showList = !threadId;
@@ -83,7 +110,21 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
             ))
           : null}
         {!threadsQuery.loading && threadsQuery.status !== "error" && threads.length === 0 ? (
-          <p className="p-4 text-sm text-ink/50">{m.empty}</p>
+          <div className="grid gap-2 p-4">
+            <p className="text-sm text-ink/70">{m.chatEmpty}</p>
+            {peers.length === 0 ? <p className="text-sm text-ink/50">{m.chatNoPeers}</p> : null}
+            {peers.map((peer) => (
+              <button
+                key={peer.id}
+                type="button"
+                className="min-h-12 rounded-full border border-ink/15 px-3 text-left text-sm"
+                disabled={starting}
+                onClick={() => void start(peer)}
+              >
+                {m.chatStart} · {peer.full_name}
+              </button>
+            ))}
+          </div>
         ) : null}
         <div className="px-3 pb-3">
           <PageNav
@@ -128,6 +169,7 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
             </div>
           ))}
         </div>
+        {sendError ? <p className="px-3 text-sm text-red-700" role="alert">{sendError}</p> : null}
         {active ? (
           <form
             className="flex gap-2 border-t border-ink/10 p-2"
@@ -147,7 +189,7 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
             </button>
           </form>
         ) : (
-          <p className="hidden p-4 text-sm text-ink/50 md:block">Выберите диалог</p>
+          <p className="hidden p-4 text-sm text-ink/50 md:block">{m.chatPick}</p>
         )}
       </section>
     </div>

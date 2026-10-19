@@ -68,6 +68,7 @@ export function useAsync<T>(loader: (signal: AbortSignal) => Promise<T>, deps: r
 export function useGuardedSubmit(success: string, failure: string, onDone: () => void) {
   const lock = useRef(false);
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
   const doneRef = useRef(onDone);
   const successRef = useRef(success);
   const failureRef = useRef(failure);
@@ -79,6 +80,7 @@ export function useGuardedSubmit(success: string, failure: string, onDone: () =>
     if (lock.current) return;
     lock.current = true;
     setSubmitting(true);
+    setError("");
     const key = crypto.randomUUID();
     try {
       const form = await task(key);
@@ -86,14 +88,16 @@ export function useGuardedSubmit(success: string, failure: string, onDone: () =>
       toast(successRef.current);
       doneRef.current();
     } catch (err) {
-      toast(err instanceof Error ? err.message : failureRef.current);
+      const message = err instanceof Error ? err.message : failureRef.current;
+      setError(message);
+      toast(message);
     } finally {
       lock.current = false;
       setSubmitting(false);
     }
   }
 
-  return { submitting, submit };
+  return { submitting, submit, error };
 }
 
 export function useSubmitLock() {

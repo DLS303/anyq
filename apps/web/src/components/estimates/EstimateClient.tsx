@@ -6,37 +6,93 @@ import { useRouter } from "next/navigation";
 import { Calculator, Download, FileSpreadsheet, RefreshCw, Briefcase, CheckCircle2 } from "lucide-react";
 import { calculateEstimate, createDeal } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { features } from "@/lib/features";
 import { money } from "@/lib/format";
 import type { EstimateInput, EstimateResult, Locale } from "@/lib/types";
 
-const REGIONS = [
-  ["almaty", "Алматы"],
-  ["astana", "Астана"],
-  ["shymkent", "Шымкент"],
-  ["west", "Запад РК"],
-  ["north", "Север/центр"],
-  ["other", "Другой регион"],
-] as const;
-
-const HOUSE_TYPES = [
-  ["gasblock", "Газоблок"],
-  ["brick", "Кирпич"],
-  ["monolith", "Монолит"],
-  ["frame", "Каркас"],
-  ["sip", "СИП"],
-] as const;
-
-const FINISH = [
-  ["shell", "Черновой"],
-  ["prefinish", "Предчистовой"],
-  ["turnkey", "Чистовой"],
-] as const;
-
-const UTILITY = [
-  ["connected", "Подключено"],
-  ["nearby", "Рядом"],
-  ["absent", "Нет"],
-] as const;
+function estCopy(locale: Locale) {
+  const kk = locale === "kk";
+  return {
+    kicker: kk ? "Алдын ала смета · коэффициент" : "Предварительный бюджет · коэффициенты",
+    title: kk ? "Алдын ала смета" : "Предварительный бюджет",
+    lead: kk
+      ? "Үй, жер телімі және сыртқы желілер бойынша алдын ала қаржы. Есеп коэффициентпен жүреді, нормативтік база емес."
+      : "Предварительный бюджет по дому, участку и наружным сетям. Расчёт по коэффициентам, без нормативной базы.",
+    region: kk ? "Өңір" : "Регион",
+    area: kk ? "Аудан" : "Площадь",
+    baseDate: kk ? "База күні" : "Дата базы",
+    params: kk ? "Параметрлер" : "Параметры",
+    construct: kk ? "Құрылым" : "Конструктив",
+    finish: kk ? "Дайындық" : "Готовность",
+    areaM2: kk ? "Аудан, м2" : "Площадь, м2",
+    floors: kk ? "Қабат" : "Этажи",
+    relief: kk ? "Бедер" : "Рельеф",
+    flat: kk ? "Тегіс" : "Ровный",
+    slope: kk ? "Еңіс" : "Уклон",
+    steep: kk ? "Қия" : "Склон",
+    seismic: kk ? "9 балдық сейсмика" : "9-бальная сейсмика",
+    basement: kk ? "Жертөле" : "Подвал/цоколь",
+    vat: kk ? "ҚҚС 16%" : "С НДС 16%",
+    networks: kk ? "Жер телімінің желілері" : "Сети участка",
+    electricity: kk ? "Электр" : "Электричество",
+    water: kk ? "Су" : "Вода",
+    sewage: kk ? "Кәріз" : "Канализация",
+    gas: kk ? "Газ желісі" : "Газ",
+    road: kk ? "Кіреберіс" : "Подъезд",
+    connected: kk ? "Қосылған" : "Подключено",
+    nearby: kk ? "Жақын" : "Рядом",
+    absent: kk ? "Жоқ" : "Нет",
+    overhead: kk ? "Үстеме %" : "Накл. %",
+    risk: kk ? "Тәуекел %" : "Риск %",
+    profit: kk ? "Пайда %" : "Приб. %",
+    calc: kk ? "Есептеу" : "Посчитать",
+    reset: kk ? "Тазалау" : "Сбросить",
+    demoHouse: kk ? "Демо-үйді есептеу" : "Посчитать демо-дом",
+    emptyTitle: kk ? "Параметрлерді толтырыңыз" : "Заполните параметры",
+    emptyLead: kk
+      ? "Құрылымды, ауданды және желілерді көрсетіңіз. Нәтиже коэффициентпен шығады."
+      : "Задайте конструктив, метраж и сети. Итог считается по коэффициентам.",
+    total: kk ? "Коэффициентпен жиыны" : "Итого с коэффициентами",
+    range: kk ? "аралық" : "вилка",
+    deal: kk ? "Келісім жасау" : "Создать сделку",
+    csv: kk ? "CSV жүктеу" : "Скачать CSV",
+    direct: kk ? "Тікелей" : "Прямые",
+    overheadSum: kk ? "Үстеме" : "Накладные",
+    riskSum: kk ? "Тәуекел" : "Риск",
+    profitSum: kk ? "Пайда" : "Прибыль",
+    vatSum: kk ? "ҚҚС" : "НДС",
+    sheet: kk ? "Жұмыс пен ресурс тізімі" : "Ведомость работ и ресурсов",
+    code: kk ? "Шифр" : "Код",
+    pos: kk ? "Тармақ" : "Позиция",
+    qty: kk ? "Саны" : "Кол-во",
+    price: kk ? "Баға" : "Цена",
+    sum: kk ? "Сома" : "Сумма",
+    volumes: kk ? "Көлемдер" : "Объёмы",
+    checks: kk ? "Тексерулер" : "Проверки",
+    fail: kk ? "Смета есептелмеді" : "Не удалось посчитать смету",
+    needLogin: kk ? "Алдымен кіріңіз" : "Сначала войдите",
+    regions: [
+      ["almaty", "Алматы"],
+      ["astana", "Астана"],
+      ["shymkent", "Шымкент"],
+      ["west", kk ? "Батыс" : "Запад РК"],
+      ["north", kk ? "Солтүстік" : "Север/центр"],
+      ["other", kk ? "Басқа өңір" : "Другой регион"],
+    ] as const,
+    houses: [
+      ["gasblock", kk ? "Газблок" : "Газоблок"],
+      ["brick", kk ? "Кірпіш" : "Кирпич"],
+      ["monolith", kk ? "Монолитті" : "Монолит"],
+      ["frame", kk ? "Қаңқа" : "Каркас"],
+      ["sip", "СИП"],
+    ] as const,
+    finishes: [
+      ["shell", kk ? "Қаралай" : "Черновой"],
+      ["prefinish", kk ? "Алдын ала әрлеу" : "Предчистовой"],
+      ["turnkey", kk ? "Таза әрлеу" : "Чистовой"],
+    ] as const,
+  };
+}
 
 const DEFAULT_INPUT: EstimateInput = {
   region: "almaty",
@@ -63,6 +119,7 @@ const DEFAULT_INPUT: EstimateInput = {
 export function EstimateClient({ locale, embedded = false }: { locale: Locale; embedded?: boolean }) {
   const router = useRouter();
   const { user } = useAuth();
+  const L = estCopy(locale);
   const [form, setForm] = useState<EstimateInput>(DEFAULT_INPUT);
   const [result, setResult] = useState<EstimateResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -75,7 +132,7 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
       if (!user) {
         window.dispatchEvent(
           new CustomEvent("anyq-toast", {
-            detail: { message: "Сначала зарегистрируйте компанию для пилота Engicon" },
+            detail: { message: L.needLogin },
           }),
         );
         router.push(`/${locale}/login?mode=register`);
@@ -116,7 +173,7 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
     try {
       setResult(await calculateEstimate(form));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Не удалось посчитать смету");
+      setError(e instanceof Error ? e.message : L.fail);
     } finally {
       setBusy(false);
     }
@@ -151,21 +208,18 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
     <div className="grid gap-8">
       <section className="grid gap-6 lg:grid-cols-[0.92fr_1.08fr]">
         <div className="min-w-0">
-          <p className="text-[11px] uppercase tracking-[0.16em] text-ink/45">BOQ · рынок РК · ИЖС</p>
+          <p className="text-[11px] uppercase tracking-[0.16em] text-ink/45">{L.kicker}</p>
           {embedded ? (
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">Сметы</h2>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{L.title}</h2>
           ) : (
-            <h1 className="mt-2 text-4xl font-medium tracking-tight">Автосмета для строителей</h1>
+            <h1 className="mt-2 text-4xl font-medium tracking-tight">{L.title}</h1>
           )}
-          <p className="mt-3 max-w-2xl text-[15px] leading-6 text-ink/60">
-            Предварительный бюджет по дому, участку и наружным сетям: объемы, работы, материалы, накладные,
-            прибыль, риск и НДС 16%.
-          </p>
+          <p className="mt-3 max-w-2xl text-[15px] leading-6 text-ink/60">{L.lead}</p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Kpi label="Регион" value={REGIONS.find(([id]) => id === form.region)?.[1] || "РК"} />
-          <Kpi label="Площадь" value={`${form.area_m2} м2`} />
-          <Kpi label="Дата базы" value="09.2026" />
+        <div className={`grid gap-3 ${features.estimateBaseDate ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+          <Kpi label={L.region} value={L.regions.find(([id]) => id === form.region)?.[1] || "РК"} />
+          <Kpi label={L.area} value={`${form.area_m2} м2`} />
+          {features.estimateBaseDate ? <Kpi label={L.baseDate} value="09.2026" /> : null}
         </div>
       </section>
 
@@ -179,12 +233,12 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
         >
           <div className="mb-5 flex items-center gap-2">
             <Calculator className="h-5 w-5 text-pine" />
-            <h2 className="text-lg font-medium">Параметры</h2>
+            <h2 className="text-lg font-medium">{L.params}</h2>
           </div>
 
-          <Field label="Регион">
+          <Field label={L.region}>
             <select value={form.region} onChange={(e) => patch({ region: e.target.value as EstimateInput["region"] })} className="w-full border border-ink/15 px-3 py-2 text-sm">
-              {REGIONS.map(([id, label]) => (
+              {L.regions.map(([id, label]) => (
                 <option key={id} value={id}>
                   {label}
                 </option>
@@ -192,9 +246,9 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
             </select>
           </Field>
 
-          <Field label="Конструктив">
+          <Field label={L.construct}>
             <select value={form.house_type} onChange={(e) => patch({ house_type: e.target.value as EstimateInput["house_type"] })} className="w-full border border-ink/15 px-3 py-2 text-sm">
-              {HOUSE_TYPES.map(([id, label]) => (
+              {L.houses.map(([id, label]) => (
                 <option key={id} value={id}>
                   {label}
                 </option>
@@ -202,9 +256,9 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
             </select>
           </Field>
 
-          <Field label="Готовность">
+          <Field label={L.finish}>
             <select value={form.finish_level} onChange={(e) => patch({ finish_level: e.target.value as EstimateInput["finish_level"] })} className="w-full border border-ink/15 px-3 py-2 text-sm">
-              {FINISH.map(([id, label]) => (
+              {L.finishes.map(([id, label]) => (
                 <option key={id} value={id}>
                   {label}
                 </option>
@@ -213,19 +267,19 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
           </Field>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Площадь, м2">
+            <Field label={L.areaM2}>
               <input type="number" min={35} max={1200} value={form.area_m2} onChange={(e) => patch({ area_m2: Number(e.target.value) })} className="w-full border border-ink/15 px-3 py-2 text-sm" />
             </Field>
-            <Field label="Этажи">
+            <Field label={L.floors}>
               <input type="number" min={1} max={4} value={form.floors} onChange={(e) => patch({ floors: Number(e.target.value) })} className="w-full border border-ink/15 px-3 py-2 text-sm" />
             </Field>
           </div>
 
-          <Field label="Рельеф">
+          <Field label={L.relief}>
             <div className="grid grid-cols-3 gap-1">
               {(["flat", "slope", "steep"] as const).map((id) => (
                 <button key={id} type="button" onClick={() => patch({ relief: id })} className={`border px-2 py-2 text-xs ${form.relief === id ? "border-pine bg-pine text-paper" : "border-ink/15 bg-white/25"}`}>
-                  {id === "flat" ? "Ровный" : id === "slope" ? "Уклон" : "Склон"}
+                  {id === "flat" ? L.flat : id === "slope" ? L.slope : L.steep}
                 </button>
               ))}
             </div>
@@ -233,33 +287,37 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
 
           <div className="grid gap-2 py-3 text-sm">
             <label className="flex items-center justify-between gap-3">
-              <span>9-бальная сейсмика</span>
+              <span>{L.seismic}</span>
               <input type="checkbox" checked={form.seismic} onChange={(e) => patch({ seismic: e.target.checked })} />
             </label>
             <label className="flex items-center justify-between gap-3">
-              <span>Подвал/цоколь</span>
+              <span>{L.basement}</span>
               <input type="checkbox" checked={form.basement} onChange={(e) => patch({ basement: e.target.checked })} />
             </label>
             <label className="flex items-center justify-between gap-3">
-              <span>С НДС 16%</span>
+              <span>{L.vat}</span>
               <input type="checkbox" checked={form.include_vat} onChange={(e) => patch({ include_vat: e.target.checked })} />
             </label>
           </div>
 
           <div className="mt-4 grid gap-3 border-t border-ink/10 pt-4">
-            <p className="text-[11px] uppercase tracking-[0.14em] text-ink/45">Сети участка</p>
+            <p className="text-[11px] uppercase tracking-[0.14em] text-ink/45">{L.networks}</p>
             {(
               [
-                ["electricity", "Электричество"],
-                ["water", "Вода"],
-                ["sewage", "Канализация"],
-                ["gas", "Газ"],
-                ["road", "Подъезд"],
+                ["electricity", L.electricity],
+                ["water", L.water],
+                ["sewage", L.sewage],
+                ["gas", L.gas],
+                ["road", L.road],
               ] as const
             ).map(([key, label]) => (
               <Field key={key} label={label}>
                 <select value={form.utilities[key]} onChange={(e) => patchUtility(key, e.target.value as "connected" | "nearby" | "absent")} className="w-full border border-ink/15 px-3 py-2 text-sm">
-                  {UTILITY.map(([id, title]) => (
+                  {([
+                    ["connected", L.connected],
+                    ["nearby", L.nearby],
+                    ["absent", L.absent],
+                  ] as const).map(([id, title]) => (
                     <option key={id} value={id}>
                       {title}
                     </option>
@@ -270,13 +328,13 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
           </div>
 
           <div className="mt-4 grid grid-cols-3 gap-2 border-t border-ink/10 pt-4">
-            <Field label="Накл. %">
+            <Field label={L.overhead}>
               <input type="number" min={0} max={30} value={form.overhead_pct} onChange={(e) => patch({ overhead_pct: Number(e.target.value) })} className="w-full border border-ink/15 px-2 py-2 text-sm" />
             </Field>
-            <Field label="Риск %">
+            <Field label={L.risk}>
               <input type="number" min={0} max={25} value={form.contingency_pct} onChange={(e) => patch({ contingency_pct: Number(e.target.value) })} className="w-full border border-ink/15 px-2 py-2 text-sm" />
             </Field>
-            <Field label="Приб. %">
+            <Field label={L.profit}>
               <input type="number" min={0} max={30} value={form.profit_pct} onChange={(e) => patch({ profit_pct: Number(e.target.value) })} className="w-full border border-ink/15 px-2 py-2 text-sm" />
             </Field>
           </div>
@@ -286,9 +344,9 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
           <div className="mt-5 flex gap-2">
             <button type="submit" className="btn-ice inline-flex flex-1 items-center justify-center gap-2 text-sm" disabled={busy}>
               {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
-              Посчитать
+              {L.calc}
             </button>
-            <button type="button" onClick={() => setForm(DEFAULT_INPUT)} className="btn-ghost inline-flex items-center justify-center px-3" title="Сбросить">
+            <button type="button" onClick={() => setForm(DEFAULT_INPUT)} className="btn-ghost inline-flex items-center justify-center px-3" title={L.reset}>
               <RefreshCw className="h-4 w-4" />
             </button>
           </div>
@@ -296,15 +354,15 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
 
         <div className="min-w-0">
           {!result ? (
-            <EmptyState onCalculate={submit} busy={busy} />
+            <EmptyState onCalculate={submit} busy={busy} title={L.emptyTitle} lead={L.emptyLead} demoLabel={L.demoHouse} showDemo={features.demoHouse} />
           ) : (
             <div className="grid gap-5">
               <div className="glass-strong rounded-frost p-5">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <p className="text-[11px] uppercase tracking-[0.14em] text-ink/45">Итого с коэффициентами</p>
+                    <p className="text-[11px] uppercase tracking-[0.14em] text-ink/45">{L.total}</p>
                     <p className="mt-1 text-4xl font-semibold tracking-tight text-pine">{money(result.summary.total_kzt, locale)}</p>
-                    <p className="mt-1 text-sm text-ink/55">{money(result.summary.per_m2_kzt, locale)} / м2 · вилка {money(result.summary.low_kzt, locale)} - {money(result.summary.high_kzt, locale)}</p>
+                    <p className="mt-1 text-sm text-ink/55">{money(result.summary.per_m2_kzt, locale)} / м2 · {L.range} {money(result.summary.low_kzt, locale)} - {money(result.summary.high_kzt, locale)}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <button
@@ -313,20 +371,20 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
                       className="btn-ice inline-flex items-center gap-2 text-xs font-semibold !py-2 !px-4 shadow-navy"
                     >
                       <Briefcase className="h-4 w-4 text-amber-300" />
-                      <span>{dealCreated ? `В CRM (Сделка #${dealCreated})` : "Создать сделку в CRM"}</span>
+                      <span>{dealCreated ? `${L.deal} #${dealCreated}` : L.deal}</span>
                     </button>
                     <button type="button" onClick={downloadCsv} className="btn-ghost inline-flex items-center gap-2 text-xs font-semibold !py-2 !px-4">
                       <Download className="h-4 w-4" />
-                      Скачать CSV
+                      {L.csv}
                     </button>
                   </div>
                 </div>
                 <div className="mt-5 grid gap-3 sm:grid-cols-5">
-                  <Kpi label="Прямые" value={money(result.summary.direct_kzt, locale)} />
-                  <Kpi label="Накладные" value={money(result.summary.overhead_kzt, locale)} />
-                  <Kpi label="Риск" value={money(result.summary.contingency_kzt, locale)} />
-                  <Kpi label="Прибыль" value={money(result.summary.profit_kzt, locale)} />
-                  <Kpi label="НДС" value={money(result.summary.vat_kzt, locale)} />
+                  <Kpi label={L.direct} value={money(result.summary.direct_kzt, locale)} />
+                  <Kpi label={L.overheadSum} value={money(result.summary.overhead_kzt, locale)} />
+                  <Kpi label={L.riskSum} value={money(result.summary.contingency_kzt, locale)} />
+                  <Kpi label={L.profitSum} value={money(result.summary.profit_kzt, locale)} />
+                  <Kpi label={L.vatSum} value={money(result.summary.vat_kzt, locale)} />
                 </div>
               </div>
 
@@ -334,17 +392,17 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
                 <div className="glass rounded-frost p-4">
                   <div className="mb-3 flex items-center gap-2">
                     <FileSpreadsheet className="h-5 w-5 text-pine" />
-                    <h2 className="font-medium">Ведомость работ и ресурсов</h2>
+                    <h2 className="font-medium">{L.sheet}</h2>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[760px] text-left text-sm">
                       <thead className="border-b border-ink/10 text-[11px] uppercase tracking-[0.12em] text-ink/45">
                         <tr>
-                          <th className="py-2 pr-3">Код</th>
-                          <th className="py-2 pr-3">Позиция</th>
-                          <th className="py-2 pr-3">Кол-во</th>
-                          <th className="py-2 pr-3">Цена</th>
-                          <th className="py-2 text-right">Сумма</th>
+                          <th className="py-2 pr-3">{L.code}</th>
+                          <th className="py-2 pr-3">{L.pos}</th>
+                          <th className="py-2 pr-3">{L.qty}</th>
+                          <th className="py-2 pr-3">{L.price}</th>
+                          <th className="py-2 text-right">{L.sum}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -376,7 +434,7 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
 
                 <aside className="grid h-fit gap-4">
                   <div className="glass rounded-frost p-4">
-                    <p className="text-[11px] uppercase tracking-[0.14em] text-ink/45">Объемы</p>
+                    <p className="text-[11px] uppercase tracking-[0.14em] text-ink/45">{L.volumes}</p>
                     <div className="mt-3 grid gap-2 text-sm">
                       {Object.entries(result.quantities).map(([key, value]) => (
                         <div key={key} className="flex justify-between gap-3 border-b border-ink/10 pb-1">
@@ -387,7 +445,7 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
                     </div>
                   </div>
                   <div className="glass rounded-frost p-4">
-                    <p className="text-[11px] uppercase tracking-[0.14em] text-ink/45">Проверки</p>
+                    <p className="text-[11px] uppercase tracking-[0.14em] text-ink/45">{L.checks}</p>
                     <ul className="mt-3 grid gap-2 text-sm text-ink/65">
                       {result.warnings.map((warning) => (
                         <li key={warning}>{warning}</li>
@@ -422,21 +480,35 @@ function Kpi({ label, value }: { label: string; value: string }) {
   );
 }
 
-function EmptyState({ onCalculate, busy }: { onCalculate: () => void; busy: boolean }) {
+function EmptyState({
+  onCalculate,
+  busy,
+  title,
+  lead,
+  demoLabel,
+  showDemo,
+}: {
+  onCalculate: () => void;
+  busy: boolean;
+  title: string;
+  lead: string;
+  demoLabel: string;
+  showDemo: boolean;
+}) {
   return (
     <div className="glass-strong grid min-h-[520px] place-items-center rounded-frost p-8 text-center">
       <div className="max-w-md">
         <div className="mx-auto grid h-14 w-14 place-items-center rounded-full border border-pine/20 text-pine">
           <Calculator className="h-6 w-6" />
         </div>
-        <h2 className="mt-4 text-2xl font-medium">Соберем смету за пару секунд</h2>
-        <p className="mt-2 text-sm leading-6 text-ink/55">
-          Задайте конструктив, метраж и статус сетей. ANYQ рассчитает BOQ, покажет вилку бюджета и даст CSV для ПТО или КП подрядчика.
-        </p>
-        <button type="button" onClick={onCalculate} className="btn-ice mt-5 inline-flex items-center gap-2 text-sm" disabled={busy}>
-          {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
-          Посчитать демо-дом
-        </button>
+        <h2 className="mt-4 text-2xl font-medium">{title}</h2>
+        <p className="mt-2 text-sm leading-6 text-ink/55">{lead}</p>
+        {showDemo ? (
+          <button type="button" onClick={onCalculate} className="btn-ice mt-5 inline-flex items-center gap-2 text-sm" disabled={busy}>
+            {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
+            {demoLabel}
+          </button>
+        ) : null}
       </div>
     </div>
   );

@@ -255,6 +255,12 @@ export function SiteStage({ locale }: { locale: Locale }) {
     let stop = false;
     async function pull() {
       if (document.hidden) return;
+      if (!localStorage.getItem("superapp_token")) {
+        setSnaps([]);
+        setSelected(null);
+        setLoadState("ready");
+        return;
+      }
       try {
         const rows = (await fetchProjects()) as unknown as SiteSnap[];
         if (stop) return;

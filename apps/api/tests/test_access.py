@@ -29,8 +29,8 @@ def _register(email: str, consent: bool = True, bin_no: str = "123456789012"):
     )
 
 
-def _token(email: str) -> str:
-    res = _register(email)
+def _token(email: str, bin_no: str = "123456789012") -> str:
+    res = _register(email, bin_no=bin_no)
     assert res.status_code == 200, res.text
     return res.json()["data"]["token"]
 
@@ -190,8 +190,8 @@ def test_login_without_consent_is_rejected():
 
 
 def test_crm_ownership():
-    owner = _token("crm-owner@example.com")
-    other = _token("crm-other@example.com")
+    owner = _token("crm-owner@example.com", "111111111111")
+    other = _token("crm-other@example.com", "222222222222")
     created = client.post(
         "/v1/crm/deals",
         json={"title": "Private deal", "amount_kzt": 1500, "client_name": "Owner"},
