@@ -268,11 +268,15 @@ def test_ready_503_when_database_is_down(monkeypatch):
 
 
 def test_probe_uses_private_engine_with_two_second_timeout(monkeypatch):
+    from sqlalchemy.engine import make_url
+
     engine = health_router._probe_engine
     assert engine.pool.__class__ is health_router.NullPool
     params = inspect.getclosurevars(engine.pool._creator).nonlocals["cparams"]
-    assert params["timeout"] == 2
-    assert str(engine.url) == store._sql.url
+    expected = health_router._probe_connect_args(store._sql.url)
+    for key, value in expected.items():
+        assert params[key] == value
+    assert engine.url == make_url(store._sql.url)
 
     def fail_create(*_args, **_kwargs):
         raise AssertionError("probe engine is created per request")
@@ -328,6 +332,13 @@ def test_dev_docs_remain_available():
 def test_production_docs_return_404(tmp_path):
     code = """
 import os
+from sqlalchemy import create_engine
+from app.sql_backend import Base, resolve_database_url
+
+engine = create_engine(resolve_database_url())
+Base.metadata.create_all(engine)
+engine.dispose()
+
 from fastapi.testclient import TestClient
 from app.main import app
 
