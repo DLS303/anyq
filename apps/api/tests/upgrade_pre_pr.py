@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 
 def _user(doc_id: str, email: str, bin_no: str, company: str) -> dict:
@@ -253,7 +254,11 @@ def _assert_api() -> None:
     assert bundle.json()["data"]["features"]["rfi"] is True
     created = client.post(
         "/v1/site/projects/prj-legacy/rfis",
-        json={"title": "Door swing", "question": "Which way does it open?"},
+        json={
+            "id": str(uuid4()),
+            "title": "Door swing",
+            "question": "Which way does it open?",
+        },
         headers=auth,
     )
     assert created.status_code == 200, created.text
