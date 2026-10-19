@@ -165,13 +165,9 @@ CHECK_RESULTS = {"pass", "fail", "na"}
 
 
 def company_key(user: User) -> str:
-    bin_no = re.sub(r"\D", "", user.company_bin or "")
-    if len(bin_no) == 12:
-        return f"bin:{bin_no}"
-    name = re.sub(r"\s+", " ", (user.company or "").strip().casefold())
-    if name:
-        return f"name:{name}"
-    return f"user:{user.id}"
+    from app.tenant import company_key as stored_company_key
+
+    return stored_company_key(user)
 
 
 def _role(value: object) -> str:
@@ -735,9 +731,15 @@ class MemoryStore:
             "files": [x.model_dump() for x in self.files.values()],
             "consents": [x.model_dump() for x in self.consents],
             "verifications": [x.model_dump() for x in self.verifications.values()],
+            "company_features": self._feature_export(),
             **dump_lists(self),
             **dump_budget(self),
         }
+
+    def _feature_export(self) -> list[dict]:
+        from app.company_features import export_features
+
+        return export_features()
 
     def get_user_by_email(self, email: str) -> User | None:
         key = email.lower().strip()
@@ -1155,9 +1157,7 @@ class MemoryStore:
             return False
         left = company_key(user)
         right = company_key(other)
-        if left.startswith("user:") or right.startswith("user:"):
-            return False
-        return left == right
+        return bool(left) and left == right
 
     def get_specialist(self, sid: str) -> Specialist | None:
         if sid in self.specialists:
@@ -2238,6 +2238,14 @@ class MemoryStore:
             if self.get_user_by_email(email):
                 raise ValueError("Такой email уже зарегистрирован")
             uid = f"u-{uuid4().hex[:8]}"
+            from app.tenant import assign_company_key
+
+            taken = {
+                item.company_key
+                for item in self.users_by_id.values()
+                if (item.company_key or "").startswith("bin:")
+            }
+            key, review = assign_company_key(uid, bin_no, taken)
             user = User(
                 id=uid,
                 email=email,
@@ -2246,6 +2254,8 @@ class MemoryStore:
                 phone=phone,
                 company=company,
                 company_bin=bin_no,
+                company_key=key,
+                company_review=review,
                 city=body.city.strip() or "Алматы",
                 pilot=pilot,
             )
@@ -2554,7 +2564,7 @@ class MemoryStore:
             return [project for project in self.projects.values() if self.is_assigned_supervisor(user, project)]
         return [project for project in self.projects.values() if self.can_access_project(user, project)]
 
-    def project_snapshot(self, pid: str) -> dict | None:
+    def project_snapshot(self, pid: str, flags: dict | None = None) -> dict | None:
         p = self.get_project(pid)
         if not p:
             return None
@@ -2566,6 +2576,24 @@ class MemoryStore:
         open_punch = sum(1 for x in self.punches.values() if x.project_id == p.id and x.status == "open")
         open_inc = sum(1 for x in self.incidents.values() if x.project_id == p.id and not x.closed)
         fail_insp = sum(1 for x in self.inspections.values() if x.project_id == p.id and x.result == "fail")
+        rfi_count = sum(1 for x in self.rfis.values() if x.project_id == p.id)
+        insp_count = sum(1 for x in self.inspections.values() if x.project_id == p.id)
+        drawing_count = sum(1 for x in self.drawings.values() if x.project_id == p.id and x.current)
+        from app.config import demo_mode
+
+        if not demo_mode():
+            if flags is None:
+                from app.company_features import flag_map, project_company_id
+
+                flags = flag_map(project_company_id(p))
+            if not flags.get("rfi"):
+                open_rfi = 0
+                rfi_count = 0
+            if not flags.get("checklists"):
+                fail_insp = 0
+                insp_count = 0
+            if not flags.get("drawings"):
+                drawing_count = 0
         health = "green"
         over_budget = isinstance(budget, int) and budget > 0 and actual > budget * 0.85
         if open_inc or fail_insp:
@@ -2584,10 +2612,10 @@ class MemoryStore:
             "fail_inspections": fail_insp,
             "counts": {
                 "daily": sum(1 for x in self.daily_logs.values() if x.project_id == p.id),
-                "rfi": sum(1 for x in self.rfis.values() if x.project_id == p.id),
+                "rfi": rfi_count,
                 "punch": sum(1 for x in self.punches.values() if x.project_id == p.id),
-                "inspections": sum(1 for x in self.inspections.values() if x.project_id == p.id),
-                "drawings": sum(1 for x in self.drawings.values() if x.project_id == p.id and x.current),
+                "inspections": insp_count,
+                "drawings": drawing_count,
             },
         }
 
@@ -2930,6 +2958,9 @@ class MemoryStore:
             raise ValueError("Укажите телефон")
         password_hash = hash_password(password)
         uid = f"u-{uuid4().hex[:8]}"
+        inherited = str(getattr(row, "company_key", "") or "").strip()
+        if not inherited.startswith(("bin:", "user:")):
+            inherited = f"user:{uid}"
         user = User(
             id=uid,
             email=normalized,
@@ -2938,6 +2969,7 @@ class MemoryStore:
             phone=phone_text,
             company=row.company or "",
             company_bin=row.company_bin or "",
+            company_key=inherited,
             city="Алматы",
         )
         privacy = privacy_document()

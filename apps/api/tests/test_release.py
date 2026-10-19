@@ -169,7 +169,13 @@ def test_buyer_cannot_see_owner_deals_and_companies_stay_apart():
     assert created.status_code == 200, created.text
     deal_id = created.json()["data"]["id"]
     assert client.get(f"/v1/crm/deals/{deal_id}", headers=_auth(company_b)).status_code == 403
-    assert client.get(f"/v1/crm/deals/{deal_id}", headers=_auth(mate)).status_code == 200
+    mate_user = store.get_user_by_email("scope-a-mate@example.com")
+    first_user = store.get_user_by_email("scope-a@example.com")
+    assert mate_user is not None and first_user is not None
+    assert mate_user.company_key.startswith("user:")
+    assert mate_user.company_key != first_user.company_key
+    assert mate_user.company_review is True
+    assert client.get(f"/v1/crm/deals/{deal_id}", headers=_auth(mate)).status_code == 403
     listed = client.get("/v1/crm/deals", headers=_auth(company_b))
     assert all(row["id"] != deal_id for row in listed.json()["data"])
 

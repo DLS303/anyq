@@ -51,6 +51,8 @@ class User(BaseModel):
     phone: str = ""
     company: str = ""
     company_bin: str = ""
+    company_key: str = ""
+    company_review: bool = False
     city: str = ""
     pilot: str = ""
 
