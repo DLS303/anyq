@@ -492,6 +492,104 @@ export type ProcDocumentRow = {
   is_actual: boolean;
 };
 
+export type BudgetCategory = "materials" | "works" | "equipment" | "other";
+
+export type SavingsOffer = {
+  offer_id: string;
+  supplier: string;
+  price_kzt: number;
+  vat_included: boolean | null;
+  source_doc_id: string | null;
+  source_label: string;
+};
+
+export type SavingsLine = {
+  line_id: string;
+  pos_no: string;
+  title: string;
+  unit: string;
+  qty: number;
+  included: boolean;
+  reason: string;
+  not_cheapest: boolean;
+  selected: SavingsOffer | null;
+  second: SavingsOffer | null;
+  saving_kzt: number;
+  base_kzt: number;
+};
+
+export type Overprice = {
+  offer_id: string;
+  line_id: string;
+  title: string;
+  unit: string;
+  supplier: string;
+  per_unit: number;
+  total: number;
+  total_kzt: number;
+  pct: number;
+};
+
+export type ProcSavings = {
+  savings_kzt: number;
+  base_kzt: number;
+  savings_pct: number;
+  lines: SavingsLine[];
+  overprice: Overprice[];
+  duplicates: { id: string; duplicate_of: string | null; supplier_name: string; doc_number: string }[];
+  inactive: { id: string }[];
+  last_offer_date: string;
+};
+
+export type SavingsTotal = {
+  savings_kzt: number;
+  base_kzt: number;
+  savings_pct: number;
+  requests: number;
+};
+
+export type ObjectExpenseRow = {
+  id: string;
+  amount_kzt: number;
+  category: BudgetCategory;
+  note: string;
+  has_photo: boolean;
+  created_at: string;
+};
+
+export type ObjectBudgetView = {
+  plan: {
+    set: boolean;
+    total_kzt: number;
+    materials_kzt: number | null;
+    works_kzt: number | null;
+    equipment_kzt: number | null;
+    other_kzt: number | null;
+  };
+  fact_kzt: number;
+  fact_by_category: Record<BudgetCategory, number>;
+  procurement_kzt: number;
+  manual_kzt: number;
+  remaining_kzt: number | null;
+  used_pct: number | null;
+  signal: "green" | "yellow" | "red";
+  elapsed_share: number | null;
+  elapsed_days: number | null;
+  span_days: number | null;
+  schedule_start: string;
+  schedule_finish: string;
+  forecast_kzt: number | null;
+  forecast_raw_kzt: number | null;
+  forecast_bound_kzt: number | null;
+  forecast_reason: "no_dates" | "early" | "actual" | "above_bound" | "ok";
+  overrun_kzt: number;
+  overrun_kind: "actual" | "forecast" | "none";
+  savings: SavingsTotal;
+  company: SavingsTotal & { name: string };
+  expenses: ObjectExpenseRow[];
+  can_edit: boolean;
+};
+
 export type ProcSheet = {
   request: {
     id: string;
