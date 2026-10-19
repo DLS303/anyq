@@ -60,8 +60,8 @@ def _promote(email: str, role: str = "owner"):
     return updated
 
 
-def _jpeg(artist: str = "") -> bytes:
-    image = Image.new("RGB", (24, 16), "red")
+def _jpeg(artist: str = "", color: str = "red") -> bytes:
+    image = Image.new("RGB", (24, 16), color)
     buffer = io.BytesIO()
     if artist:
         exif = image.getexif()
@@ -378,6 +378,69 @@ def test_client_uuid_company_and_tombstone(monkeypatch):
     assert missing.status_code == 404
 
 
+def test_reused_file_id_does_not_change_stored_bytes(monkeypatch):
+    owner, foreign, pid = _world(monkeypatch, 610000000901)
+    item = _create(owner["token"], pid)
+    file_id = str(uuid4())
+    first = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/photos",
+        data={"phase": "before", "row_version": str(item["row_version"]), "id": str(uuid4()), "file_id": file_id},
+        files={"file": ("shot.jpg", _jpeg(color="red"), "image/jpeg")},
+        headers=_auth(owner["token"]),
+    )
+    assert first.status_code == 200, first.text
+    original = client.get(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/files/{file_id}",
+        headers=_auth(owner["token"]),
+    )
+    assert original.status_code == 200
+    saved = original.content
+
+    _promote("punch-other-610000000901@example.com", "owner")
+    _enable(foreign["token"])
+    other_pid = _project(foreign["token"], "Other yard 901")
+    other_item = _create(foreign["token"], other_pid)
+    foreign_upload = client.post(
+        f"/v1/site/projects/{other_pid}/punch-items/{other_item['id']}/photos",
+        data={
+            "phase": "before",
+            "row_version": str(other_item["row_version"]),
+            "id": str(uuid4()),
+            "file_id": file_id,
+        },
+        files={"file": ("other.jpg", _jpeg(color="blue"), "image/jpeg")},
+        headers=_auth(foreign["token"]),
+    )
+    assert foreign_upload.status_code == 409, foreign_upload.text
+
+    same = _create(owner["token"], pid, title="Second crack")
+    again = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{same['id']}/photos",
+        data={"phase": "before", "row_version": str(same["row_version"]), "id": str(uuid4()), "file_id": file_id},
+        files={"file": ("again.jpg", _jpeg(color="green"), "image/jpeg")},
+        headers=_auth(owner["token"]),
+    )
+    assert again.status_code == 409, again.text
+    reread = client.get(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/files/{file_id}",
+        headers=_auth(owner["token"]),
+    )
+    assert reread.status_code == 200
+    assert reread.content == saved
+
+    from app.punch_photos import FileRow, PunchItemRow
+
+    with store._sql.factory() as session:
+        row = session.get(FileRow, file_id)
+        punch = session.get(PunchItemRow, item["id"])
+        assert row is not None and punch is not None
+        assert file_id not in (row.storage_key or "")
+        assert row.created_by == owner["user"]["id"]
+        assert row.updated_by == owner["user"]["id"]
+        assert punch.created_by == owner["user"]["id"]
+        assert punch.updated_by == owner["user"]["id"]
+
+
 def test_alembic_upgrade_downgrade_upgrade(tmp_path):
     db = tmp_path / "punch.sqlite"
     env = os.environ.copy()
@@ -401,5 +464,9 @@ def test_alembic_upgrade_downgrade_upgrade(tmp_path):
     assert "ix_punch_items_project_status_due" in indexes
     assert "ix_punch_items_assignee_status" in indexes
     assert "ix_punch_items_company_updated" in indexes
+    assert "ix_punch_photos_file_id" in indexes
+    for table in ("files", "punch_items", "punch_photos"):
+        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        assert {"created_by", "updated_by"} <= columns
     connection.close()
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
 import uuid
 from datetime import UTC, datetime
@@ -23,7 +24,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from app.audit import write as audit_write
 from app.pf0_tables import AuditLog
 from app.media import strip_image
-from app.paths import resolve_stored_file, write_stored_file
+from app.paths import resolve_stored_file, uploads_dir
 from app.schemas import User
 from app.store import store
 
@@ -73,7 +74,9 @@ class PunchItemRow(PunchBase):
     closed_by: Mapped[str | None] = mapped_column(String(80))
     closed_at: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(80))
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(String(80))
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     deleted_at: Mapped[str | None] = mapped_column(String(40))
 
@@ -109,12 +112,15 @@ class PunchPhotoRow(PunchBase):
     file_id: Mapped[str] = mapped_column(String(36), nullable=False)
     sort_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(80))
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(String(80))
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     deleted_at: Mapped[str | None] = mapped_column(String(40))
 
     __table_args__ = (
         CheckConstraint("phase IN ('before','after')", name="ck_punch_photos_phase"),
+        Index("ix_punch_photos_file_id", "file_id"),
         Index("ix_punch_photos_company_updated", "company_id", "updated_at"),
         Index(
             "ix_punch_photos_punch_phase",
@@ -142,7 +148,9 @@ class FileRow(PunchBase):
     height_px: Mapped[int | None] = mapped_column(Integer)
     meta_stripped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(80))
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(String(80))
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     deleted_at: Mapped[str | None] = mapped_column(String(40))
 
@@ -152,17 +160,6 @@ class FileRow(PunchBase):
         Index("ix_files_company_updated", "company_id", "updated_at"),
         Index("ix_files_company_sha", "company_id", "sha256"),
     )
-
-
-_schema_ready = False
-
-
-def ensure_schema() -> None:
-    global _schema_ready
-    if _schema_ready:
-        return
-    PunchBase.metadata.create_all(store._sql.engine)
-    _schema_ready = True
 
 
 def _now() -> str:
@@ -198,8 +195,35 @@ def push_notice(punch_id: str) -> dict:
 
 
 def _session() -> Session:
-    ensure_schema()
     return store._sql.factory()
+
+
+def _storage_key(suffix: str) -> str:
+    """Server-chosen object name. A client file id is never part of the path."""
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise ValueError("Некорректный файл")
+    return f"{uuid.uuid4().hex}{suffix}"
+
+
+def _write_temp(data: bytes) -> Path:
+    folder = uploads_dir() / ".incoming"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{uuid.uuid4().hex}.part"
+    path.write_bytes(data)
+    return path
+
+
+def _publish_exclusive(temp: Path, storage_key: str) -> None:
+    """Move a temp file into place. O_EXCL refuses to replace an existing object."""
+    dest = resolve_stored_file("upload", storage_key)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(dest, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    os.close(fd)
+    try:
+        os.replace(temp, dest)
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
 
 
 def _actors(user: User, author_id: str, project_id: str) -> set[str]:
@@ -352,7 +376,9 @@ def _import_legacy(session: Session, project_id: str, company_id: str) -> None:
                 closed_by=None,
                 closed_at=None,
                 created_at=getattr(item, "created_at", "") or stamp,
+                created_by=project.owner_id or None,
                 updated_at=stamp,
+                updated_by=project.owner_id or None,
                 row_version=1,
                 deleted_at=None,
             )
@@ -415,7 +441,9 @@ def create_item(user: User, project_id: str, company_id: str, body: dict) -> dic
                 closed_by=None,
                 closed_at=None,
                 created_at=stamp,
+                created_by=user.id,
                 updated_at=stamp,
+                updated_by=user.id,
                 row_version=1,
                 deleted_at=None,
             )
@@ -503,6 +531,7 @@ def set_status(user: User, punch_id: str, company_id: str, project_id: str, targ
             .values(
                 status=target,
                 updated_at=stamp,
+                updated_by=user.id,
                 row_version=row_version + 1,
                 closed_by=closed_by,
                 closed_at=closed_at,
@@ -550,89 +579,101 @@ def add_photo(
     with Image.open(io.BytesIO(clean)) as img:
         width, height = img.size
     stamp = _now()
-    with _session() as session:
-        item = _load(session, punch_id, company_id, project_id)
-        if int(item.row_version) != int(row_version):
-            raise PunchConflict()
-        existing = session.scalar(
-            select(func.count())
-            .select_from(PunchPhotoRow)
-            .where(
-                PunchPhotoRow.punch_id == punch_id,
-                PunchPhotoRow.phase == phase,
-                PunchPhotoRow.deleted_at.is_(None),
+    storage_key = _storage_key(suffix)
+    if file_id in storage_key:
+        raise ValueError("Некорректный файл")
+    temp = _write_temp(clean)
+    try:
+        with _session() as session:
+            item = _load(session, punch_id, company_id, project_id)
+            if int(item.row_version) != int(row_version):
+                raise PunchConflict()
+            existing = session.scalar(
+                select(func.count())
+                .select_from(PunchPhotoRow)
+                .where(
+                    PunchPhotoRow.punch_id == punch_id,
+                    PunchPhotoRow.phase == phase,
+                    PunchPhotoRow.deleted_at.is_(None),
+                )
             )
-        )
-        if int(existing or 0) >= _MAX_PHOTOS:
-            raise ValueError("Слишком много фото")
-        sort_no = int(existing or 0)
-        storage_key = f"{item.project_id}/punch/{file_id}{suffix}"
-        written = write_stored_file("upload", storage_key, clean)
-        result = session.execute(
-            update(PunchItemRow)
-            .where(PunchItemRow.id == punch_id, PunchItemRow.row_version == row_version, PunchItemRow.deleted_at.is_(None))
-            .values(updated_at=stamp, row_version=row_version + 1)
-        )
-        if result.rowcount != 1:
-            session.rollback()
-            written.unlink(missing_ok=True)
-            raise PunchConflict()
-        session.add(
-            FileRow(
-                id=file_id,
-                company_id=company_id,
-                project_id=item.project_id,
-                storage="disk",
-                storage_key=storage_key,
-                kind="photo_original",
-                mime=mime,
-                size_bytes=len(clean),
-                sha256=digest,
-                width_px=width,
-                height_px=height,
-                meta_stripped=True,
-                created_at=stamp,
-                updated_at=stamp,
-                row_version=1,
-                deleted_at=None,
+            if int(existing or 0) >= _MAX_PHOTOS:
+                raise ValueError("Слишком много фото")
+            sort_no = int(existing or 0)
+            result = session.execute(
+                update(PunchItemRow)
+                .where(PunchItemRow.id == punch_id, PunchItemRow.row_version == row_version, PunchItemRow.deleted_at.is_(None))
+                .values(updated_at=stamp, updated_by=user.id, row_version=row_version + 1)
             )
-        )
-        session.add(
-            PunchPhotoRow(
-                id=photo_id,
-                company_id=company_id,
-                project_id=item.project_id,
-                punch_id=punch_id,
-                phase=phase,
-                file_id=file_id,
-                sort_no=sort_no,
-                created_at=stamp,
-                updated_at=stamp,
-                row_version=1,
-                deleted_at=None,
+            if result.rowcount != 1:
+                session.rollback()
+                raise PunchConflict()
+            session.add(
+                FileRow(
+                    id=file_id,
+                    company_id=company_id,
+                    project_id=item.project_id,
+                    storage="disk",
+                    storage_key=storage_key,
+                    kind="photo_original",
+                    mime=mime,
+                    size_bytes=len(clean),
+                    sha256=digest,
+                    width_px=width,
+                    height_px=height,
+                    meta_stripped=True,
+                    created_at=stamp,
+                    created_by=user.id,
+                    updated_at=stamp,
+                    updated_by=user.id,
+                    row_version=1,
+                    deleted_at=None,
+                )
             )
-        )
-        audit_write(
-            "punch.photo",
-            "punch_photo",
-            photo_id,
-            item.project_id,
-            {"phase": phase},
-            session=session,
-            company_id=company_id,
-            actor_user_id=user.id,
-        )
-        try:
-            session.commit()
-        except IntegrityError as exc:
-            session.rollback()
-            written.unlink(missing_ok=True)
-            raise PunchConflict() from exc
-        fresh = session.get(PunchItemRow, punch_id)
-        assert fresh is not None
-        photos = _photos(session, [punch_id]).get(punch_id, {})
-        history = _history_for_project(session, fresh.project_id).get(punch_id, [])
-        return _public(fresh, photos, history, user, _today())
+            session.add(
+                PunchPhotoRow(
+                    id=photo_id,
+                    company_id=company_id,
+                    project_id=item.project_id,
+                    punch_id=punch_id,
+                    phase=phase,
+                    file_id=file_id,
+                    sort_no=sort_no,
+                    created_at=stamp,
+                    created_by=user.id,
+                    updated_at=stamp,
+                    updated_by=user.id,
+                    row_version=1,
+                    deleted_at=None,
+                )
+            )
+            try:
+                session.flush()
+                audit_write(
+                    "punch.photo",
+                    "punch_photo",
+                    photo_id,
+                    item.project_id,
+                    {"phase": phase},
+                    session=session,
+                    company_id=company_id,
+                    actor_user_id=user.id,
+                )
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise PunchConflict() from exc
+            fresh = session.get(PunchItemRow, punch_id)
+            assert fresh is not None
+            photos = _photos(session, [punch_id]).get(punch_id, {})
+            history = _history_for_project(session, fresh.project_id).get(punch_id, [])
+            payload = _public(fresh, photos, history, user, _today())
+        _publish_exclusive(temp, storage_key)
+        temp = None
+        return payload
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
 
 
 def file_for_punch(punch_id: str, company_id: str, file_id: str, project_id: str) -> tuple[Path, str]:
@@ -669,7 +710,7 @@ def soft_delete(user: User, punch_id: str, company_id: str, project_id: str, row
         result = session.execute(
             update(PunchItemRow)
             .where(PunchItemRow.id == punch_id, PunchItemRow.row_version == row_version, PunchItemRow.deleted_at.is_(None))
-            .values(deleted_at=stamp, updated_at=stamp, row_version=row_version + 1)
+            .values(deleted_at=stamp, updated_at=stamp, updated_by=user.id, row_version=row_version + 1)
         )
         if result.rowcount != 1:
             session.rollback()

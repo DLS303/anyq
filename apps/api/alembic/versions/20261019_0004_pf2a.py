@@ -32,7 +32,9 @@ def upgrade() -> None:
         sa.Column("height_px", sa.Integer(), nullable=True),
         sa.Column("meta_stripped", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.String(40), nullable=False),
+        sa.Column("created_by", sa.String(80), nullable=True),
         sa.Column("updated_at", sa.String(40), nullable=False),
+        sa.Column("updated_by", sa.String(80), nullable=True),
         sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("deleted_at", sa.String(40), nullable=True),
         sa.CheckConstraint("storage IN ('disk','s3')", name="ck_files_storage"),
@@ -56,7 +58,9 @@ def upgrade() -> None:
         sa.Column("closed_by", sa.String(80), nullable=True),
         sa.Column("closed_at", sa.String(40), nullable=True),
         sa.Column("created_at", sa.String(40), nullable=False),
+        sa.Column("created_by", sa.String(80), nullable=True),
         sa.Column("updated_at", sa.String(40), nullable=False),
+        sa.Column("updated_by", sa.String(80), nullable=True),
         sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("deleted_at", sa.String(40), nullable=True),
         sa.CheckConstraint("status IN ('open','fixed','accepted','returned')", name="ck_punch_items_status"),
@@ -87,12 +91,15 @@ def upgrade() -> None:
         sa.Column("file_id", sa.String(36), nullable=False),
         sa.Column("sort_no", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_at", sa.String(40), nullable=False),
+        sa.Column("created_by", sa.String(80), nullable=True),
         sa.Column("updated_at", sa.String(40), nullable=False),
+        sa.Column("updated_by", sa.String(80), nullable=True),
         sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("deleted_at", sa.String(40), nullable=True),
         sa.CheckConstraint("phase IN ('before','after')", name="ck_punch_photos_phase"),
     )
     op.create_index("ix_punch_photos_company_updated", "punch_photos", ["company_id", "updated_at"])
+    op.create_index("ix_punch_photos_file_id", "punch_photos", ["file_id"])
     op.create_index(
         "ix_punch_photos_punch_phase",
         "punch_photos",
