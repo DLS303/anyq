@@ -1,3 +1,4 @@
+import inspect
 import os
 import re
 import subprocess
@@ -96,12 +97,19 @@ def test_ready_503_when_uploads_dir_is_missing(tmp_path, monkeypatch):
     assert "absent-volume" not in res.text
 
 
-def _set_db_revision(revision: str | None) -> None:
+def _set_db_revisions(*revisions: str) -> None:
     with store._sql.engine.begin() as conn:
         conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)"))
         conn.execute(text("DELETE FROM alembic_version"))
-        if revision is not None:
+        for revision in revisions:
             conn.execute(text("INSERT INTO alembic_version (version_num) VALUES (:revision)"), {"revision": revision})
+
+
+def _set_db_revision(revision: str | None) -> None:
+    if revision is None:
+        _set_db_revisions()
+    else:
+        _set_db_revisions(revision)
 
 
 def _two_revision_scripts(tmp_path: Path):
@@ -148,6 +156,78 @@ def test_schema_head_ancestor_and_unknown(tmp_path, monkeypatch):
     _stamp_head()
 
 
+def _revision_scripts(tmp_path: Path, revisions: list[tuple[str, str | None]]):
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    for revision, down in revisions:
+        down_src = "None" if down is None else f'"{down}"'
+        (versions / f"{revision}.py").write_text(
+            f'revision = "{revision}"\ndown_revision = {down_src}\n'
+            "branch_labels = None\ndepends_on = None\n\n"
+            "def upgrade():\n    pass\n\ndef downgrade():\n    pass\n",
+            encoding="utf-8",
+        )
+    cfg = Config()
+    cfg.set_main_option("script_location", str(tmp_path))
+    from alembic.script import ScriptDirectory
+
+    return ScriptDirectory.from_config(cfg)
+
+
+def test_schema_two_heads_and_unknown_ahead(tmp_path, monkeypatch):
+    script = _revision_scripts(tmp_path, [("a1", None), ("b1", None)])
+    monkeypatch.setattr(health_router, "_script_directory", lambda: script)
+    assert set(script.get_heads()) == {"a1", "b1"}
+
+    _set_db_revisions("a1", "b1")
+    both = client.get("/v1/health/ready")
+    assert both.status_code == 200, both.text
+    assert both.json() == {"ok": True}
+
+    _set_db_revisions("a1")
+    missing = client.get("/v1/health/ready")
+    assert missing.status_code == 503
+    assert missing.json() == {"ok": False, "checks": ["schema"]}
+    assert "a1" not in missing.text
+    assert "b1" not in missing.text
+
+    _set_db_revisions("a1", "zz")
+    ahead = client.get("/v1/health/ready")
+    assert ahead.status_code == 200, ahead.text
+    assert ahead.json() == {"ok": True}
+    assert "zz" not in ahead.text
+    _stamp_head()
+
+
+def test_head_applied_when_database_revision_descends_from_it(tmp_path):
+    script = _revision_scripts(tmp_path, [("a1", None), ("a2", "a1"), ("b1", None)])
+    assert health_router._head_applied(script, "a1", {"a2"}) is True
+    assert health_router._head_applied(script, "a2", {"a1"}) is False
+    assert health_router._schema_matches(script, {"a2", "b1"}) is True
+    assert health_router._schema_matches(script, {"a1", "b1"}) is False
+
+
+def test_schema_match_rejects_revision_prefixes(tmp_path, monkeypatch):
+    script = _revision_scripts(tmp_path, [("20261019_0001", None), ("headb", "20261019_0001")])
+    monkeypatch.setattr(health_router, "_script_directory", lambda: script)
+    assert script.get_revision("2026").revision == "20261019_0001"
+    assert "2026" not in {revision.revision for revision in script.walk_revisions()}
+
+    _set_db_revision("2026")
+    prefixed = client.get("/v1/health/ready")
+    assert prefixed.status_code == 200, prefixed.text
+    assert prefixed.json() == {"ok": True}
+    assert "2026" not in prefixed.text
+    assert "20261019_0001" not in prefixed.text
+
+    _set_db_revision("20261019_0001")
+    older = client.get("/v1/health/ready")
+    assert older.status_code == 503
+    assert older.json() == {"ok": False, "checks": ["schema"]}
+    assert "20261019_0001" not in older.text
+    _stamp_head()
+
+
 def test_ready_503_when_database_is_down(monkeypatch):
     secret_host = "db.internal.example"
     secret_path = "/var/lib/anyq/secret-data"
@@ -168,7 +248,10 @@ def test_ready_503_when_database_is_down(monkeypatch):
     assert info.status_code == 200
     assert set(info.json()) == {"ok", "version"}
 
+    calls = {"n": 0}
+
     def broken_probe():
+        calls["n"] += 1
         raise OperationalError(
             "SELECT 1",
             {},
@@ -178,25 +261,35 @@ def test_ready_503_when_database_is_down(monkeypatch):
     monkeypatch.setattr(health_router, "_probe_connection", broken_probe)
     res = client.get("/v1/health/ready")
     assert res.status_code == 503
-    assert res.json() == {"ok": False, "checks": ["db", "schema"]}
+    assert calls["n"] == 1
+    assert res.json() == {"ok": False, "checks": ["db"]}
     for secret in (secret_host, secret_path, secret_version, "Traceback", "OperationalError", "SELECT"):
         assert secret not in res.text
 
 
 def test_probe_uses_private_engine_with_two_second_timeout(monkeypatch):
-    seen: dict = {}
-    real_create = health_router.create_engine
+    engine = health_router._probe_engine
+    assert engine.pool.__class__ is health_router.NullPool
+    params = inspect.getclosurevars(engine.pool._creator).nonlocals["cparams"]
+    assert params["timeout"] == 2
+    assert str(engine.url) == store._sql.url
 
-    def spy(url, *args, **kwargs):
-        seen["url"] = url
-        seen["kwargs"] = kwargs
-        return real_create(url, *args, **kwargs)
+    def fail_create(*_args, **_kwargs):
+        raise AssertionError("probe engine is created per request")
 
-    monkeypatch.setattr(health_router, "create_engine", spy)
-    assert health_router._db_ok() is True
-    assert seen["kwargs"]["poolclass"] is health_router.NullPool
-    assert seen["kwargs"]["connect_args"]["timeout"] == 2
-    assert seen["url"] == store._sql.url
+    monkeypatch.setattr(health_router, "create_engine", fail_create)
+    calls = {"n": 0}
+    real_connect = engine.connect
+
+    def counting_connect(*args, **kwargs):
+        calls["n"] += 1
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "connect", counting_connect)
+    _stamp_head()
+    res = client.get("/v1/health/ready")
+    assert res.status_code == 200, res.text
+    assert calls["n"] == 1
 
 
 def test_probe_works_while_app_pool_is_exhausted():

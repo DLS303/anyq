@@ -65,94 +65,81 @@ def _probe_connect_args(url: str) -> dict:
     return {"connect_timeout": _PROBE_SECONDS, "options": "-c statement_timeout=2000"}
 
 
+_probe_engine = create_engine(
+    store._sql.url,
+    future=True,
+    poolclass=NullPool,
+    connect_args=_probe_connect_args(store._sql.url),
+)
+
+
 @contextmanager
 def _probe_connection() -> Iterator:
     """Open one short-lived connection that does not use the application pool.
 
-    Connecting and the statements that follow share a 2 second budget.
+    The engine is created once. Connecting and the statements that follow
+    share a 2 second budget.
     """
     started = time.monotonic()
-    engine = create_engine(
-        store._sql.url,
-        future=True,
-        poolclass=NullPool,
-        connect_args=_probe_connect_args(store._sql.url),
-    )
-    try:
-        with engine.connect() as conn:
-            remaining_ms = int((_PROBE_SECONDS - (time.monotonic() - started)) * 1000)
-            if remaining_ms <= 0:
-                raise TimeoutError("probe exceeded 2s")
-            if conn.dialect.name == "postgresql":
-                conn.execute(text(f"SET statement_timeout = {remaining_ms}"))
-            elif conn.dialect.name == "sqlite":
-                conn.exec_driver_sql(f"PRAGMA busy_timeout = {remaining_ms}")
-            yield conn
-    finally:
-        engine.dispose()
+    with _probe_engine.connect() as conn:
+        remaining_ms = int((_PROBE_SECONDS - (time.monotonic() - started)) * 1000)
+        if remaining_ms <= 0:
+            raise TimeoutError("probe exceeded 2s")
+        if conn.dialect.name == "postgresql":
+            conn.execute(text(f"SET statement_timeout = {remaining_ms}"))
+        elif conn.dialect.name == "sqlite":
+            conn.exec_driver_sql(f"PRAGMA busy_timeout = {remaining_ms}")
+        yield conn
 
 
-def _known_revision(script: ScriptDirectory, revision: str) -> bool:
+def _known_revision_ids(script: ScriptDirectory) -> set[str]:
+    # Exact ids only. get_revision() treats a unique prefix as a match.
+    return {revision.revision for revision in script.walk_revisions()}
+
+
+def _is_ancestor(script: ScriptDirectory, ancestor: str, descendant: str) -> bool:
+    if ancestor == descendant:
+        return False
     try:
-        return script.get_revision(revision) is not None
+        seen = {step.revision for step in script.walk_revisions(base=ancestor, head=descendant)}
     except CommandError:
         return False
+    return ancestor in seen
 
 
-def _ancestor_ids(script: ScriptDirectory, heads: set[str]) -> set[str]:
-    found: set[str] = set()
-    for head in heads:
-        for rev in script.walk_revisions(base="base", head=head):
-            if rev.revision not in heads:
-                found.add(rev.revision)
-    return found
+def _head_applied(script: ScriptDirectory, head: str, current: set[str]) -> bool:
+    for revision in current:
+        if revision == head or _is_ancestor(script, head, revision):
+            return True
+    return False
 
 
 def _schema_matches(script: ScriptDirectory, current: set[str]) -> bool:
-    """Head matches. An older known revision does not. An unknown revision does.
+    """True when every code head is applied, or the database is newer than this code.
 
-    An unknown revision means the database is newer than this code, which is
-    what a rolled-back image sees.
+    Any revision this code does not know means the database is ahead.
+    Otherwise each head must equal a database revision or be an ancestor of one.
     """
     heads = set(script.get_heads())
-    if not heads:
+    if not heads or not current:
         return False
-    if current == heads:
+    known = _known_revision_ids(script)
+    if any(revision not in known for revision in current):
         return True
-    if not current:
-        return False
-    ancestors = _ancestor_ids(script, heads)
-    saw_unknown = False
-    for revision in current:
-        if revision in ancestors:
-            return False
-        if _known_revision(script, revision):
-            if revision not in heads:
-                return False
-            continue
-        saw_unknown = True
-    if saw_unknown and all(not _known_revision(script, revision) for revision in current):
-        return True
-    return current == heads
+    return all(_head_applied(script, head, current) for head in heads)
 
 
-def _db_ok() -> bool:
+def _database_checks() -> list[str]:
+    """Read alembic_version once. A failed read is a database failure, not a schema failure."""
+    script = _script_directory()
     try:
-        with _probe_connection() as conn:
-            conn.execute(text("SELECT 1"))
-        return True
-    except Exception:  # noqa: BLE001 - failure details stay off the response
-        return False
-
-
-def _schema_ok() -> bool:
-    try:
-        script = _script_directory()
         with _probe_connection() as conn:
             current = set(MigrationContext.configure(conn).get_current_heads())
-        return _schema_matches(script, current)
     except Exception:  # noqa: BLE001 - failure details stay off the response
-        return False
+        return [_CHECK_DB]
+    if not _schema_matches(script, current):
+        return [_CHECK_SCHEMA]
+    return []
 
 
 def _uploads_ok() -> bool:
@@ -172,14 +159,12 @@ def _uploads_ok() -> bool:
 @router.get("/v1/health/ready")
 def ready():
     failed: list[str] = []
-    for name, probe in (
-        (_CHECK_DB, _db_ok),
-        (_CHECK_SCHEMA, _schema_ok),
-        (_CHECK_UPLOADS, _uploads_ok),
-    ):
-        if not probe():
-            logger.warning("readiness check failed: %s", name)
-            failed.append(name)
+    for name in _database_checks():
+        logger.warning("readiness check failed: %s", name)
+        failed.append(name)
+    if not _uploads_ok():
+        logger.warning("readiness check failed: %s", _CHECK_UPLOADS)
+        failed.append(_CHECK_UPLOADS)
     if failed:
         return JSONResponse(status_code=503, content={"ok": False, "checks": failed})
     return {"ok": True}
