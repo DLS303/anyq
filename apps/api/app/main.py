@@ -17,10 +17,11 @@ from app.routers import (
     moderation,
     modules,
     plots,
+    public,
     site,
     specialists,
 )
-from app.security import SecurityHeadersMiddleware
+from app.security import PublicRobotsMiddleware, SecurityHeadersMiddleware
 
 load_secret()
 
@@ -28,6 +29,7 @@ app = FastAPI(title=settings.app_name, version=settings.version)
 
 app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(PublicRobotsMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -49,6 +51,7 @@ app.include_router(materials.router)
 app.include_router(estimates.router)
 app.include_router(acts.router)
 app.include_router(site.router)
+app.include_router(public.router)
 app.include_router(files.router)
 
 

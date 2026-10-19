@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -89,6 +90,7 @@ from app.site_models import (
     BudgetLine,
     ChangeOrder,
     DailyLog,
+    DailyPhoto,
     DirectoryRow,
     Drawing,
     Incident,
@@ -1480,14 +1482,26 @@ class MemoryStore:
             return True
         return any(row.project_id == project.id and row.user_id == user.id for row in self.directory.values())
 
-    def add_upload(self, user: User, name: str, content_type: str, project_id: str | None = None) -> StoredUpload:
+    def add_upload(
+        self,
+        user: User,
+        name: str,
+        content_type: str,
+        project_id: str | None = None,
+        *,
+        kind: str = "upload",
+        daily_log_id: str | None = None,
+        file_id: str | None = None,
+    ) -> StoredUpload:
         item = StoredUpload(
-            id=f"f-{uuid4().hex[:12]}",
+            id=file_id or f"f-{uuid4().hex[:12]}",
             owner_id=user.id,
             name=name,
             content_type=content_type,
             created_at=_now(),
             project_id=project_id,
+            kind=kind,  # type: ignore[arg-type]
+            daily_log_id=daily_log_id,
         )
         with self._lock:
             self.files[item.id] = item
@@ -1856,15 +1870,62 @@ class MemoryStore:
             return []
         return [x for x in table.values() if getattr(x, "project_id", "") == proj.id]
 
-    def add_daily(self, pid: str, body: dict, author_id: str) -> DailyLog:
+    def add_daily(self, pid: str, body: dict, author_id: str, author_role: str = "") -> DailyLog:
         proj = self.get_project(pid)
         if not proj:
             raise ValueError("Проект не найден")
         with self._lock:
-            item = DailyLog(id=f"dl-{uuid4().hex[:8]}", project_id=proj.id, author_id=author_id, **body)
+            item = DailyLog(
+                id=f"dl-{uuid4().hex[:8]}",
+                project_id=proj.id,
+                author_id=author_id,
+                author_role=author_role,
+                **body,
+            )
             self.daily_logs[item.id] = item
             self._save_unlocked()
             return item
+
+    def add_daily_photo(self, log_id: str, photo: DailyPhoto) -> DailyLog:
+        log = self.daily_logs.get(log_id)
+        if not log:
+            raise ValueError("Запись не найдена")
+        if len(log.photos) >= 10:
+            raise ValueError("Не больше 10 фото")
+        with self._lock:
+            log.photos.append(photo)
+            self.daily_logs[log.id] = log
+            self._save_unlocked()
+            return log
+
+    def set_daily_share(self, log_id: str, token_hash: str, expires_at: str) -> DailyLog:
+        log = self.daily_logs.get(log_id)
+        if not log:
+            raise ValueError("Запись не найдена")
+        with self._lock:
+            log.share_token_sha256 = token_hash
+            log.share_expires_at = expires_at
+            log.share_revoked = False
+            self.daily_logs[log.id] = log
+            self._save_unlocked()
+            return log
+
+    def revoke_daily_share(self, log_id: str) -> DailyLog:
+        log = self.daily_logs.get(log_id)
+        if not log:
+            raise ValueError("Запись не найдена")
+        with self._lock:
+            log.share_revoked = True
+            self.daily_logs[log.id] = log
+            self._save_unlocked()
+            return log
+
+    def daily_by_share_hash(self, digest: str) -> DailyLog | None:
+        for log in self.daily_logs.values():
+            stored = log.share_token_sha256
+            if stored and len(stored) == len(digest) and hmac.compare_digest(stored, digest):
+                return log
+        return None
 
     def add_rfi(self, pid: str, body: dict) -> RFI:
         proj = self.get_project(pid)

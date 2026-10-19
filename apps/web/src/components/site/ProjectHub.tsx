@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { fetchSiteBundle, postSite } from "@/lib/api";
 import { money } from "@/lib/format";
 import { canEditProject, PILOT_MODE } from "@/lib/pilot";
+import { DailyReport, type DailyEntry } from "./DailyReport";
 import { toast } from "@/lib/toast";
 import { t } from "@/i18n/messages";
 import dynamic from "next/dynamic";
@@ -144,7 +145,6 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const [bundle, setBundle] = useState<Record<string, unknown> | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [busy, setBusy] = useState(false);
-  const [showDaily, setShowDaily] = useState(false);
   const [showPunch, setShowPunch] = useState(false);
   const [showExtra, setShowExtra] = useState(false);
   const email = user?.email || "";
@@ -222,7 +222,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const canEdit = canEditProject(user, p, directory);
   const healthColor = snap.health === "green" ? "bg-pine" : snap.health === "red" ? "bg-clay" : "bg-sand";
   const mainTabs = pilot ? PILOT_MAIN : LEGACY_TABS;
-  const logs = (bundle.daily as { id: string; day: string; weather: string; workers: number; notes: string; delays: string }[]) || [];
+  const logs = (bundle.daily as DailyEntry[]) || [];
   const punches = (bundle.punches as { id: string; title: string; location: string; trade: string; status: string }[]) || [];
   const budget = (bundle.budget as { id: string; code: string; title: string; budget_kzt: number; committed_kzt: number; actual_kzt: number }[]) || [];
   const changes = (bundle.changes as { id: string; number: string; title: string; amount_kzt: number; status: string }[]) || [];
@@ -327,92 +327,28 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
               ? m.hubNoOpen
               : `${m.hubIssuePunch} ${snap.open_punch} · ${m.hubIssueRfi} ${snap.open_rfi} · ${m.hubIssueSafety} ${snap.open_incidents}`}
           </p>
-          {logs.length === 0 && !showDaily ? (
-            <EmptyLine
-              text={m.hubTodayEmpty}
-              action={
-                <button type="button" className={primaryBtn} onClick={() => (user ? setShowDaily(true) : goLogin())}>
-                  {user ? m.hubTodayAction : m.hubLogin}
-                </button>
-              }
-            />
-          ) : (
-            <>
-              {user ? (
-                <form
-                  className="grid sm:grid-cols-2 gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const form = e.currentTarget;
-                    const fd = new FormData(form);
-                    void send(form, `projects/${p.id}/daily`, {
-                      day: String(fd.get("day")),
-                      workers: Number(fd.get("workers") || 0),
-                      notes: String(fd.get("notes") || ""),
-                      delays: String(fd.get("delays") || ""),
-                      weather: "clear",
-                    });
-                  }}
-                >
-                  <input name="day" type="date" required className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
-                  <input name="workers" type="number" placeholder={m.hubWorkers} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
-                  <input name="notes" placeholder={m.hubWorkNotes} className="border border-ink/15 px-2 py-2 text-sm sm:col-span-2 min-h-12" />
-                  <input name="delays" placeholder={m.hubDelays} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
-                  <button className={primaryBtn} disabled={busy}>
-                    {m.hubTodayAction}
-                  </button>
-                </form>
-              ) : null}
-              <ItemList
-                items={logs}
-                render={(x) => (
-                  <p>
-                    {x.day} · {x.weather} · {x.workers} чел. — {x.notes}
-                    {x.delays ? ` · простой: ${x.delays}` : ""}
-                  </p>
-                )}
-              />
-            </>
-          )}
+          <DailyReport
+            locale={locale}
+            projectId={p.id}
+            logs={logs}
+            canWrite={Boolean(user) && canEdit}
+            startOpen={logs.length > 0}
+            onLogin={goLogin}
+            onChange={load}
+          />
         </div>
       ) : null}
 
       {tab === "daily" ? (
-        <Tool
-          title="Daily log"
-          items={logs}
-          render={(x) => (
-            <p>
-              {x.day} · {x.weather} · {x.workers} чел. — {x.notes}
-              {x.delays ? ` · простой: ${x.delays}` : ""}
-            </p>
-          )}
-        >
-          {user ? (
-            <form
-              className="grid sm:grid-cols-2 gap-2 mb-4"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const form = e.currentTarget;
-                const fd = new FormData(form);
-                void send(form, `projects/${p.id}/daily`, {
-                  day: String(fd.get("day")),
-                  workers: Number(fd.get("workers") || 0),
-                  notes: String(fd.get("notes") || ""),
-                  delays: String(fd.get("delays") || ""),
-                  weather: "clear",
-                });
-              }}
-            >
-              <input name="day" type="date" required className="border border-ink/15 px-2 py-1 text-sm" />
-              <input name="workers" type="number" placeholder="люди" className="border border-ink/15 px-2 py-1 text-sm" />
-              <input name="notes" placeholder="работы" className="border border-ink/15 px-2 py-1 text-sm sm:col-span-2" />
-              <button className="bg-pine text-paper py-1 text-sm" disabled={busy}>
-                + журнал
-              </button>
-            </form>
-          ) : null}
-        </Tool>
+        <DailyReport
+          locale={locale}
+          projectId={p.id}
+          logs={logs}
+          canWrite={Boolean(user) && canEdit}
+          startOpen
+          onLogin={goLogin}
+          onChange={load}
+        />
       ) : null}
 
       {tab === "rfi" ? (

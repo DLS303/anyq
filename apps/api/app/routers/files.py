@@ -4,19 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from app.deps import require_user
-from app.paths import uploads_dir
+from app.paths import resolve_stored_file
 from app.schemas import User
 from app.store import store
 
 router = APIRouter(tags=["files"])
-
-
-def _file_path(name: str) -> Path:
-    root = uploads_dir().resolve()
-    path = (root / name).resolve()
-    if path.parent != root:
-        raise HTTPException(status_code=404, detail="Файл не найден")
-    return path
 
 
 def _send(user: User, file_id: str | None = None, name: str | None = None) -> FileResponse:
@@ -25,7 +17,10 @@ def _send(user: User, file_id: str | None = None, name: str | None = None) -> Fi
         raise HTTPException(status_code=404, detail="Файл не найден")
     if not store.can_access_upload(user, item):
         raise HTTPException(status_code=403, detail="Недостаточно прав")
-    path = _file_path(item.name)
+    try:
+        path = resolve_stored_file(item.kind, item.name)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Файл не найден") from None
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")
     return FileResponse(path, media_type=item.content_type)

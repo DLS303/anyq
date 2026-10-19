@@ -537,6 +537,26 @@ export function postSite(path: string, email: string, body: Record<string, unkno
   return request(`/v1/site/${path}`, { method: "POST", email, body: JSON.stringify(body) });
 }
 
+export function deleteSite(path: string) {
+  return request(`/v1/site/${path}`, { method: "DELETE" });
+}
+
+export async function uploadDailyPhotos(logId: string, files: File[]) {
+  const headers = new Headers();
+  applyAuth(headers);
+  const fd = new FormData();
+  for (const file of files) fd.append("files", file);
+  const path = `/v1/site/daily/${logId}/photos`;
+  const res = await fetch(`${getApiBase()}${path}`, { method: "POST", headers, body: fd });
+  sessionExpired(path, res, headers);
+  const json = (await res.json()) as Envelope<{
+    log: Record<string, unknown>;
+    added: { has_people: boolean; has_plates: boolean; taken_at?: string | null }[];
+  }>;
+  if (!res.ok) throw new Error(detailOf(json, res.statusText));
+  return json.data;
+}
+
 export function sendChat(email: string, tid: string, text: string) {
   return request<ChatMessage>(`/v1/chat/threads/${tid}/messages`, {
     method: "POST",
