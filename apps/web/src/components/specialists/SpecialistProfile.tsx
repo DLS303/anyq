@@ -86,7 +86,7 @@ export function SpecialistProfile({
             {specialist.license_verified ? (
               <span className="pill text-[10px] text-emerald-800 bg-emerald-50 border-emerald-200 flex items-center gap-1 font-semibold">
                 <CheckCircle2 className="h-3 w-3 text-emerald-600" />
-                <span>Лицензия {specialist.license_cat} подтверждена</span>
+                <span>{m.licenseBadge.replace("{cat}", specialist.license_cat)}</span>
               </span>
             ) : null}
           </div>

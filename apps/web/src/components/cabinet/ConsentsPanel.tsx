@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { t } from "@/i18n/messages";
-import { fetchConsentDocuments, fetchConsents, grantAiConsent, revokeConsent, type ConsentRow } from "@/lib/api";
+import { fetchConsentDocuments, fetchConsents, grantAiConsent, grantCrossBorderConsent, revokeConsent, type ConsentRow } from "@/lib/api";
 import { useAsync } from "@/lib/useAsync";
 import type { Locale } from "@/lib/types";
 
@@ -30,6 +30,8 @@ export function ConsentsPanel({ locale }: { locale: Locale }) {
   const m = t(locale);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [provider, setProvider] = useState("");
+  const [country, setCountry] = useState("");
   const loaded = useAsync(async (signal) => {
     const [rows, documents] = await Promise.all([fetchConsents(signal), fetchConsentDocuments(signal)]);
     return { rows, documents };
@@ -76,6 +78,23 @@ export function ConsentsPanel({ locale }: { locale: Locale }) {
   }
 
   const aiOn = latestOf("ai")?.action === "grant";
+  const crossOn = latestOf("cross_border")?.action === "grant";
+
+  async function grantCross(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await grantCrossBorderConsent(provider.trim(), country.trim());
+      setProvider("");
+      setCountry("");
+      await loaded.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : m.hubSaveError);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <section className="glass-strong rounded-3xl p-6 sm:p-7 shadow-luxury border border-slate-200/90">
@@ -118,6 +137,33 @@ export function ConsentsPanel({ locale }: { locale: Locale }) {
           );
         })}
       </div>
+      {crossOn ? null : (
+        <form className="mt-4 grid gap-2 sm:grid-cols-[1fr_1fr_auto]" onSubmit={(event) => void grantCross(event)}>
+          <input
+            className="min-h-12 rounded-xl border border-slate-200 px-3 text-sm"
+            value={provider}
+            onChange={(event) => setProvider(event.target.value)}
+            placeholder={m.consentProvider}
+            aria-label={m.consentProvider}
+            required
+          />
+          <input
+            className="min-h-12 rounded-xl border border-slate-200 px-3 text-sm"
+            value={country}
+            onChange={(event) => setCountry(event.target.value)}
+            placeholder={m.consentCountry}
+            aria-label={m.consentCountry}
+            required
+          />
+          <button
+            type="submit"
+            className="inline-flex min-h-12 items-center justify-center rounded-full border border-slate-300 px-4 text-sm"
+            disabled={busy}
+          >
+            {m.consentCrossAllow}
+          </button>
+        </form>
+      )}
       {aiOn ? null : (
         <div className="mt-4">
           <button

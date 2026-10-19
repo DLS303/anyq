@@ -3,7 +3,7 @@
 import { Component, createElement, type ReactNode } from "react";
 
 type Props = {
-  children: ReactNode;
+  children?: ReactNode;
   message: string;
   retryLabel: string;
 };

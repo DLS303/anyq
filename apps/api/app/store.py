@@ -11,6 +11,7 @@ from typing import get_args
 from uuid import uuid4
 
 from app.authutil import hash_password, make_token, verify_password
+from app.config import demo_mode
 from app.geo import centroid, haversine_km
 from app.legal import PD_VERSION, ai_document, pd_sha256, privacy_document
 from app.schemas import (
@@ -51,6 +52,8 @@ from app.schemas import (
     StoredUpload,
     ThreadCreate,
     User,
+    VerificationCreate,
+    VerificationRecord,
 )
 from app.seed import PLOTS, USERS
 from app.seed_crm import (
@@ -105,6 +108,7 @@ from app.site_models import (
     Timesheet,
     VoiceNote,
 )
+from app.store_procurement import dump_lists, load_into
 from app.transitions import (
     MATERIAL_ORDER_TRANSITIONS,
     SERVICE_ORDER_TRANSITIONS,
@@ -116,6 +120,16 @@ CADASTRE = re.compile(r"^\d{2}-\d{3}-\d{3}-\d{3}$")
 DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SITE_ROLES = set(get_args(SiteRole))
 CHECK_RESULTS = {"pass", "fail", "na"}
+
+
+def company_key(user: User) -> str:
+    bin_no = re.sub(r"\D", "", user.company_bin or "")
+    if len(bin_no) == 12:
+        return f"bin:{bin_no}"
+    name = re.sub(r"\s+", " ", (user.company or "").strip().casefold())
+    if name:
+        return f"name:{name}"
+    return f"user:{user.id}"
 
 
 def _role(value: object) -> str:
@@ -298,12 +312,18 @@ class MemoryStore:
         self.crm_invoices: dict[str, CrmInvoice] = {}
         self.files: dict[str, StoredUpload] = {}
         self.consents: list[ConsentRecord] = []
+        self.verifications: dict[str, VerificationRecord] = {}
+        self.proc_requests = {}
+        self.proc_lines = {}
+        self.proc_offers = {}
+        self.proc_docs = {}
         self._load()
-        self._ensure_seed_users()
-        self._ensure_demo_passwords()
-        self._ensure_materials()
-        self._ensure_site()
-        self._ensure_crm()
+        if demo_mode():
+            self._ensure_seed_users()
+            self._ensure_demo_passwords()
+            self._ensure_materials()
+            self._ensure_site()
+            self._ensure_crm()
 
     def _index_user(self, user: User) -> None:
         self.users[user.email.lower()] = user
@@ -360,7 +380,13 @@ class MemoryStore:
     def _ensure_crm(self) -> None:
         saved = False
         if not self.crm_contacts:
-            self.crm_contacts = {c.id: deepcopy(c) for c in CRM_CONTACTS}
+            contacts: dict[str, CrmContact] = {}
+            for source in CRM_CONTACTS:
+                item = deepcopy(source)
+                if not item.owner_id:
+                    item.owner_id = "u-owner"
+                contacts[item.id] = item
+            self.crm_contacts = contacts
             saved = True
         if not self.leads:
             self.leads = {l.id: deepcopy(l) for l in CRM_LEADS}
@@ -389,8 +415,9 @@ class MemoryStore:
     def _load(self) -> None:
         path = db_file()
         if not path.exists():
-            self.plots = {p.id: deepcopy(p) for p in PLOTS}
-            self._seed_phase2()
+            if demo_mode():
+                self.plots = {p.id: deepcopy(p) for p in PLOTS}
+                self._seed_phase2()
             self._save_unlocked()
             return
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -421,6 +448,7 @@ class MemoryStore:
         self.schedule = {item["id"]: ScheduleTask.model_validate(item) for item in raw.get("schedule", [])}
         self.budget_lines = {item["id"]: BudgetLine.model_validate(item) for item in raw.get("budget_lines", [])}
         self.change_orders = {item["id"]: ChangeOrder.model_validate(item) for item in raw.get("change_orders", [])}
+        load_into(self, raw)
         self.timesheets = {item["id"]: Timesheet.model_validate(item) for item in raw.get("timesheets", [])}
         self.meetings = {item["id"]: Meeting.model_validate(item) for item in raw.get("meetings", [])}
         self.directory = {item["id"]: DirectoryRow.model_validate(item) for item in raw.get("directory", [])}
@@ -430,19 +458,23 @@ class MemoryStore:
         self.crm_invoices = {item["id"]: CrmInvoice.model_validate(item) for item in raw.get("crm_invoices", [])}
         self.files = {item["id"]: StoredUpload.model_validate(item) for item in raw.get("files", [])}
         self.consents = [ConsentRecord.model_validate(item) for item in raw.get("consents", [])]
-        seed_by_id = {p.id: p for p in PLOTS}
+        self.verifications = {
+            item["id"]: VerificationRecord.model_validate(item) for item in raw.get("verifications", [])
+        }
         filled = False
-        for pid, plot in self.plots.items():
-            seed = seed_by_id.get(pid)
-            if seed and not plot.photos:
-                plot.photos = list(seed.photos)
+        if demo_mode():
+            seed_by_id = {p.id: p for p in PLOTS}
+            for plot in self.plots.values():
+                seed = seed_by_id.get(plot.id)
+                if seed and not plot.photos:
+                    plot.photos = list(seed.photos)
+                    filled = True
+            if not self.plots:
+                self.plots = {p.id: deepcopy(p) for p in PLOTS}
                 filled = True
-        if not self.plots:
-            self.plots = {p.id: deepcopy(p) for p in PLOTS}
-            filled = True
-        if not self.specialists:
-            self._seed_phase2()
-            filled = True
+            if not self.specialists:
+                self._seed_phase2()
+                filled = True
         if filled:
             self._save_unlocked()
 
@@ -484,6 +516,8 @@ class MemoryStore:
             "directory": [x.model_dump() for x in self.directory.values()],
             "files": [x.model_dump() for x in self.files.values()],
             "consents": [x.model_dump() for x in self.consents],
+            "verifications": [x.model_dump() for x in self.verifications.values()],
+            **dump_lists(self),
         }
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -658,12 +692,14 @@ class MemoryStore:
         return item
 
     def list_inquiries(self, user: User) -> list[Inquiry]:
-        if user.role in ("moderator", "admin"):
+        if user.role == "admin":
             return list(self.inquiries.values())
-        if user.role == "owner":
-            owned = {p.id for p in self.plots.values() if p.owner_id == user.id}
-            return [i for i in self.inquiries.values() if i.plot_id in owned]
-        return [i for i in self.inquiries.values() if i.buyer_id == user.id]
+        owned = {p.id for p in self.plots.values() if p.owner_id and self.same_company(user, p.owner_id)}
+        return [
+            item
+            for item in self.inquiries.values()
+            if item.plot_id in owned or self.same_company(user, item.buyer_id)
+        ]
 
     def toggle_favorite(self, user_id: str, plot_id: str) -> bool:
         with self._lock:
@@ -818,7 +854,65 @@ class MemoryStore:
 
     def specialist_public(self, spec: Specialist) -> dict:
         avg, n = self.rating_of(spec.id)
-        return {**spec.model_dump(), "rating": avg, "reviews_count": n}
+        data = spec.model_dump()
+        data["license_verified"] = self.has_verification("specialist", spec.id, "license")
+        return {**data, "rating": avg, "reviews_count": n}
+
+    def material_public(self, item: Material) -> dict:
+        data = item.model_dump()
+        data["certified_rk"] = self.has_verification("material", item.id, "certification_rk")
+        return data
+
+    def has_verification(self, subject_type: str, subject_id: str, kind: str) -> bool:
+        return any(
+            row.subject_type == subject_type and row.subject_id == subject_id and row.kind == kind
+            for row in self.verifications.values()
+        )
+
+    def grant_verification(self, user: User, body: VerificationCreate) -> VerificationRecord:
+        if user.role not in ("admin", "moderator"):
+            raise PermissionError("Недостаточно прав")
+        if body.subject_type == "material" and self.get_material(body.subject_id) is None:
+            raise LookupError("Позиция не найдена")
+        if body.subject_type == "specialist" and self.get_specialist(body.subject_id) is None:
+            raise LookupError("Специалист не найден")
+        existing = next(
+            (
+                row
+                for row in self.verifications.values()
+                if row.subject_type == body.subject_type and row.subject_id == body.subject_id and row.kind == body.kind
+            ),
+            None,
+        )
+        if existing:
+            return existing
+        record = VerificationRecord(
+            id=f"ver-{uuid4().hex[:8]}",
+            subject_type=body.subject_type,
+            subject_id=body.subject_id,
+            kind=body.kind,
+            granted_by=user.id,
+            granted_at=_now(),
+            note=body.note.strip(),
+        )
+        with self._lock:
+            self.verifications[record.id] = record
+            self._save_unlocked()
+        return record
+
+    def same_company(self, user: User, other_id: str | None) -> bool:
+        if not other_id:
+            return False
+        if other_id == user.id:
+            return True
+        other = self.get_user(other_id)
+        if other is None:
+            return False
+        left = company_key(user)
+        right = company_key(other)
+        if left.startswith("user:") or right.startswith("user:"):
+            return False
+        return left == right
 
     def get_specialist(self, sid: str) -> Specialist | None:
         if sid in self.specialists:
@@ -900,12 +994,12 @@ class MemoryStore:
             return order
 
     def list_orders(self, user: User) -> list[ServiceOrder]:
-        if user.role in ("moderator", "admin"):
+        if user.role == "admin":
             return list(self.orders.values())
         spec = next((s for s in self.specialists.values() if s.user_id == user.id), None)
         if spec:
             return [o for o in self.orders.values() if o.specialist_id == spec.id]
-        return [o for o in self.orders.values() if o.client_id == user.id]
+        return [o for o in self.orders.values() if self.same_company(user, o.client_id)]
 
     def set_order_status(
         self,
@@ -978,25 +1072,35 @@ class MemoryStore:
         sid = spec.id if spec else specialist_id
         return [r for r in self.reviews.values() if r.specialist_id == sid]
 
-    def _staff(self, user: User) -> bool:
-        return user.role in ("admin", "moderator")
+    def _crm_admin(self, user: User) -> bool:
+        return user.role == "admin"
 
-    def can_access_deal(self, user: User, deal: Deal) -> bool:
-        if self._staff(user):
-            return True
-        participants = {deal.client_id, deal.owner_id, deal.supplier_id, deal.responsible_id}
-        if user.id in participants:
-            return True
+    def deal_holder_ids(self, deal: Deal) -> set[str]:
+        """Company-side holders. The client counterparty is not a holder."""
+        ids: set[str] = set()
+        if deal.owner_id:
+            ids.add(deal.owner_id)
+        if deal.responsible_id:
+            ids.add(deal.responsible_id)
+        if deal.supplier_id:
+            ids.add(deal.supplier_id)
         if deal.specialist_id:
             spec = self.specialists.get(deal.specialist_id)
-            if spec and spec.user_id == user.id:
-                return True
-        return False
+            if spec and spec.user_id:
+                ids.add(spec.user_id)
+        if not ids and deal.client_id:
+            ids.add(deal.client_id)
+        return ids
+
+    def can_access_deal(self, user: User, deal: Deal) -> bool:
+        if self._crm_admin(user):
+            return True
+        return any(self.same_company(user, uid) for uid in self.deal_holder_ids(deal))
 
     def can_access_lead(self, user: User, lead: Lead) -> bool:
-        if self._staff(user):
+        if self._crm_admin(user):
             return True
-        if lead.responsible_id == user.id:
+        if lead.responsible_id and self.same_company(user, lead.responsible_id):
             return True
         if lead.deal_id:
             deal = self.deals.get(lead.deal_id)
@@ -1005,7 +1109,7 @@ class MemoryStore:
         return False
 
     def can_access_activity(self, user: User, activity: CrmActivity) -> bool:
-        if self._staff(user) or activity.author_id == user.id:
+        if self._crm_admin(user) or self.same_company(user, activity.author_id):
             return True
         if activity.deal_id:
             deal = self.deals.get(activity.deal_id)
@@ -1020,13 +1124,13 @@ class MemoryStore:
     def can_access_invoice(self, user: User, invoice: CrmInvoice) -> bool:
         deal = self.deals.get(invoice.deal_id)
         if not deal:
-            return self._staff(user)
+            return self._crm_admin(user)
         return self.can_access_deal(user, deal)
 
     def can_access_contact(self, user: User, contact: CrmContact) -> bool:
-        if self._staff(user):
+        if self._crm_admin(user):
             return True
-        return bool(contact.owner_id) and contact.owner_id == user.id
+        return bool(contact.owner_id) and self.same_company(user, contact.owner_id)
 
     def require_deal(self, user: User, deal_id: str) -> Deal:
         deal = self.deals.get(deal_id)
@@ -1067,6 +1171,7 @@ class MemoryStore:
                 client_name=body.client_name or user.full_name,
                 client_phone=body.client_phone or user.phone,
                 client_id=user.id,
+                owner_id=user.id,
                 plot_id=body.plot_id,
                 specialist_id=body.specialist_id,
                 responsible_name="Асет Сагинтаев",
@@ -1545,12 +1650,40 @@ class MemoryStore:
             key=lambda m: m.created_at,
         )
 
+    def chat_peers(self, user: User) -> list[dict]:
+        ids: set[str] = set()
+        for project in self.projects.values():
+            if not self.can_access_project(user, project):
+                continue
+            if project.owner_id:
+                ids.add(project.owner_id)
+            if project.contractor_id:
+                ids.add(project.contractor_id)
+            for row in self.directory.values():
+                if row.project_id == project.id and row.user_id:
+                    ids.add(row.user_id)
+        for other in self.users_by_id.values():
+            if self.same_company(user, other.id):
+                ids.add(other.id)
+        ids.discard(user.id)
+        people = []
+        for uid in ids:
+            person = self.get_user(uid)
+            if person is None:
+                continue
+            people.append({"id": person.id, "full_name": person.full_name, "role": person.role})
+        people.sort(key=lambda row: row["full_name"])
+        return people
+
     def open_thread(self, user: User, body: ThreadCreate) -> ChatThread:
         peer = self.get_user(body.peer_id) or self.get_user_by_email(body.peer_id)
         spec = self.get_specialist(body.peer_id)
         peer_id = spec.user_id if spec else (peer.id if peer else "")
-        if not peer_id:
+        if not peer_id or peer_id == user.id:
             raise ValueError("Собеседник не найден")
+        allowed = {row["id"] for row in self.chat_peers(user)}
+        if peer_id not in allowed:
+            raise PermissionError("Написать можно участнику своего объекта")
         existing = next(
             (
                 t
@@ -1595,7 +1728,7 @@ class MemoryStore:
     def can_access_project(self, user: User, project: Project) -> bool:
         if user.role == "admin":
             return True
-        if project.owner_id and project.owner_id == user.id:
+        if project.owner_id and self.same_company(user, project.owner_id):
             return True
         if project.contractor_id and project.contractor_id == user.id:
             return True
@@ -1823,11 +1956,16 @@ class MemoryStore:
             raise ValueError("БИН должен быть из 12 цифр")
         if len(phone) < 6:
             raise ValueError("Укажите телефон")
-        if body.role not in ("buyer", "contractor", "supplier"):
+        first_owner = not self.users_by_id
+        if first_owner:
+            role = "owner"
+        elif body.role not in ("buyer", "contractor", "supplier"):
             raise ValueError("Роль: заказчик, подрядчик или поставщик")
+        else:
+            role = body.role
         if not body.consent_offer_pd:
             raise ValueError("Нужно согласие на обработку персональных данных")
-        if body.role == "supplier":
+        if role == "supplier":
             if len(body.sku_title.strip()) < 2:
                 raise ValueError("Укажите первую позицию для каталога")
             if body.sku_price <= 0:
@@ -1841,7 +1979,7 @@ class MemoryStore:
                 id=uid,
                 email=email,
                 full_name=contact,
-                role=body.role,
+                role=role,
                 phone=phone,
                 company=company,
                 company_bin=bin_no,
@@ -1850,7 +1988,7 @@ class MemoryStore:
             )
             self._index_user(user)
             self.credentials[uid] = hash_password(body.password)
-            if body.role == "supplier":
+            if role == "supplier":
                 mid = f"mat-{uuid4().hex[:8]}"
                 title = body.sku_title.strip()
                 note = f"{company}, БИН {bin_no}. {user.city}."
@@ -1986,6 +2124,7 @@ class MemoryStore:
                 client_name=client.full_name,
                 client_phone=body.phone or client.phone,
                 supplier_id=mat.supplier_id,
+                owner_id=mat.supplier_id,
                 plot_id=body.plot_id,
                 order_id=oid,
                 amount_kzt=int(body.qty * mat.price_kzt),
@@ -2009,11 +2148,11 @@ class MemoryStore:
             return order
 
     def list_material_orders(self, user: User) -> list[MaterialOrder]:
-        if user.role in ("admin", "moderator"):
+        if user.role == "admin":
             return list(self.material_orders.values())
         if user.role == "supplier":
-            return [o for o in self.material_orders.values() if o.supplier_id == user.id]
-        return [o for o in self.material_orders.values() if o.client_id == user.id]
+            return [o for o in self.material_orders.values() if self.same_company(user, o.supplier_id)]
+        return [o for o in self.material_orders.values() if self.same_company(user, o.client_id)]
 
     def set_material_order_status(self, user: User, oid: str, status: str) -> MaterialOrder:
         order = self.material_orders.get(oid)
@@ -2282,8 +2421,12 @@ class MemoryStore:
         proj = self.get_project(pid)
         if not proj:
             raise ValueError("Проект не найден")
+        title = str(body.get("title") or "").strip()
+        if not title:
+            raise ValueError("Укажите название")
+        payload = {**body, "title": title}
         with self._lock:
-            item = PunchItem(id=f"pu-{uuid4().hex[:8]}", project_id=proj.id, created_at=_now(), **body)
+            item = PunchItem(id=f"pu-{uuid4().hex[:8]}", project_id=proj.id, created_at=_now(), **payload)
             self.punches[item.id] = item
             self._save_unlocked()
             return item

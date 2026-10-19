@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/auth";
 import { createDeal, fetchDeals, fetchFunnels, moveDeal } from "@/lib/api";
 import { FUNNEL, PRODUCT_FUNNELS } from "@/lib/format";
 import type { Deal, Funnel, Locale } from "@/lib/types";
+import { features } from "@/lib/features";
 import { t } from "@/i18n/messages";
 import { CrmKanban } from "./CrmKanban";
 import { CrmListView } from "./CrmListView";
@@ -62,6 +63,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
 
   // New Deal Modal
   const [isCreatingDeal, setIsCreatingDeal] = useState(false);
+  const [createError, setCreateError] = useState("");
   const [dealTitle, setDealTitle] = useState("");
   const [dealAmount, setDealAmount] = useState(0);
   const [dealClientName, setDealClientName] = useState("");
@@ -88,7 +90,12 @@ export function CrmBoard({ locale }: { locale: Locale }) {
 
   async function handleCreateDealSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!user || !dealTitle.trim() || createLock.pending) return;
+    if (!user || createLock.pending) return;
+    if (!dealTitle.trim()) {
+      setCreateError(m.fieldRequired);
+      return;
+    }
+    setCreateError("");
     await createLock.run(async () => {
     try {
       const created = await createDeal(user.email, {
@@ -116,7 +123,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
   if (!user) {
     return (
       <div className="py-16 text-center">
-        <p className="text-sm text-ink/65 mb-3">Для работы в CRM-системе войдите под демо-пользователем.</p>
+        <p className="text-sm text-ink/65 mb-3">{m.needLogin}</p>
         <Link href={`/${locale}/login`} className="btn-ice text-sm !py-2 !px-5 inline-block">
           {m.navLogin}
         </Link>
@@ -136,13 +143,9 @@ export function CrmBoard({ locale }: { locale: Locale }) {
               <span className="grid place-items-center h-7 w-7 rounded-lg bg-pine text-white text-xs font-bold">
                 B24
               </span>
-              <h2 className="text-lg font-serif font-bold text-ink tracking-tight">
-                CRM ANYQ · Продажи и Строительство
-              </h2>
+              <h2 className="text-lg font-serif font-bold text-ink tracking-tight">{m.crmTitle}</h2>
             </div>
-            <p className="text-xs text-ink/50 mt-0.5">
-              Воронка: изыскания → проектирование → материалы → СМР
-            </p>
+            <p className="text-xs text-ink/50 mt-0.5">{m.crmLead}</p>
           </div>
 
           {/* Global Quick Action */}
@@ -152,7 +155,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
               onClick={() => setIsCreatingDeal(true)}
               className="px-4 py-2 bg-pine text-white text-xs font-semibold rounded-lg hover:bg-pine/90 transition-colors shadow-xs flex items-center gap-1.5"
             >
-              <span>+</span> Новая сделка
+              <span>+</span> {m.crmNew}
             </button>
           </div>
         </div>
@@ -160,13 +163,13 @@ export function CrmBoard({ locale }: { locale: Locale }) {
         {/* Top Entity Tabs */}
         <div className="tab-scroll pt-3">
           {[
-            { id: "deals", label: "💼 Сделки", desc: "Воронки продаж" },
-            { id: "leads", label: "📥 Лиды", desc: "Входящие заявки" },
-            { id: "contacts", label: "👥 Контакты & Компании", desc: "База контрагентов" },
-            { id: "activities", label: "📋 Дела & Задачи", desc: "Звонки и выезды" },
-            { id: "invoices", label: "🧾 Счета", desc: "Отметка оплаты вручную" },
-            { id: "analytics", label: "📊 Воронка & Аналитика", desc: "KPI и конверсия" },
-            { id: "chess", label: "🏗 Шахматка", desc: "демо / иллюстративная модель" },
+            { id: "deals", label: m.crmDeals },
+            { id: "leads", label: m.crmLeads },
+            { id: "contacts", label: m.crmContacts },
+            { id: "activities", label: m.crmActivities },
+            { id: "invoices", label: m.crmInvoices },
+            { id: "analytics", label: m.crmAnalytics },
+            ...(features.chess ? [{ id: "chess", label: m.crmChess }] : []),
           ].map((tab) => (
             <button
               key={tab.id}
@@ -189,7 +192,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
         <div className="flex flex-wrap items-center justify-between gap-3 bg-white/70 backdrop-blur-xs p-3.5 rounded-xl border border-ink/10 shadow-xs">
           {/* 5 Funnels Switcher */}
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-xs font-semibold text-ink/50 uppercase tracking-wider mr-1">Воронка:</span>
+            <span className="text-xs font-semibold text-ink/50 uppercase tracking-wider mr-1">{m.crmFunnel}</span>
             {PRODUCT_FUNNELS.map((f) => (
               <button
                 key={f}
@@ -215,7 +218,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
                 viewMode === "kanban" ? "bg-white text-pine font-semibold shadow-2xs" : "text-ink/60 hover:text-ink"
               }`}
             >
-              Канбан
+              {m.crmKanban}
             </button>
             <button
               type="button"
@@ -224,7 +227,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
                 viewMode === "list" ? "bg-white text-pine font-semibold shadow-2xs" : "text-ink/60 hover:text-ink"
               }`}
             >
-              Список
+              {m.crmList}
             </button>
           </div>
         </div>
@@ -311,7 +314,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
         </WidgetBoundary>
       )}
 
-      {activeTab === "chess" && (
+      {features.chess && activeTab === "chess" && (
         <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
           <CrmChessView locale={locale} />
         </WidgetBoundary>
@@ -332,26 +335,28 @@ export function CrmBoard({ locale }: { locale: Locale }) {
       {isCreatingDeal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 backdrop-blur-xs p-4 animate-fadeIn">
           <div className="w-full max-w-lg bg-white rounded-2xl p-6 shadow-2xl border border-ink/15">
-            <h3 className="text-lg font-serif font-bold text-ink mb-1">Создать новую сделку</h3>
-            <p className="text-xs text-ink/60 mb-4">Внесите сделку в выбранную отраслевую воронку.</p>
+            <h3 className="text-lg font-serif font-bold text-ink mb-1">{m.crmNew}</h3>
+            <p className="text-xs text-ink/60 mb-4">{m.crmLead}</p>
+            {createError ? <p className="mb-3 text-sm text-red-700" role="alert">{createError}</p> : null}
 
             <form onSubmit={handleCreateDealSubmit} className="space-y-3 text-xs">
               <div>
-                <label className="block text-ink/60 font-medium mb-1">Направление / Воронка:</label>
+                <label className="block text-ink/60 font-medium mb-1">{m.crmFunnel}</label>
                 <select
                   value={funnel}
                   onChange={(e) => setFunnel(e.target.value as Funnel)}
                   className="w-full px-3 py-2 text-sm border border-ink/15 rounded-lg bg-white font-medium"
                 >
-                  <option value="construction">Строительство / СМР (Генподряд)</option>
-                  <option value="design">Проектирование / ПСД (Архитектура)</option>
-                  <option value="materials">Поставка материалов (Бетон/Арматура)</option>
-                  <option value="legal">Юр. оформление / ГАСК</option>
+                  {PRODUCT_FUNNELS.map((id) => (
+                    <option key={id} value={id}>
+                      {FUNNEL[id]?.[locale] ?? id}
+                    </option>
+                  ))}
                 </select>
               </div>
 
               <div>
-                <label className="block text-ink/60 font-medium mb-1">Название сделки:</label>
+                <label className="block text-ink/60 font-medium mb-1">{m.crmDeals}</label>
                 <input
                   type="text"
                   placeholder="напр. Корпус Б — монолит, Наурыз"

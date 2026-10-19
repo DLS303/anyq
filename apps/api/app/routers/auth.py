@@ -3,6 +3,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
+from app.config import demo_mode
 from app.deps import require_roles, require_user
 from app.legal import consent_documents
 from app.ratelimit import RateLimited, login_limiter
@@ -10,6 +11,11 @@ from app.schemas import CrossBorderConsentBody, LoginBody, RegisterBody, User
 from app.store import ConsentRequired, store
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
+
+
+@router.get("/bootstrap")
+def bootstrap():
+    return {"ok": True, "data": {"needs_owner": not store.users_by_id, "demo_mode": demo_mode()}}
 
 
 def _client_meta(request: Request) -> tuple[str, str]:

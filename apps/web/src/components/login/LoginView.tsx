@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { loginRequest, registerRequest } from "@/lib/api";
+import { fetchBootstrap, loginRequest, registerRequest } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { MATERIAL_CAT } from "@/lib/format";
 import type { Locale, MaterialCat } from "@/lib/types";
@@ -44,11 +44,24 @@ export function LoginView({
   const [busy, setBusy] = useState(false);
   const [pdConsent, setPdConsent] = useState(false);
   const [aiConsent, setAiConsent] = useState(false);
+  const [needsOwner, setNeedsOwner] = useState(false);
 
   useEffect(() => {
-    setMode(PILOT_MODE ? "login" : initialMode);
+    let stop = false;
     setPdConsent(false);
     setAiConsent(false);
+    fetchBootstrap()
+      .then((row) => {
+        if (stop) return;
+        setNeedsOwner(row.needs_owner);
+        setMode(row.needs_owner ? "register" : PILOT_MODE ? "login" : initialMode);
+      })
+      .catch(() => {
+        if (!stop) setMode(PILOT_MODE ? "login" : initialMode);
+      });
+    return () => {
+      stop = true;
+    };
   }, [initialMode]);
 
   function toast(message: string) {
@@ -98,11 +111,12 @@ export function LoginView({
       setError("Укажите телефон");
       return;
     }
-    if (!role) {
+    const chosen = needsOwner ? "owner" : role;
+    if (!chosen) {
       setError("Выберите роль");
       return;
     }
-    if (role === "supplier") {
+    if (chosen === "supplier") {
       if (skuTitle.trim().length < 2) {
         setError("Укажите первую позицию для каталога");
         return;
@@ -126,18 +140,18 @@ export function LoginView({
         company: company.trim(),
         company_bin: bin,
         city: city.trim() || "Алматы",
-        role,
-        pilot: pilotOn ? "engicon" : "",
-        sku_title: role === "supplier" ? skuTitle.trim() : "",
+        role: chosen,
+        pilot: needsOwner ? "" : pilotOn ? "engicon" : "",
+        sku_title: chosen === "supplier" ? skuTitle.trim() : "",
         sku_category: skuCategory,
         sku_unit: skuUnit.trim() || "т",
-        sku_price: role === "supplier" ? price : 0,
-        sku_stock: role === "supplier" ? Number(skuStock) || 0 : 0,
+        sku_price: chosen === "supplier" ? price : 0,
+        sku_stock: chosen === "supplier" ? Number(skuStock) || 0 : 0,
         consent_offer_pd: true,
         consent_ai: aiConsent,
       });
       login(res.user, res.token);
-      if (role === "supplier") {
+      if (chosen === "supplier") {
         toast(pilotOn ? `«${skuTitle.trim()}» уже в каталоге. Пилот Engicon.` : `«${skuTitle.trim()}» уже в каталоге.`);
         router.push(`/${locale}/materials`);
       } else {
@@ -155,7 +169,7 @@ export function LoginView({
     <div className="max-w-4xl mx-auto py-6 sm:py-10">
       <div className="grid md:grid-cols-[1.15fr_0.85fr] gap-8 items-start">
         <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
-          {PILOT_MODE ? null : (
+          {PILOT_MODE || needsOwner ? null : (
             <div className="flex items-center gap-2 mb-6 p-1 bg-slate-100 rounded-2xl w-fit border border-slate-200">
               <button
                 type="button"
@@ -185,11 +199,11 @@ export function LoginView({
           )}
 
           <h1 className="text-2xl font-bold text-slate-900 mb-1">
-            {PILOT_MODE || mode === "login" ? (PILOT_MODE ? m.pilotLoginTitle : "Вход в ANYQ") : "Регистрация компании"}
+            {needsOwner ? m.ownerSetupTitle : PILOT_MODE || mode === "login" ? (PILOT_MODE ? m.pilotLoginTitle : m.loginTitle) : m.register}
           </h1>
-          <p className="text-xs text-slate-500 mb-6">{PILOT_MODE ? m.pilotLoginLead : m.loginLead}</p>
+          <p className="text-xs text-slate-500 mb-6">{needsOwner ? m.ownerSetupLead : PILOT_MODE ? m.pilotLoginLead : m.loginLead}</p>
 
-          {PILOT_MODE || mode === "login" ? (
+          {!needsOwner && (PILOT_MODE || mode === "login") ? (
             <form onSubmit={onLogin} className="grid gap-3.5">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
@@ -330,6 +344,7 @@ export function LoginView({
                 </label>
               </div>
 
+              {needsOwner ? null : (
               <label className="block">
                 <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Роль</span>
                 <select
@@ -346,8 +361,9 @@ export function LoginView({
                   <option value="supplier">Поставщик — позиция сразу в каталоге</option>
                 </select>
               </label>
+              )}
 
-              {role === "supplier" ? (
+              {role === "supplier" && !needsOwner ? (
                 <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white/70 p-3.5">
                   <p className="text-xs font-semibold text-slate-700">Первая позиция. Публикуется в каталог сразу, без модератора.</p>
                   <label className="block">
@@ -408,6 +424,7 @@ export function LoginView({
                 </div>
               ) : null}
 
+              {needsOwner ? null : (
               <label className="flex items-start gap-2.5 text-sm text-slate-700">
                 <input
                   type="checkbox"
@@ -417,6 +434,7 @@ export function LoginView({
                 />
                 <span>Пилот Engicon. Компания участвует в пилотном проекте.</span>
               </label>
+              )}
 
               <ConsentField locale={locale} checked={pdConsent} onChange={setPdConsent} />
               <AiConsentField locale={locale} checked={aiConsent} onChange={setAiConsent} />
@@ -437,14 +455,16 @@ export function LoginView({
         <aside className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
           <div className="flex items-center gap-2 mb-3">
             <Building2 className="h-5 w-5 text-pine" />
-            <h2 className="text-lg font-bold text-slate-900">{PILOT_MODE ? m.pilotLoginTitle : "Пилот с Engicon"}</h2>
+            <h2 className="text-lg font-bold text-slate-900">{needsOwner ? m.ownerSetupTitle : PILOT_MODE ? m.pilotLoginTitle : m.demoHint}</h2>
           </div>
           <p className="text-sm text-slate-600 leading-relaxed">
-            {PILOT_MODE
+            {needsOwner
+              ? m.ownerSetupLead
+              : PILOT_MODE
               ? m.pilotLoginAside
               : "Компания входит по своим реквизитам. Поставщик указывает первую позицию, и она сразу появляется в каталоге материалов."}
           </p>
-          {PILOT_MODE ? null : (
+          {PILOT_MODE || needsOwner ? null : (
             <>
               <ul className="mt-5 grid gap-3 text-sm text-slate-700">
                 <li className="flex gap-2">

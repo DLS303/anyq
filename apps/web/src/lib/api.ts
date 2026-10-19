@@ -16,6 +16,14 @@ import type {
   Plot,
   Material,
   MaterialOrder,
+  ProcDocResult,
+  ProcDocumentRow,
+  ProcImportResult,
+  ProcList,
+  ProcOfferCell,
+  ProcPicker,
+  ProcRepeatLine,
+  ProcSheet,
   Review,
   ServiceOrder,
   Specialist,
@@ -62,6 +70,9 @@ function detailOf(json: unknown, fallback: string) {
   if (json && typeof json === "object" && "detail" in json) {
     const d = (json as { detail: unknown }).detail;
     if (typeof d === "string") return d;
+    if (Array.isArray(d) && d.length && d[0] && typeof d[0] === "object" && "msg" in d[0]) {
+      return String((d[0] as { msg: unknown }).msg);
+    }
   }
   return fallback;
 }
@@ -567,6 +578,19 @@ export function fetchThreads(email: string, signal?: AbortSignal) {
   return request<ChatThread[]>("/v1/chat/threads", { email, signal });
 }
 
+export type ChatPeer = { id: string; full_name: string; role: string };
+
+export function fetchChatPeers(signal?: AbortSignal) {
+  return request<ChatPeer[]>("/v1/chat/peers", { signal });
+}
+
+export function openChatThread(peerId: string, title: string) {
+  return request<ChatThread>("/v1/chat/threads", {
+    method: "POST",
+    body: JSON.stringify({ peer_id: peerId, title }),
+  });
+}
+
 export async function fetchMessages(email: string, tid: string, signal?: AbortSignal) {
   void email;
   const json = await requestEnvelope<ChatMessage[]>(`/v1/chat/threads/${tid}/messages`, { signal });
@@ -592,7 +616,7 @@ export function registerRequest(body: {
   company: string;
   company_bin: string;
   city: string;
-  role: "buyer" | "contractor" | "supplier";
+  role: "buyer" | "contractor" | "supplier" | "owner";
   pilot: string;
   sku_title: string;
   sku_category: string;
@@ -773,6 +797,17 @@ export function grantAiConsent() {
   return request<ConsentRow>("/v1/auth/consents/ai", { method: "POST" });
 }
 
+export function grantCrossBorderConsent(provider: string, country: string) {
+  return request<ConsentRow>("/v1/auth/consents/cross-border", {
+    method: "POST",
+    body: JSON.stringify({ provider, country }),
+  });
+}
+
+export function fetchBootstrap(signal?: AbortSignal) {
+  return request<{ needs_owner: boolean; demo_mode: boolean }>("/v1/auth/bootstrap", { auth: false, signal });
+}
+
 export function revokeConsent(id: string) {
   return request<ConsentRow>(`/v1/auth/consents/${id}/revoke`, { method: "POST" });
 }
@@ -783,4 +818,179 @@ export function sendChat(email: string, tid: string, text: string) {
     email,
     body: JSON.stringify({ text }),
   });
+}
+
+function withKey(idempotencyKey?: string) {
+  const headers = new Headers();
+  if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
+  return headers;
+}
+
+export function fetchProcRequests(projectId: string) {
+  return request<ProcList>(`/v1/procurement/projects/${projectId}/requests`);
+}
+
+export function createProcRequest(projectId: string, title: string, idempotencyKey?: string) {
+  return request<{ id: string }>(`/v1/procurement/projects/${projectId}/requests`, {
+    method: "POST",
+    body: JSON.stringify({ title }),
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function fetchProcSheet(requestId: string) {
+  return request<ProcSheet>(`/v1/procurement/requests/${requestId}/sheet`);
+}
+
+export function fetchProcPicker(projectId: string, q = "") {
+  const query = q.trim() ? `?q=${encodeURIComponent(q.trim())}` : "";
+  return request<ProcPicker>(`/v1/procurement/projects/${projectId}/picker${query}`);
+}
+
+export function quickProcRequest(
+  projectId: string,
+  body: { title: string; unit: string; qty: number },
+  idempotencyKey?: string,
+) {
+  return request<{ request: { id: string }; line: { id: string } }>(`/v1/procurement/projects/${projectId}/quick`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function repeatProcRequest(requestId: string, idempotencyKey?: string) {
+  return request<{ request: { id: string; title: string }; lines: ProcRepeatLine[] }>(
+    `/v1/procurement/requests/${requestId}/repeat`,
+    { method: "POST", headers: withKey(idempotencyKey) },
+  );
+}
+
+export function patchProcLine(lineId: string, qty: number) {
+  return request<{ id: string; qty: number }>(`/v1/procurement/lines/${lineId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ qty }),
+  });
+}
+
+export function importProcLines(requestId: string, file: File, preview: boolean, idempotencyKey?: string) {
+  const body = new FormData();
+  body.append("file", file);
+  const query = preview ? "?preview=1" : "";
+  return request<ProcImportResult>(`/v1/procurement/requests/${requestId}/import-lines${query}`, {
+    method: "POST",
+    body,
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function importProcOffers(requestId: string, file: File, supplierName: string, idempotencyKey?: string) {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("supplier_name", supplierName);
+  return request<ProcImportResult>(`/v1/procurement/requests/${requestId}/import-offers`, {
+    method: "POST",
+    body,
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function createProcOffer(
+  lineId: string,
+  payload: {
+    supplier_name: string;
+    price_kzt: number;
+    vat_included: boolean | null;
+    delivery_term: string;
+    note: string;
+    confirmed: boolean;
+  },
+  idempotencyKey?: string,
+) {
+  return request<ProcOfferCell>(`/v1/procurement/lines/${lineId}/offers`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function deleteProcOffer(offerId: string) {
+  return request<{ id: string }>(`/v1/procurement/offers/${offerId}`, { method: "DELETE" });
+}
+
+export function selectProcOffer(lineId: string, offerId: string | null, idempotencyKey?: string) {
+  return request(`/v1/procurement/lines/${lineId}/select`, {
+    method: "POST",
+    body: JSON.stringify({ offer_id: offerId }),
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function selectProcBest(requestId: string, idempotencyKey?: string) {
+  return request<ProcSheet>(`/v1/procurement/requests/${requestId}/select-best`, {
+    method: "POST",
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function uploadProcDocument(
+  requestId: string,
+  file: File,
+  fields: { supplier_name: string; doc_number: string; doc_date: string; amount_kzt: string },
+  idempotencyKey?: string,
+) {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("supplier_name", fields.supplier_name);
+  body.append("doc_number", fields.doc_number);
+  body.append("doc_date", fields.doc_date);
+  if (fields.amount_kzt.trim()) body.append("amount_kzt", fields.amount_kzt.trim());
+  return request<ProcDocResult>(`/v1/procurement/requests/${requestId}/documents`, {
+    method: "POST",
+    body,
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function setProcDocumentActual(documentId: string, isActual: boolean) {
+  return request<ProcDocumentRow>(`/v1/procurement/documents/${documentId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_actual: isActual }),
+  });
+}
+
+async function authedBlob(path: string) {
+  const headers = new Headers();
+  applyAuth(headers);
+  const res = await fetch(`${getApiBase()}${path}`, { headers, cache: "no-store" });
+  sessionExpired(path, res, headers);
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      message = detailOf(await res.json(), message);
+    } catch {
+      /* the body is not JSON when the file itself is returned */
+    }
+    throw new ApiError(message, res.status);
+  }
+  return res.blob();
+}
+
+export async function downloadProc(path: string, filename: string) {
+  const blob = await authedBlob(path);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function openProcFile(path: string) {
+  const blob = await authedBlob(path);
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank", "noopener");
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }

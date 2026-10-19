@@ -27,10 +27,10 @@ export function SpecialistsClient({ locale }: { locale: Locale }) {
         <div className="max-w-2xl">
           <p className="text-xs uppercase tracking-wider text-pine font-bold flex items-center gap-1.5 mb-1">
             <ShieldCheck className="h-4 w-4 text-emerald-600" />
-            <span>Аккредитованный реестр девелопмента РК</span>
+            <span>{m.navSpecialists}</span>
           </p>
           <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
-            Специалисты, архитекторы и генподрядчики
+            {m.navSpecialists}
           </h1>
           <p className="mt-2 text-sm text-slate-500 leading-relaxed">
             {m.specialistsLead}
@@ -103,6 +103,7 @@ const SpecialistCard = memo(function SpecialistCard({
   specialist: Specialist;
   locale: Locale;
 }) {
+  const m = t(locale);
   return (
           <div
             className="glass-strong flex flex-col justify-between overflow-hidden rounded-3xl border border-slate-200/90 shadow-luxury transition-all duration-300 group hover:shadow-luxury-lg"
@@ -136,7 +137,7 @@ const SpecialistCard = memo(function SpecialistCard({
                 {s.license_verified ? (
                   <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 text-[11px] font-semibold border border-emerald-200/60">
                     <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                    <span>Лицензия ГАСК: {s.license_cat} категория</span>
+                    <span>{m.licenseBadge.replace("{cat}", s.license_cat)}</span>
                   </div>
                 ) : null}
 
@@ -154,13 +155,13 @@ const SpecialistCard = memo(function SpecialistCard({
                 href={`/${locale}/specialists/${s.slug}`}
                 className="btn-ice flex-1 text-xs font-bold !py-2.5 text-center shadow-navy"
               >
-                Заказать услугу
+                {m.order}
               </Link>
               <Link
                 href={`/${locale}/specialists/${s.slug}`}
                 className="btn-ghost text-xs font-semibold !py-2.5 !px-3"
               >
-                Профиль
+                {locale === "kk" ? "Бейін" : "Профиль"}
               </Link>
             </div>
           </div>

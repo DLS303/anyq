@@ -217,9 +217,8 @@ def test_invoice_is_marked_manually_by_recipient_only():
 
     buyer_view = client.get("/v1/crm/invoices", headers=_auth(buyer))
     assert buyer_view.status_code == 200
-    seen = next(row for row in buyer_view.json()["data"] if row["id"] == invoice_id)
-    assert seen["can_mark_paid"] is False
-    assert seen["escrow_enabled"] is False
+    assert all(row["id"] != invoice_id for row in buyer_view.json()["data"])
+    assert client.get("/v1/crm/deals/deal-land-1", headers=_auth(buyer)).status_code == 403
 
     denied = client.post(f"/v1/crm/invoices/{invoice_id}/pay", headers=_auth(buyer))
     assert denied.status_code == 403

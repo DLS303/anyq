@@ -17,6 +17,7 @@ from app.routers import (
     moderation,
     modules,
     plots,
+    procurement,
     public,
     site,
     specialists,
@@ -51,6 +52,7 @@ app.include_router(materials.router)
 app.include_router(estimates.router)
 app.include_router(acts.router)
 app.include_router(site.router)
+app.include_router(procurement.router)
 app.include_router(public.router)
 app.include_router(files.router)
 

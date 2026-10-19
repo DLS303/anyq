@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { addProjectMember, fetchSiteBundle, postSite, removeProjectMember } from "@/lib/api";
 import { money } from "@/lib/format";
+import { DEMO_ONLY_TABS, features } from "@/lib/features";
 import { canEditProject, PILOT_MODE } from "@/lib/pilot";
 import { siteRoleLabel, statusLabel } from "@/lib/report";
 import { ChunkFallback } from "@/components/ui/ChunkFallback";
@@ -29,6 +30,18 @@ const InteractiveGantt = dynamic(
 const Bim3dViewer = dynamic(
   () => loadWithin(import("./Bim3dViewer").then((m) => m.Bim3dViewer)),
   { ssr: false, loading: () => <ChunkFallback /> },
+);
+
+const ProcurementTab = dynamic(
+  () => import("./ProcurementTab").then((m) => m.ProcurementTab),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center p-12 text-ink/50 glass rounded-2xl">
+        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-pine mr-3" />
+      </div>
+    ),
+  },
 );
 
 const KsActGenerator = dynamic(
@@ -71,8 +84,13 @@ const LEGACY_TABS: Tab[] = [
   "ks",
 ];
 
-const PILOT_MAIN: Tab[] = ["today", "punch", "procurement", "money", "gantt"];
-const PILOT_MORE: Tab[] = ["rfi", "sub", "qa", "draw", "crew", "meet", "dir", "ks"];
+const PILOT_MAIN: Tab[] = ["today", "punch", "procurement", "money", "qa"];
+const PILOT_MORE: Tab[] = ["rfi", "gantt", "crew", "meet", "dir", "sub", "draw", "ks"];
+
+function visibleTabs(tabs: Tab[]) {
+  if (features.demo) return tabs;
+  return tabs.filter((id) => !DEMO_ONLY_TABS.includes(id as (typeof DEMO_ONLY_TABS)[number]));
+}
 
 function tabLabel(id: Tab, m: Msg, pilot: boolean) {
   switch (id) {
@@ -130,9 +148,10 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const m = t(locale);
   const router = useRouter();
   const { user } = useAuth();
-  const pilot = PILOT_MODE;
+  const pilot = !features.demo || PILOT_MODE;
   const [tab, setTab] = useState<Tab>(pilot ? "today" : "home");
   const [showPunch, setShowPunch] = useState(false);
+  const [punchError, setPunchError] = useState("");
   const [showExtra, setShowExtra] = useState(false);
   const email = user?.email || "";
   const bundleQuery = useAsync((signal) => fetchSiteBundle(id, signal), [id]);
@@ -185,7 +204,8 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const canEdit = canEditProject(user, p, directory);
   const canApprove = Boolean(bundle.can_approve_changes);
   const healthColor = snap.health === "green" ? "bg-pine" : snap.health === "red" ? "bg-clay" : "bg-sand";
-  const mainTabs = pilot ? PILOT_MAIN : LEGACY_TABS;
+  const mainTabs = visibleTabs(pilot ? PILOT_MAIN : LEGACY_TABS);
+  const moreTabs = visibleTabs(PILOT_MORE);
   const logs = (bundle.daily as DailyEntry[]) || [];
   const punches = (bundle.punches as { id: string; title: string; location: string; trade: string; status: string }[]) || [];
   const budget = (bundle.budget as { id: string; code: string; title: string; budget_kzt: number; committed_kzt: number; actual_kzt: number }[]) || [];
@@ -218,8 +238,8 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
             <div className="sm:hidden">
               <MoreMenu
                 label={m.tabMore}
-                active={PILOT_MORE.includes(tab)}
-                items={PILOT_MORE.map((id) => ({ id, label: tabLabel(id, m, true) }))}
+                active={moreTabs.includes(tab)}
+                items={moreTabs.map((id) => ({ id, label: tabLabel(id, m, true) }))}
                 onPick={setTab}
               />
             </div>
@@ -233,7 +253,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       {pilot ? (
         <>
           <div className="hidden sm:flex sm:flex-wrap sm:gap-2 mb-6">
-            {PILOT_MAIN.map((id) =>
+            {visibleTabs(PILOT_MAIN).map((id) =>
               tabButton(
                 id,
                 `min-h-12 rounded-full px-3 text-sm ${tab === id ? "bg-pine text-paper" : "text-ink/70 hover:bg-white/70"}`,
@@ -241,8 +261,8 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
             )}
             <MoreMenu
               label={m.tabMore}
-              active={PILOT_MORE.includes(tab)}
-              items={PILOT_MORE.map((id) => ({ id, label: tabLabel(id, m, true) }))}
+              active={moreTabs.includes(tab)}
+              items={moreTabs.map((id) => ({ id, label: tabLabel(id, m, true) }))}
               onPick={setTab}
             />
           </div>
@@ -250,7 +270,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
             className="sm:hidden fixed bottom-0 inset-x-0 z-40 grid grid-cols-5 overflow-hidden border-t border-slate-200/80 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)]"
             aria-label={m.navMenu}
           >
-            {PILOT_MAIN.map((id) =>
+            {visibleTabs(PILOT_MAIN).map((id) =>
               tabButton(
                 id,
                 `flex w-full min-w-0 flex-col items-center justify-center min-h-12 px-0.5 text-center text-[10px] leading-tight ${
@@ -270,6 +290,8 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
           )}
         </div>
       )}
+
+      {punchError || forms.error ? <p className="mb-3 text-sm text-red-700" role="alert">{punchError || forms.error}</p> : null}
 
       {tab === "home" ? (
         <div className="grid sm:grid-cols-4 gap-3">
@@ -357,13 +379,20 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                 e.preventDefault();
                 const form = e.currentTarget;
                 const fd = new FormData(form);
+                const title = String(fd.get("title") || "").trim();
+                const question = String(fd.get("question") || "").trim();
+                if (!title || !question) {
+                  setPunchError(m.fieldRequired);
+                  return;
+                }
+                setPunchError("");
                 void forms.submit(async (key) => {
                   await postSite(
                     `projects/${p.id}/rfis`,
                     email,
                     {
-                      title: String(fd.get("title")),
-                      question: String(fd.get("question")),
+                      title,
+                      question,
                       drawing: String(fd.get("drawing") || ""),
                     },
                     key,
@@ -383,7 +412,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         </Tool>
       ) : null}
 
-      {tab === "sub" ? (
+      {tab === "sub" && features.submittals ? (
         <Tool
           title={m.tabSub}
           empty={m.hubEmpty}
@@ -443,12 +472,18 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                   e.preventDefault();
                   const form = e.currentTarget;
                   const fd = new FormData(form);
+                  const title = String(fd.get("title") || "").trim();
+                  if (!title) {
+                    setPunchError(m.fieldRequired);
+                    return;
+                  }
+                  setPunchError("");
                   void forms.submit(async (key) => {
                     await postSite(
                       `projects/${p.id}/punches`,
                       email,
                       {
-                        title: String(fd.get("title")),
+                        title,
                         location: String(fd.get("location") || ""),
                         trade: String(fd.get("trade") || ""),
                       },
@@ -458,7 +493,8 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                   });
                 }}
               >
-                <input name="title" required placeholder={m.tabIssues} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
+                {punchError || forms.error ? <p className="sm:col-span-3 text-sm text-red-700" role="alert">{punchError || forms.error}</p> : null}
+                <input name="title" required placeholder={m.tabIssues} aria-invalid={forms.error ? true : undefined} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
                 <input name="location" placeholder={m.hubPlace} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
                 <input name="trade" placeholder={m.hubTrade} className="border border-ink/15 px-2 py-1 text-sm min-h-12" />
                 <button className={primaryBtn} disabled={forms.submitting}>
@@ -470,16 +506,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         )
       ) : null}
 
-      {tab === "procurement" ? (
-        <EmptyLine
-          text={m.hubBuyEmpty}
-          action={
-            <Link href={`/${locale}/estimates`} className={primaryBtn}>
-              {m.hubBuyAction}
-            </Link>
-          }
-        />
-      ) : null}
+      {tab === "procurement" ? <ProcurementTab locale={locale} projectId={p.id} projectTitle={p.title} /> : null}
 
       {tab === "qa" ? (
         <div className="grid md:grid-cols-2 gap-6">
@@ -555,12 +582,18 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                   e.preventDefault();
                   const form = e.currentTarget;
                   const fd = new FormData(form);
+                  const title = String(fd.get("title") || "").trim();
+                  if (!title) {
+                    setPunchError(m.fieldRequired);
+                    return;
+                  }
+                  setPunchError("");
                   void forms.submit(async (key) => {
                     await postSite(
                       `projects/${p.id}/incidents`,
                       email,
                       {
-                        title: String(fd.get("title") || ""),
+                        title,
                         severity: String(fd.get("severity") || "low"),
                         description: String(fd.get("description") || ""),
                         day: String(fd.get("day") || ""),
@@ -588,7 +621,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         </div>
       ) : null}
 
-      {tab === "draw" ? (
+      {tab === "draw" && features.drawings ? (
         <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
           <Bim3dViewer
             locale={locale}
@@ -688,12 +721,18 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                       e.preventDefault();
                       const form = e.currentTarget;
                       const fd = new FormData(form);
+                      const title = String(fd.get("title") || "").trim();
+                      if (!title) {
+                        setPunchError(m.fieldRequired);
+                        return;
+                      }
+                      setPunchError("");
                       void forms.submit(async (key) => {
                         await postSite(
                           `projects/${p.id}/changes`,
                           email,
                           {
-                            title: String(fd.get("title")),
+                            title,
                             amount_kzt: Number(fd.get("amount") || 0),
                             reason: String(fd.get("reason") || ""),
                           },
@@ -881,7 +920,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         </Tool>
       ) : null}
 
-      {tab === "ks" ? (
+      {tab === "ks" && features.ksActs ? (
         <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
           <KsActGenerator
             locale={locale}

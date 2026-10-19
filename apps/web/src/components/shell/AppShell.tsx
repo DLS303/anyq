@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { CompareProvider } from "@/lib/compare";
 import type { Locale, Role } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { DEMO_MODE } from "@/lib/features";
 import { PILOT_MODE } from "@/lib/pilot";
 import { LuxuryNavTabs } from "./LuxuryNavTabs";
 import { LuxuryProgressBar } from "./LuxuryProgressBar";
@@ -37,25 +38,35 @@ function swapLocale(pathname: string, locale: Locale) {
 
 function navItems(locale: Locale, m: ReturnType<typeof t>, role?: Role) {
   const link = (path: string) => `/${locale}${path}`;
+  const objects = { href: link("/site"), label: m.navObjects, icon: Building2 };
+  const estimates = { href: link("/estimates"), label: m.navEstimates, icon: Calculator };
+  const cabinet = { href: link("/cabinet"), label: m.navCabinet, icon: UserIcon };
+  const chat = { href: link("/chat"), label: m.navChat, icon: MessageSquare };
+  const crm = { href: link("/crm"), label: m.navCrm, icon: Briefcase };
+  const materials = { href: link("/materials"), label: m.navMaterials, icon: Layers };
+  const moderation = { href: link("/moderation"), label: m.navModeration, icon: SlidersHorizontal };
+  if (!DEMO_MODE) {
+    if (role === "moderator") return [moderation, objects, chat, cabinet];
+    if (role === "supplier") return [materials, objects, chat, cabinet];
+    if (role === "owner" || role === "admin") return [crm, objects, estimates, chat, cabinet, ...(role === "admin" ? [moderation] : [])];
+    return [objects, estimates, chat, cabinet];
+  }
   if (PILOT_MODE) {
-    const objects = { href: link("/site"), label: m.navObjects, icon: Building2 };
-    const estimates = { href: link("/estimates"), label: m.navEstimates, icon: Calculator };
-    const cabinet = { href: link("/cabinet"), label: m.navCabinet, icon: UserIcon };
-    const crm = { href: link("/crm"), label: m.navCrm, icon: Briefcase };
     const field = role === "contractor" || role === "supervisor";
-    if (field) return [objects, estimates, cabinet];
-    if (role === "owner" || role === "admin") return [crm, objects, estimates, cabinet];
-    return [estimates, objects, cabinet];
+    if (field) return [objects, estimates, chat, cabinet];
+    if (role === "owner" || role === "admin") return [crm, objects, estimates, chat, cabinet];
+    return [estimates, objects, chat, cabinet];
   }
   return [
     { href: link("/crm"), label: m.navCrm, icon: Briefcase },
-    { href: link("/materials"), label: m.navMaterials, icon: Layers },
+    materials,
     { href: link("/estimates"), label: m.navAutoEstimate, icon: Calculator },
     { href: link("/specialists"), label: m.navSpecialists, icon: HardHat },
     { href: link("/site"), label: m.navSite, icon: Building2 },
+    { href: link("/catalog"), label: m.navCatalog, icon: Layers },
     { href: link("/control"), label: m.navPanel, icon: SlidersHorizontal },
-    { href: link("/chat"), label: m.navChat, icon: MessageSquare },
-    { href: link("/cabinet"), label: m.navCabinet, icon: UserIcon },
+    chat,
+    cabinet,
   ];
 }
 
@@ -65,7 +76,7 @@ function Header({ locale }: { locale: Locale }) {
   const pathname = usePathname();
   const link = (path: string) => `/${locale}${path}`;
   const nav = navItems(locale, m, user?.role);
-  const showCrm = !PILOT_MODE || user?.role === "owner" || user?.role === "admin";
+  const showCrm = DEMO_MODE ? !PILOT_MODE || user?.role === "owner" || user?.role === "admin" : user?.role === "owner" || user?.role === "admin";
   const [open, setOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -179,16 +190,14 @@ function Header({ locale }: { locale: Locale }) {
                         {m.navCrm}
                       </Link>
                     ) : null}
-                    {PILOT_MODE ? null : (
-                      <Link
-                        href={link("/chat")}
-                        onClick={() => setUserMenuOpen(false)}
-                        className="px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
-                      >
-                        <MessageSquare className="h-4 w-4 text-slate-500" />
-                        {m.navChat}
-                      </Link>
-                    )}
+                    <Link
+                      href={link("/chat")}
+                      onClick={() => setUserMenuOpen(false)}
+                      className="px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
+                    >
+                      <MessageSquare className="h-4 w-4 text-slate-500" />
+                      {m.navChat}
+                    </Link>
                     <button
                       type="button"
                       onClick={() => {
@@ -342,7 +351,7 @@ function Footer({ locale }: { locale: Locale }) {
             </span>
             <div>
               <span className="font-bold text-slate-900 text-base">ANYQ · АНЫҚ</span>
-              <p className="text-xs text-slate-400">Цифровая экосистема девелопмента РК</p>
+              <p className="text-xs text-slate-400">{m.footerNote}</p>
             </div>
           </div>
         </div>
@@ -366,7 +375,7 @@ function BottomNav({ locale }: { locale: Locale }) {
   const { user } = useAuth();
   const pathname = usePathname();
   const onProject = /\/site\/[^/]+/.test(pathname);
-  const items = PILOT_MODE
+  const items = !DEMO_MODE || PILOT_MODE
     ? navItems(locale, m, user?.role).map((item) => ({
         href: item.href,
         label: item.label,
@@ -380,7 +389,7 @@ function BottomNav({ locale }: { locale: Locale }) {
         { href: `/${locale}/cabinet`, label: m.navCabinet, match: (p: string) => p.includes("/cabinet") || p.includes("/login") },
       ];
   return (
-    <nav className={`anyq-tabbar lg:hidden fixed bottom-0 inset-x-0 z-40 border-t border-slate-200/80 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-luxury ${PILOT_MODE && onProject ? "max-sm:hidden" : ""}`}>
+    <nav className={`anyq-tabbar lg:hidden fixed bottom-0 inset-x-0 z-40 border-t border-slate-200/80 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-luxury ${(!DEMO_MODE || PILOT_MODE) && onProject ? "max-sm:hidden" : ""}`}>
       <div className="grid" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
         {items.map((item) => {
           const on = item.match(pathname);

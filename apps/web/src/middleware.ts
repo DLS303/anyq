@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { DEMO_MODE } from "./lib/features";
 
 const LOCALES = ["ru", "kk"];
-const LAND = ["/catalog", "/plots", "/publish", "/compare", "/moderation"];
-const PILOT = process.env.NEXT_PUBLIC_PILOT_MODE === "1";
-const PILOT_HIDDEN = ["/specialists", "/control", "/chat", ...LAND];
+/** Finished areas kept out of the release navigation. */
+const RELEASE_HIDDEN = ["/catalog", "/plots", "/publish", "/compare", "/control"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -25,8 +25,7 @@ export function middleware(request: NextRequest) {
   }
   const locale = pathname.startsWith("/kk") ? "kk" : "ru";
   const rest = pathname.replace(/^\/(ru|kk)/, "") || "/";
-  const hidden = PILOT ? PILOT_HIDDEN : LAND;
-  if (hidden.some((p) => rest === p || rest.startsWith(`${p}/`))) {
+  if (!DEMO_MODE && RELEASE_HIDDEN.some((p) => rest === p || rest.startsWith(`${p}/`))) {
     const url = request.nextUrl.clone();
     url.pathname = `/${locale}`;
     return NextResponse.redirect(url);

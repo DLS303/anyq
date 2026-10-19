@@ -33,7 +33,10 @@ export function ProjectList({ locale }: { locale: Locale }) {
   const canCreate = user?.role === "admin" || user?.role === "owner";
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const query = useAsync((signal) => fetchProjects(signal) as Promise<Snap[]>, []);
+  const query = useAsync((signal) => {
+    if (!localStorage.getItem("superapp_token")) return Promise.resolve([] as Snap[]);
+    return fetchProjects(signal) as Promise<Snap[]>;
+  }, []);
   const items = query.data ?? [];
 
   async function create(form: HTMLFormElement) {
@@ -93,9 +96,15 @@ export function ProjectList({ locale }: { locale: Locale }) {
         {creator}
         <div className="border border-ink/10 bg-white/50 p-6 text-center">
           <p className="text-sm text-ink/70">{m.listEmpty}</p>
-          <Link href={`/${locale}/crm`} className="mt-4 inline-flex min-h-12 items-center text-sm underline">
-            {m.hubFromCrm}
-          </Link>
+          {user ? (
+            <Link href={`/${locale}/crm`} className="mt-4 inline-flex min-h-12 items-center text-sm underline">
+              {m.hubFromCrm}
+            </Link>
+          ) : (
+            <Link href={`/${locale}/login`} className="mt-4 inline-flex min-h-12 items-center text-sm underline">
+              {m.navLogin}
+            </Link>
+          )}
         </div>
       </div>
     );
