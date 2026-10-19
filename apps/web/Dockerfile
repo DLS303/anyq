@@ -29,7 +29,9 @@ RUN npm run build \
        fi
 
 FROM base AS runner
-ENV NODE_ENV=production
+ARG GIT_SHA=
+ENV NODE_ENV=production \
+    GIT_SHA=$GIT_SHA
 RUN addgroup -g 1001 -S nodejs \
     && adduser -S -u 1001 -G nodejs nextjs
 WORKDIR /app

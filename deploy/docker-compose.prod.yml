@@ -9,6 +9,9 @@ services:
     build:
       context: ../apps/api
       dockerfile: Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+        BUILD_TIME: ${BUILD_TIME:-}
     image: anyq-api:current
     container_name: anyq-api
     env_file:
@@ -41,9 +44,9 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/ready', timeout=3).read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/v1/health/ready', timeout=6).read()"]
       interval: 15s
-      timeout: 5s
+      timeout: 8s
       retries: 5
       start_period: 60s
     logging: &json_logs
@@ -69,6 +72,7 @@ services:
       args:
         NEXT_PUBLIC_PILOT_MODE: ${NEXT_PUBLIC_PILOT_MODE:-1}
         INTERNAL_API_URL: http://api:8010
+        GIT_SHA: ${GIT_SHA:-}
     image: anyq-web:current
     container_name: anyq-web
     environment:
@@ -148,6 +152,9 @@ services:
     build:
       context: ../apps/api
       dockerfile: Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+        BUILD_TIME: ${BUILD_TIME:-}
     env_file:
       - path: .env
         required: true

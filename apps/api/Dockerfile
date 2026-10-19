@@ -18,6 +18,9 @@ RUN pip install --upgrade pip \
 
 FROM python:3.11-slim-bookworm AS runtime
 
+ARG GIT_SHA=""
+ARG BUILD_TIME=""
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
@@ -26,7 +29,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     GUNICORN_TIMEOUT=120 \
     GUNICORN_GRACEFUL_TIMEOUT=30 \
     OMP_NUM_THREADS=1 \
-    OPENBLAS_NUM_THREADS=1
+    OPENBLAS_NUM_THREADS=1 \
+    GIT_SHA=${GIT_SHA} \
+    BUILD_TIME=${BUILD_TIME}
 
 # gosu is used by the entrypoint to drop root after the data volume is ready.
 # libglib and libgomp are runtime libraries for opencv.
@@ -52,8 +57,8 @@ RUN chmod 755 /usr/local/bin/anyq-api-entrypoint
 
 EXPOSE 8010
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/ready', timeout=3).read()"
+HEALTHCHECK --interval=15s --timeout=8s --start-period=60s --retries=5 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/v1/health/ready', timeout=6).read()"
 
 ENTRYPOINT ["anyq-api-entrypoint"]
 CMD ["gunicorn"]
