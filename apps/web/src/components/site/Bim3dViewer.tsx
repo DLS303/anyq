@@ -5,18 +5,12 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Locale } from "@/lib/types";
 import dynamic from "next/dynamic";
+import { ChunkFallback } from "@/components/ui/ChunkFallback";
+import { loadWithin } from "@/lib/loadWithin";
 
 const PdfDrawingViewer = dynamic(
-  () => import("./PdfDrawingViewer").then((m) => m.PdfDrawingViewer),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center p-12 text-ink/50 glass rounded-2xl">
-        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-pine mr-3" />
-        Загрузка PDF CAD чертежа...
-      </div>
-    ),
-  }
+  () => loadWithin(import("./PdfDrawingViewer").then((m) => m.PdfDrawingViewer)),
+  { ssr: false, loading: () => <ChunkFallback /> },
 );
 
 interface DrawingItem {

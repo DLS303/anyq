@@ -9,8 +9,14 @@ import { PURPOSE, RELIEF, UTILITY } from "@/lib/format";
 import { DISTRICTS, type Locale, type Purpose, type Relief, type Utility } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { AuthImage } from "@/components/media/AuthImage";
+import { ChunkFallback } from "@/components/ui/ChunkFallback";
+import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
+import { loadWithin } from "@/lib/loadWithin";
 
-const DrawMap = dynamic(() => import("@/components/catalog/DrawMap"), { ssr: false });
+const DrawMap = dynamic(() => loadWithin(import("@/components/catalog/DrawMap")), {
+  ssr: false,
+  loading: () => <ChunkFallback />,
+});
 
 const UTILS: Utility[] = ["connected", "nearby", "tu_received", "absent"];
 const RELIEFS: Relief[] = ["flat", "slope", "steep"];
@@ -317,7 +323,9 @@ export function PublishForm({ locale, editId }: { locale: Locale; editId?: strin
         <div>
           <p className="text-sm text-ink/60 mb-2">{m.drawHint}</p>
           <div className="h-[360px] border border-ink/10 overflow-hidden">
-            <DrawMap points={points} onAdd={(pt) => setPoints((p) => [...p, pt])} />
+            <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+              <DrawMap points={points} onAdd={(pt) => setPoints((p) => [...p, pt])} />
+            </WidgetBoundary>
           </div>
           <div className="mt-2 flex gap-3 text-sm">
             <button type="button" onClick={() => setPoints((p) => p.slice(0, -1))} className="underline">

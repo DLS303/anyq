@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ConsentsPanel } from "@/components/cabinet/ConsentsPanel";
 import { ProjectList } from "@/components/site/ProjectList";
-import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
+import { ErrorRetry, LoadingSkeleton, useAsync, useSubmitLock } from "@/lib/useAsync";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import {
@@ -48,15 +48,16 @@ export function CabinetView({ locale }: { locale: Locale }) {
   const m = t(locale);
   const { user } = useAuth();
   const [error, setError] = useState("");
-  const loaded = useAsync(async () => {
+  const loaded = useAsync(async (signal) => {
     if (!user) return { orders: [] as ServiceOrder[], matOrders: [] as MaterialOrder[], skus: [] as Material[] };
     const [orders, matOrders, skus] = await Promise.all([
-      fetchOrders(user.email),
-      fetchMaterialOrders(user.email),
-      user.role === "supplier" || user.role === "admin" ? fetchSupplierMaterials(user.email) : Promise.resolve([]),
+      fetchOrders(user.email, signal),
+      fetchMaterialOrders(user.email, signal),
+      user.role === "supplier" || user.role === "admin" ? fetchSupplierMaterials(user.email, signal) : Promise.resolve([]),
     ]);
     return { orders, matOrders, skus };
   }, [user?.email, user?.role]);
+  const actions = useSubmitLock();
   const orders = loaded.data?.orders ?? [];
   const matOrders = loaded.data?.matOrders ?? [];
   const skus = loaded.data?.skus ?? [];
@@ -79,7 +80,8 @@ export function CabinetView({ locale }: { locale: Locale }) {
     status: string,
     quote?: { amount: number; term: string; comment: string },
   ) {
-    if (!user) return;
+    if (!user || actions.pending) return;
+    await actions.run(async () => {
     try {
       await setOrderStatus(user.email, orderId, {
         status,
@@ -98,10 +100,12 @@ export function CabinetView({ locale }: { locale: Locale }) {
     } catch (e) {
       setError((e as Error).message);
     }
+    });
   }
 
   async function handleSetMatStatus(orderId: string, status: string) {
-    if (!user) return;
+    if (!user || actions.pending) return;
+    await actions.run(async () => {
     try {
       await setMaterialOrderStatus(user.email, orderId, status);
       load();
@@ -115,6 +119,7 @@ export function CabinetView({ locale }: { locale: Locale }) {
     } catch (e) {
       setError((e as Error).message);
     }
+    });
   }
 
   if (!user) {
@@ -333,7 +338,8 @@ export function CabinetView({ locale }: { locale: Locale }) {
                     <div className="flex items-center gap-2 sm:col-span-2">
                       <button
                         type="submit"
-                        className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
+                        disabled={actions.pending}
+                        className="min-h-11 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-amber-900 hover:bg-amber-100 disabled:opacity-50"
                       >
                         {m.quote}
                       </button>
@@ -395,7 +401,8 @@ export function CabinetView({ locale }: { locale: Locale }) {
                         setError("Напишите текст отзыва");
                         return;
                       }
-                      reviewOrder(user.email, o.id, draft.stars, draft.text.trim())
+                      if (actions.pending) return;
+                      void actions.run(async () => reviewOrder(user.email, o.id, draft.stars, draft.text.trim())
                         .then(() => {
                           setReviewed((prev) => ({ ...prev, [o.id]: true }));
                           load();
@@ -407,7 +414,7 @@ export function CabinetView({ locale }: { locale: Locale }) {
                             );
                           }
                         })
-                        .catch((err: Error) => setError(err.message));
+                        .catch((err: Error) => setError(err.message)));
                     }}
                   >
                     <div className="flex items-center gap-1">
@@ -443,7 +450,8 @@ export function CabinetView({ locale }: { locale: Locale }) {
                     />
                     <button
                       type="submit"
-                      className="justify-self-start px-3 py-1.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
+                      disabled={actions.pending}
+                      className="min-h-11 justify-self-start rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-amber-900 hover:bg-amber-100 disabled:opacity-50"
                     >
                       Отправить отзыв
                     </button>

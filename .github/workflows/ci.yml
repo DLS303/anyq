@@ -43,6 +43,9 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install
         run: npm ci
+      - name: Test
+        working-directory: apps/web
+        run: npm test
       - name: Lint
         working-directory: apps/web
         run: npm run lint

@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { createOrder } from "@/lib/api";
 import { CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import type { Locale, Review, Specialist } from "@/lib/types";
+import { PhotoView } from "@/components/media/PhotoView";
 import { t } from "@/i18n/messages";
 import { CheckCircle2, ShieldCheck, Star, MessageSquare, Briefcase, ExternalLink, X, Send } from "lucide-react";
 
@@ -72,11 +73,11 @@ export function SpecialistProfile({
       <div className="grid md:grid-cols-[1.2fr_0.8fr] gap-6">
         <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
           {specialist.cover ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
+            <PhotoView
               src={specialist.cover}
               alt=""
-              className="h-64 w-full object-cover rounded-2xl border border-slate-200 mb-6 shadow-xs"
+              sizes="(max-width: 640px) 100vw, 60vw"
+              className="mb-6 h-48 w-full rounded-2xl border border-slate-200 object-cover shadow-xs sm:h-64"
             />
           ) : null}
 
@@ -228,11 +229,11 @@ export function SpecialistProfile({
               className="text-left rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-2xs hover:shadow-luxury transition-all group"
             >
               {p.photo ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
+                <PhotoView
                   src={p.photo}
                   alt=""
-                  className="h-44 w-full object-cover group-hover:scale-102 transition-transform duration-300"
+                  sizes="(max-width: 640px) 100vw, 50vw"
+                  className="h-44 w-full object-cover transition-transform duration-300 group-hover:scale-102"
                 />
               ) : null}
               <div className="p-4 flex items-center justify-between">
@@ -279,8 +280,12 @@ export function SpecialistProfile({
               </button>
             </div>
             {previewProject.photo ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={previewProject.photo} alt="" className="w-full h-80 object-cover" />
+              <PhotoView
+                src={previewProject.photo}
+                alt=""
+                sizes="(max-width: 640px) 100vw, 42rem"
+                className="h-56 w-full object-cover sm:h-80"
+              />
             ) : null}
             <div className="p-5 flex items-center justify-between bg-slate-50">
               <p className="text-xs text-slate-500">Выполнено по СНиП РК с актами скрытых работ</p>

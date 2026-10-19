@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { orderMaterial } from "@/lib/api";
 import { MATERIAL_CAT, money } from "@/lib/format";
 import type { Locale, Material } from "@/lib/types";
+import { PhotoView } from "@/components/media/PhotoView";
 import { t } from "@/i18n/messages";
 import { CheckCircle2, Minus, Plus, ShieldCheck, Truck, ArrowRight, User } from "lucide-react";
 
@@ -70,11 +71,11 @@ export function MaterialView({ locale, item }: { locale: Locale; item: Material 
     <div className="grid md:grid-cols-[1.15fr_0.85fr] gap-8">
       <div className="space-y-6">
         {item.photo ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <PhotoView
             src={item.photo}
             alt=""
-            className="h-80 w-full object-cover rounded-3xl border border-slate-200 shadow-luxury"
+            sizes="(max-width: 640px) 100vw, 60vw"
+            className="h-56 w-full rounded-3xl border border-slate-200 object-cover shadow-luxury sm:h-80"
           />
         ) : null}
 

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { createActivity, fetchActivities, toggleActivity } from "@/lib/api";
-import { ErrorRetry, useAsync } from "@/lib/useAsync";
+import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
 import { t } from "@/i18n/messages";
 import { ACTIVITY_TYPE } from "@/lib/format";
 import type { ActivityType, CrmActivity, Locale } from "@/lib/types";
@@ -20,7 +20,7 @@ export function CrmActivitiesView({
   const [filterType, setFilterType] = useState<string>("");
   const [onlyPending, setOnlyPending] = useState(false);
   const activitiesQuery = useAsync(
-    () => (user ? fetchActivities(user.email) : Promise.resolve([] as CrmActivity[])),
+    (signal) => (user ? fetchActivities(user.email, {}, signal) : Promise.resolve([] as CrmActivity[])),
     [user?.email],
   );
   const activities = activitiesQuery.data ?? [];
@@ -33,6 +33,7 @@ export function CrmActivitiesView({
   const [newDesc, setNewDesc] = useState("");
   const [newType, setNewType] = useState<ActivityType>("call");
   const [newDueDate, setNewDueDate] = useState("");
+  const createLock = useSubmitLock();
 
   async function handleToggle(id: string, current: boolean) {
     if (!user) return;
@@ -46,7 +47,8 @@ export function CrmActivitiesView({
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!user || !newTitle.trim()) return;
+    if (!user || !newTitle.trim() || createLock.pending) return;
+    await createLock.run(async () => {
     try {
       await createActivity(user.email, {
         activity_type: newType,
@@ -62,6 +64,7 @@ export function CrmActivitiesView({
     } catch (e) {
       alert((e as Error).message);
     }
+    });
   }
 
   const filtered = activities.filter((a) => {
@@ -263,7 +266,8 @@ export function CrmActivitiesView({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-pine text-white font-semibold rounded-lg hover:bg-pine/90 shadow-xs"
+                  disabled={createLock.pending}
+                  className="min-h-11 rounded-lg bg-pine px-4 py-2 font-semibold text-white shadow-xs hover:bg-pine/90 disabled:opacity-50"
                 >
                   Запланировать
                 </button>

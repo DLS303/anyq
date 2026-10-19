@@ -1,21 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { memo, useState } from "react";
+import { PhotoView } from "@/components/media/PhotoView";
+import { PageNav, usePaged } from "@/components/ui/PagedList";
 import { fetchSpecialists } from "@/lib/api";
 import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
 import { CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
-import type { Locale, SpecCategory } from "@/lib/types";
+import type { Locale, SpecCategory, Specialist } from "@/lib/types";
 import { t } from "@/i18n/messages";
-import { CheckCircle2, HardHat, ShieldCheck, Star, ArrowRight } from "lucide-react";
+import { CheckCircle2, ShieldCheck, Star } from "lucide-react";
 
 const CATS: SpecCategory[] = ["survey", "legal", "architecture", "smr", "supervision", "equipment"];
 
 export function SpecialistsClient({ locale }: { locale: Locale }) {
   const m = t(locale);
   const [category, setCategory] = useState("");
-  const query = useAsync(() => fetchSpecialists({ category: category || undefined }), [category]);
+  const query = useAsync((signal) => fetchSpecialists({ category: category || undefined }, signal), [category]);
   const items = query.data ?? [];
+  const paged = usePaged(items, category);
 
   return (
     <div className="space-y-6">
@@ -66,22 +69,51 @@ export function SpecialistsClient({ locale }: { locale: Locale }) {
 
       {query.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
       {query.status === "error" ? (
-        <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={query.reload} />
+        <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />
       ) : null}
-      {/* Grid */}
-      <div className="grid sm:grid-cols-2 gap-5">
-        {items.map((s) => (
+      {query.status !== "error" && paged.slice.length > 0 ? (
+      <div className="grid gap-5 sm:grid-cols-2">
+        {paged.slice.map((s) => (
+          <SpecialistCard key={s.id} specialist={s} locale={locale} />
+        ))}
+      </div>
+      ) : null}
+      <PageNav
+        page={paged.page}
+        pages={paged.pages}
+        status={m.pageStatus.replace("{page}", String(paged.page + 1)).replace("{pages}", String(paged.pages))}
+        prevLabel={m.pagePrev}
+        nextLabel={m.pageNext}
+        onPage={paged.setPage}
+      />
+
+      {!query.loading && query.status !== "error" && items.length === 0 ? (
+        <div className="py-12 text-center text-sm text-slate-400">
+          В выбранной категории специалистов не найдено.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const SpecialistCard = memo(function SpecialistCard({
+  specialist: s,
+  locale,
+}: {
+  specialist: Specialist;
+  locale: Locale;
+}) {
+  return (
           <div
-            key={s.id}
-            className="glass-strong rounded-3xl overflow-hidden shadow-luxury hover:shadow-luxury-lg transition-all duration-300 border border-slate-200/90 group flex flex-col justify-between"
+            className="glass-strong flex flex-col justify-between overflow-hidden rounded-3xl border border-slate-200/90 shadow-luxury transition-all duration-300 group hover:shadow-luxury-lg"
           >
             <Link href={`/${locale}/specialists/${s.slug}`} className="block">
               {s.cover ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
+                <PhotoView
                   src={s.cover}
                   alt=""
-                  className="h-48 w-full object-cover group-hover:scale-102 transition-transform duration-500"
+                  sizes="(max-width: 640px) 100vw, 50vw"
+                  className="h-48 w-full object-cover transition-transform duration-500 group-hover:scale-102"
                 />
               ) : null}
               <div className="p-6">
@@ -132,14 +164,5 @@ export function SpecialistsClient({ locale }: { locale: Locale }) {
               </Link>
             </div>
           </div>
-        ))}
-      </div>
-
-      {!query.loading && query.status !== "error" && items.length === 0 ? (
-        <div className="text-center py-12 text-slate-400 text-sm">
-          В выбранной категории специалистов не найдено.
-        </div>
-      ) : null}
-    </div>
   );
-}
+});

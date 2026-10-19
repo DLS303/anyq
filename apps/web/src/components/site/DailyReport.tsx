@@ -5,6 +5,7 @@ import { AuthAudio } from "@/components/media/AuthAudio";
 import { AuthImage } from "@/components/media/AuthImage";
 import { t } from "@/i18n/messages";
 import { deleteSite, postSite, uploadDailyPhotos, uploadDailyVoice } from "@/lib/api";
+import { preparePhoto } from "@/lib/photos";
 import { roleLabel, shareText, todayAlmaty, weatherLabel } from "@/lib/report";
 import { toast } from "@/lib/toast";
 import type { Locale } from "@/lib/types";
@@ -160,11 +161,12 @@ export function DailyReport({
     setSheet(true);
   }
 
-  function addFiles(list: FileList | null) {
+  async function addFiles(list: FileList | null) {
     const picked = Array.from(list || []);
     const next = [...files];
     for (const file of picked) {
-      if (file.size > MAX_BYTES) {
+      const prepared = await preparePhoto(file);
+      if (prepared.size > MAX_BYTES) {
         toast(m.reportTooLarge);
         continue;
       }
@@ -172,7 +174,7 @@ export function DailyReport({
         toast(m.reportTooMany);
         break;
       }
-      next.push(file);
+      next.push(prepared);
     }
     setFiles(next);
   }

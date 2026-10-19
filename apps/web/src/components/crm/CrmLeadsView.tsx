@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ErrorRetry, useAsync } from "@/lib/useAsync";
+import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
 import { useAuth } from "@/lib/auth";
 import { convertLead, createLead, fetchLeads } from "@/lib/api";
 import { FUNNEL, LEAD_STATUS, PRODUCT_FUNNELS, money } from "@/lib/format";
@@ -19,7 +19,7 @@ export function CrmLeadsView({
   const m = t(locale);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const leadsQuery = useAsync(
-    () => (user ? fetchLeads(user.email, statusFilter || undefined) : Promise.resolve([] as Lead[])),
+    (signal) => (user ? fetchLeads(user.email, statusFilter || undefined, signal) : Promise.resolve([] as Lead[])),
     [user?.email, statusFilter],
   );
   const leads = leadsQuery.data ?? [];
@@ -42,10 +42,12 @@ export function CrmLeadsView({
   const [newFunnelTarget, setNewFunnelTarget] = useState<Funnel>("construction");
   const [newBudget, setNewBudget] = useState(0);
   const [newNotes, setNewNotes] = useState("");
+  const submitLock = useSubmitLock();
 
   async function handleConvertSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!user || !convertingLead) return;
+    if (!user || !convertingLead || submitLock.pending) return;
+    await submitLock.run(async () => {
     try {
       await convertLead(user.email, convertingLead.id, {
         funnel: targetFunnel,
@@ -59,6 +61,7 @@ export function CrmLeadsView({
     } catch (err) {
       alert((err as Error).message);
     }
+    });
   }
 
   async function handleCreateLead(e: React.FormEvent) {
@@ -67,6 +70,8 @@ export function CrmLeadsView({
       alert("Заполните название, имя и телефон");
       return;
     }
+    if (submitLock.pending) return;
+    await submitLock.run(async () => {
     try {
       await createLead({
         title: newTitle.trim(),
@@ -89,6 +94,7 @@ export function CrmLeadsView({
     } catch (err) {
       alert((err as Error).message);
     }
+    });
   }
 
   return (
@@ -283,7 +289,8 @@ export function CrmLeadsView({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-pine text-white font-semibold rounded-lg hover:bg-pine/90 shadow-xs"
+                  disabled={submitLock.pending}
+                  className="min-h-11 rounded-lg bg-pine px-4 py-2 font-semibold text-white shadow-xs hover:bg-pine/90 disabled:opacity-50"
                 >
                   Создать сделку
                 </button>
@@ -400,7 +407,8 @@ export function CrmLeadsView({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-pine text-white font-semibold rounded-lg hover:bg-pine/90 shadow-xs"
+                  disabled={submitLock.pending}
+                  className="min-h-11 rounded-lg bg-pine px-4 py-2 font-semibold text-white shadow-xs hover:bg-pine/90 disabled:opacity-50"
                 >
                   Сохранить лид
                 </button>

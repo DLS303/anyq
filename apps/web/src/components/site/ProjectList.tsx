@@ -33,7 +33,7 @@ export function ProjectList({ locale }: { locale: Locale }) {
   const canCreate = user?.role === "admin" || user?.role === "owner";
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const query = useAsync(() => fetchProjects() as Promise<Snap[]>, []);
+  const query = useAsync((signal) => fetchProjects(signal) as Promise<Snap[]>, []);
   const items = query.data ?? [];
 
   async function create(form: HTMLFormElement) {

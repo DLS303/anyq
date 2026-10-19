@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ChevronDown, Scale, ShieldCheck } from "lucide-react";
 import { fetchSpecialists } from "@/lib/api";
-import type { Locale, Specialist } from "@/lib/types";
+import { ErrorRetry, useAsync } from "@/lib/useAsync";
+import { t } from "@/i18n/messages";
+import type { Locale } from "@/lib/types";
 
 const QUESTIONS: { q: string; a: string }[] = [
   {
@@ -30,14 +32,10 @@ const QUESTIONS: { q: string; a: string }[] = [
 ];
 
 export function LegalPanel({ locale }: { locale: Locale }) {
+  const m = t(locale);
   const [open, setOpen] = useState(0);
-  const [people, setPeople] = useState<Specialist[]>([]);
-
-  useEffect(() => {
-    fetchSpecialists({ category: "legal" })
-      .then(setPeople)
-      .catch(() => setPeople([]));
-  }, []);
+  const query = useAsync((signal) => fetchSpecialists({ category: "legal" }, signal), []);
+  const people = query.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -72,9 +70,16 @@ export function LegalPanel({ locale }: { locale: Locale }) {
       <div>
         <h3 className="text-sm font-semibold text-slate-950">Юристы в реестре</h3>
         <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          {people.length === 0 ? (
+          {query.loading ? <p className="px-4 py-6 text-sm text-slate-500">{m.hubLoading}</p> : null}
+          {query.status === "error" ? (
+            <div className="p-4">
+              <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />
+            </div>
+          ) : null}
+          {!query.loading && query.status !== "error" && people.length === 0 ? (
             <p className="px-4 py-6 text-sm text-slate-500">В реестре пока нет карточек с категорией «юрист».</p>
-          ) : (
+          ) : null}
+          {query.status !== "error" && people.length > 0 ? (
             people.map((person) => (
               <Link
                 key={person.id}
@@ -93,7 +98,7 @@ export function LegalPanel({ locale }: { locale: Locale }) {
                 {person.license_verified ? <ShieldCheck className="h-4 w-4 text-emerald-600" /> : null}
               </Link>
             ))
-          )}
+          ) : null}
         </div>
       </div>
     </div>

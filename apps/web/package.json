@@ -6,7 +6,8 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "vitest run"
   },
   "dependencies": {
     "@turf/turf": "^7.4.0",
@@ -14,7 +15,6 @@
     "@types/three": "^0.186.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
-    "jspdf-autotable": "^5.0.8",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.544.0",
     "next": "^15.5.4",
@@ -27,6 +27,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.3",
     "@types/leaflet": "^1.9.20",
     "@types/node": "^24.5.2",
     "@types/react": "^19.1.13",
@@ -34,8 +35,10 @@
     "autoprefixer": "^10.4.21",
     "eslint": "^9.39.5",
     "eslint-config-next": "^15.5.4",
+    "jsdom": "^29.1.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^5.0.5"
   }
 }

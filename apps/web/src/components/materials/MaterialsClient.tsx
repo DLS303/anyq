@@ -1,13 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { memo, useState } from "react";
+import { PhotoView } from "@/components/media/PhotoView";
+import { PageNav, usePaged } from "@/components/ui/PagedList";
 import { fetchMaterials } from "@/lib/api";
 import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
+import { useDebounced } from "@/lib/useDebounced";
 import { MATERIAL_CAT, money } from "@/lib/format";
-import type { Locale, MaterialCat } from "@/lib/types";
+import type { Locale, Material, MaterialCat } from "@/lib/types";
 import { t } from "@/i18n/messages";
-import { CheckCircle2, Layers, Search, Truck, ArrowRight, X } from "lucide-react";
+import { Layers, Search, Truck, X } from "lucide-react";
 
 const CATS: MaterialCat[] = ["inert", "brick", "mix", "metal", "roofing", "lumber", "concrete"];
 
@@ -15,11 +18,13 @@ export function MaterialsClient({ locale }: { locale: Locale }) {
   const m = t(locale);
   const [category, setCategory] = useState("");
   const [q, setQ] = useState("");
+  const debouncedQ = useDebounced(q, 300);
   const query = useAsync(
-    () => fetchMaterials({ category: category || undefined, q: q || undefined }),
-    [category, q],
+    (signal) => fetchMaterials({ category: category || undefined, q: debouncedQ || undefined }, signal),
+    [category, debouncedQ],
   );
   const items = query.data ?? [];
+  const paged = usePaged(items, `${category}:${debouncedQ}`);
 
   return (
     <div className="space-y-6">
@@ -90,22 +95,45 @@ export function MaterialsClient({ locale }: { locale: Locale }) {
 
       {query.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
       {query.status === "error" ? (
-        <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={query.reload} />
+        <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />
       ) : null}
-      {/* Materials Grid */}
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-        {items.map((item) => (
+      {query.status !== "error" && paged.slice.length > 0 ? (
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {paged.slice.map((item) => (
+          <MaterialCard key={item.id} item={item} locale={locale} />
+        ))}
+      </div>
+      ) : null}
+      <PageNav
+        page={paged.page}
+        pages={paged.pages}
+        status={m.pageStatus.replace("{page}", String(paged.page + 1)).replace("{pages}", String(paged.pages))}
+        prevLabel={m.pagePrev}
+        nextLabel={m.pageNext}
+        onPage={paged.setPage}
+      />
+
+      {!query.loading && query.status !== "error" && items.length === 0 ? (
+        <div className="text-center py-12 text-slate-400 text-sm">
+          По вашему запросу ничего не найдено. Попробуйте сбросить фильтры.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const MaterialCard = memo(function MaterialCard({ item, locale }: { item: Material; locale: Locale }) {
+  return (
           <div
-            key={item.id}
-            className="glass-strong rounded-3xl overflow-hidden shadow-luxury hover:shadow-luxury-lg transition-all duration-300 border border-slate-200/90 group flex flex-col justify-between"
+            className="glass-strong flex flex-col justify-between overflow-hidden rounded-3xl border border-slate-200/90 shadow-luxury transition-all duration-300 group hover:shadow-luxury-lg"
           >
             <Link href={`/${locale}/materials/${item.slug}`} className="block">
               {item.photo ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
+                <PhotoView
                   src={item.photo}
                   alt=""
-                  className="h-48 w-full object-cover group-hover:scale-103 transition-transform duration-500"
+                  sizes="(max-width: 640px) 100vw, 33vw"
+                  className="h-48 w-full object-cover transition-transform duration-500 group-hover:scale-103"
                 />
               ) : (
                 <div className="h-48 bg-slate-100 grid place-items-center text-slate-300">
@@ -142,14 +170,5 @@ export function MaterialsClient({ locale }: { locale: Locale }) {
               </Link>
             </div>
           </div>
-        ))}
-      </div>
-
-      {!query.loading && query.status !== "error" && items.length === 0 ? (
-        <div className="text-center py-12 text-slate-400 text-sm">
-          По вашему запросу ничего не найдено. Попробуйте сбросить фильтры.
-        </div>
-      ) : null}
-    </div>
   );
-}
+});

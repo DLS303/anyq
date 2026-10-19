@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { ErrorRetry, useAsync } from "@/lib/useAsync";
+import { ChunkFallback } from "@/components/ui/ChunkFallback";
+import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
+import { loadWithin } from "@/lib/loadWithin";
+import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { createDeal, fetchDeals, fetchFunnels, moveDeal } from "@/lib/api";
@@ -13,38 +16,30 @@ import { CrmListView } from "./CrmListView";
 import { CrmDealDrawer } from "./CrmDealDrawer";
 import dynamic from "next/dynamic";
 
-const CrmLeadsView = dynamic(
-  () => import("./CrmLeadsView").then((m) => m.CrmLeadsView),
-  { ssr: false, loading: () => <div className="p-8 text-center text-ink/50">Загрузка лидов...</div> }
-);
-const CrmContactsView = dynamic(
-  () => import("./CrmContactsView").then((m) => m.CrmContactsView),
-  { ssr: false, loading: () => <div className="p-8 text-center text-ink/50">Загрузка контактов...</div> }
-);
-const CrmActivitiesView = dynamic(
-  () => import("./CrmActivitiesView").then((m) => m.CrmActivitiesView),
-  { ssr: false, loading: () => <div className="p-8 text-center text-ink/50">Загрузка задач...</div> }
-);
-const CrmInvoicesView = dynamic(
-  () => import("./CrmInvoicesView").then((m) => m.CrmInvoicesView),
-  { ssr: false, loading: () => <div className="p-8 text-center text-ink/50">Загрузка счетов...</div> }
-);
-const CrmAnalyticsView = dynamic(
-  () => import("./CrmAnalyticsView").then((m) => m.CrmAnalyticsView),
-  { ssr: false, loading: () => <div className="p-8 text-center text-ink/50">Загрузка аналитики...</div> }
-);
-const CrmChessView = dynamic(
-  () => import("./CrmChessView").then((m) => m.CrmChessView),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center p-12 text-ink/50 glass rounded-2xl">
-        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-pine mr-3" />
-        Загрузка интерактивной шахматки и генплана...
-      </div>
-    ),
-  }
-);
+const CrmLeadsView = dynamic(() => loadWithin(import("./CrmLeadsView").then((m) => m.CrmLeadsView)), {
+  ssr: false,
+  loading: () => <ChunkFallback />,
+});
+const CrmContactsView = dynamic(() => loadWithin(import("./CrmContactsView").then((m) => m.CrmContactsView)), {
+  ssr: false,
+  loading: () => <ChunkFallback />,
+});
+const CrmActivitiesView = dynamic(() => loadWithin(import("./CrmActivitiesView").then((m) => m.CrmActivitiesView)), {
+  ssr: false,
+  loading: () => <ChunkFallback />,
+});
+const CrmInvoicesView = dynamic(() => loadWithin(import("./CrmInvoicesView").then((m) => m.CrmInvoicesView)), {
+  ssr: false,
+  loading: () => <ChunkFallback />,
+});
+const CrmAnalyticsView = dynamic(() => loadWithin(import("./CrmAnalyticsView").then((m) => m.CrmAnalyticsView)), {
+  ssr: false,
+  loading: () => <ChunkFallback />,
+});
+const CrmChessView = dynamic(() => loadWithin(import("./CrmChessView").then((m) => m.CrmChessView)), {
+  ssr: false,
+  loading: () => <ChunkFallback />,
+});
 
 type CrmTab = "deals" | "leads" | "contacts" | "activities" | "invoices" | "analytics" | "chess";
 type ViewMode = "kanban" | "list";
@@ -56,9 +51,9 @@ export function CrmBoard({ locale }: { locale: Locale }) {
   const [activeTab, setActiveTab] = useState<CrmTab>("deals");
   const [viewMode, setViewMode] = useState<ViewMode>("kanban");
   const [funnel, setFunnel] = useState<Funnel>("construction");
-  const stagesQuery = useAsync(() => fetchFunnels(), []);
+  const stagesQuery = useAsync((signal) => fetchFunnels(signal), []);
   const dealsQuery = useAsync(
-    () => (user ? fetchDeals(user.email, funnel) : Promise.resolve([] as Deal[])),
+    (signal) => (user ? fetchDeals(user.email, funnel, signal) : Promise.resolve([] as Deal[])),
     [user?.email, funnel],
   );
   const stages = stagesQuery.data ?? {};
@@ -72,6 +67,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
   const [dealClientName, setDealClientName] = useState("");
   const [dealClientPhone, setDealClientPhone] = useState("");
   const [dealNotes, setDealNotes] = useState("");
+  const createLock = useSubmitLock();
 
   function loadDeals() {
     dealsQuery.reload();
@@ -92,7 +88,8 @@ export function CrmBoard({ locale }: { locale: Locale }) {
 
   async function handleCreateDealSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!user || !dealTitle.trim()) return;
+    if (!user || !dealTitle.trim() || createLock.pending) return;
+    await createLock.run(async () => {
     try {
       const created = await createDeal(user.email, {
         funnel,
@@ -113,6 +110,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
     } catch (err) {
       alert((err as Error).message);
     }
+    });
   }
 
   if (!user) {
@@ -307,9 +305,17 @@ export function CrmBoard({ locale }: { locale: Locale }) {
         />
       )}
 
-      {activeTab === "analytics" && <CrmAnalyticsView locale={locale} />}
+      {activeTab === "analytics" && (
+        <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+          <CrmAnalyticsView locale={locale} />
+        </WidgetBoundary>
+      )}
 
-      {activeTab === "chess" && <CrmChessView locale={locale} />}
+      {activeTab === "chess" && (
+        <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
+          <CrmChessView locale={locale} />
+        </WidgetBoundary>
+      )}
 
       {/* Bitrix24 Deal Drawer Modal */}
       {selectedDeal && (
@@ -412,7 +418,8 @@ export function CrmBoard({ locale }: { locale: Locale }) {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-pine text-white font-semibold rounded-lg hover:bg-pine/90 shadow-xs"
+                  disabled={createLock.pending}
+                  className="min-h-11 rounded-lg bg-pine px-4 py-2 font-semibold text-white shadow-xs hover:bg-pine/90 disabled:opacity-50"
                 >
                   Создать сделку
                 </button>
