@@ -68,7 +68,7 @@ export function SignaturePad({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-ink/10 bg-paper/60">
           <div>
-            <h3 className="font-serif font-bold text-ink">✍️ Электронная подпись</h3>
+            <h3 className="font-serif font-bold text-ink">✍️ Подпись</h3>
             <p className="text-xs text-ink/50 mt-0.5">Подпишите акт пальцем или мышью</p>
           </div>
           <button type="button" onClick={onClose} className="text-ink/40 hover:text-ink text-xl">✕</button>

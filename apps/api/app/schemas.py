@@ -238,6 +238,8 @@ class ServiceOrder(BaseModel):
     message: str = ""
     status: OrderStatus = "requested"
     quote_kzt: int | None = None
+    quote_term: str = ""
+    quote_comment: str = ""
     deal_id: str | None = None
     thread_id: str | None = None
     created_at: str
@@ -246,7 +248,14 @@ class ServiceOrder(BaseModel):
 
 class ReviewCreate(BaseModel):
     stars: int = Field(ge=1, le=5)
-    text: str = ""
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class OrderStatusUpdate(BaseModel):
+    status: str
+    quote_kzt: int | None = None
+    quote_term: str = Field(default="", max_length=120)
+    quote_comment: str = Field(default="", max_length=2000)
 
 
 class Review(BaseModel):
@@ -372,7 +381,8 @@ class CrmInvoice(BaseModel):
     status: InvoiceStatus = "draft"
     payer_name: str
     payer_iin_bin: str = ""
-    escrow_enabled: bool = True
+    escrow_enabled: bool = False
+    marked_manually: bool = False
     due_date: str = ""
     paid_at: str = ""
     created_at: str
@@ -384,7 +394,7 @@ class CrmInvoiceCreate(BaseModel):
     amount_kzt: int
     payer_name: str
     payer_iin_bin: str = ""
-    escrow_enabled: bool = True
+    escrow_enabled: bool = False
     due_date: str = ""
 
 
@@ -429,6 +439,12 @@ class DealCreate(BaseModel):
 
 class DealMove(BaseModel):
     stage: str
+
+
+class DealToProject(BaseModel):
+    address: str = ""
+    finish: str = ""
+    budget_kzt: int | None = None
 
 
 class ChatThread(BaseModel):

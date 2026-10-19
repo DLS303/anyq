@@ -31,12 +31,18 @@ export function CrmInvoicesView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  async function handlePay(id: string) {
+  async function handleMarkPaid(id: string) {
     if (!user) return;
     try {
       await payInvoice(user.email, id);
       load();
-      alert("Счет успешно оплачен через Kaspi Pay / Эскроу ANYQ!");
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("anyq-toast", {
+            detail: { message: "Счет отмечен: оплачено (отмечено вручную)" },
+          }),
+        );
+      }
     } catch (e) {
       alert((e as Error).message);
     }
@@ -54,7 +60,7 @@ export function CrmInvoicesView({
           <span className="text-2xl font-bold text-ink">{invoices.length}</span>
         </div>
         <div className="bg-white p-4 rounded-xl border border-emerald-200 bg-emerald-50/30 shadow-xs">
-          <span className="text-xs text-emerald-800/70 block mb-1">Оплачено (Эскроу ANYQ)</span>
+          <span className="text-xs text-emerald-800/70 block mb-1">Оплачено (отмечено вручную)</span>
           <span className="text-2xl font-bold text-emerald-700 font-mono">{money(totalPaid, locale)}</span>
         </div>
         <div className="bg-white p-4 rounded-xl border border-amber-200 bg-amber-50/30 shadow-xs">
@@ -75,18 +81,17 @@ export function CrmInvoicesView({
                 <th className="py-3 px-3">Статус</th>
                 <th className="py-3 px-3">Плательщик</th>
                 <th className="py-3 px-3">Срок / Дата</th>
-                <th className="py-3 px-3">Эскроу</th>
                 <th className="py-3 px-4 text-right">Действие</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-ink/5">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-ink/40">Загрузка счетов...</td>
+                  <td colSpan={7} className="py-8 text-center text-ink/40">Загрузка счетов...</td>
                 </tr>
               ) : invoices.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-ink/40 italic">Счетов пока нет</td>
+                  <td colSpan={7} className="py-8 text-center text-ink/40 italic">Счетов пока нет</td>
                 </tr>
               ) : (
                 invoices.map((inv) => (
@@ -127,26 +132,19 @@ export function CrmInvoicesView({
                     <td className="py-3 px-3 text-ink/55 font-mono text-[11px]">
                       {inv.due_date || inv.created_at.slice(0, 10)}
                     </td>
-                    <td className="py-3 px-3">
-                      {inv.escrow_enabled ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                          🛡️ Эскроу ANYQ
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-ink/45">Прямой</span>
-                      )}
-                    </td>
                     <td className="py-3 px-4 text-right">
                       {inv.status === "paid" ? (
-                        <span className="text-emerald-700 font-semibold text-[11px]">✓ Оплачен</span>
-                      ) : (
+                        <span className="text-emerald-700 font-semibold text-[11px]">оплачено (отмечено вручную)</span>
+                      ) : inv.can_mark_paid ? (
                         <button
                           type="button"
-                          onClick={() => handlePay(inv.id)}
-                          className="px-3 py-1 bg-emerald-600 text-white rounded text-[11px] font-semibold hover:bg-emerald-700 transition-colors shadow-2xs"
+                          onClick={() => handleMarkPaid(inv.id)}
+                          className="px-3 py-1 bg-ink text-white rounded text-[11px] font-semibold hover:bg-ink/80 transition-colors shadow-2xs"
                         >
-                          💳 Оплатить (Kaspi)
+                          Отметить оплаченным
                         </button>
+                      ) : (
+                        <span className="text-[11px] text-ink/45">отметку ставит получатель</span>
                       )}
                     </td>
                   </tr>

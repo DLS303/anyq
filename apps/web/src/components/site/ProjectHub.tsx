@@ -29,7 +29,7 @@ const Bim3dViewer = dynamic(
     loading: () => (
       <div className="flex items-center justify-center p-12 text-ink/50 glass rounded-2xl">
         <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-pine mr-3" />
-        Загрузка 3D BIM Viewer & CAD чертежей...
+        Загрузка 3D модели (демо / иллюстративная модель)...
       </div>
     ),
   }

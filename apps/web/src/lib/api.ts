@@ -213,10 +213,31 @@ export function fetchOrders(email: string) {
   return request<ServiceOrder[]>("/v1/orders", { email });
 }
 
-export function setOrderStatus(email: string, id: string, status: string, quote_kzt?: number) {
-  const q = new URLSearchParams({ status });
-  if (quote_kzt != null) q.set("quote_kzt", String(quote_kzt));
-  return request<ServiceOrder>(`/v1/orders/${id}/status?${q}`, { method: "POST", email });
+export function setOrderStatus(
+  email: string,
+  id: string,
+  body: { status: string; quote_kzt?: number; quote_term?: string; quote_comment?: string },
+) {
+  return request<ServiceOrder>(`/v1/orders/${id}/status`, {
+    method: "POST",
+    email,
+    body: JSON.stringify(body),
+  });
+}
+
+export type ActVat = {
+  act_date: string;
+  no_vat: boolean;
+  vat_rate: number;
+  vat_percent: number;
+  basis: string;
+  prior_signed_kzt: number;
+};
+
+export function fetchActVat(actDate: string, noVat: boolean, projectId?: string) {
+  const q = new URLSearchParams({ act_date: actDate, no_vat: noVat ? "true" : "false" });
+  if (projectId) q.set("project_id", projectId);
+  return request<ActVat>(`/v1/acts/vat?${q}`);
 }
 
 export function reviewOrder(email: string, id: string, stars: number, text: string) {
@@ -271,8 +292,16 @@ export function createDeal(
   return request<Deal>("/v1/crm/deals", { method: "POST", email, body: JSON.stringify(body) });
 }
 
-export function dealToProject(email: string, id: string) {
-  return request<Record<string, unknown>>(`/v1/crm/deals/${id}/to-project`, { method: "POST", email });
+export function dealToProject(
+  email: string,
+  id: string,
+  body: { address?: string; finish?: string; budget_kzt?: number | null } = {},
+) {
+  return request<Record<string, unknown>>(`/v1/crm/deals/${id}/to-project`, {
+    method: "POST",
+    email,
+    body: JSON.stringify(body),
+  });
 }
 
 export function fetchLeads(email: string, status?: string) {
@@ -369,7 +398,6 @@ export function createInvoice(
     amount_kzt: number;
     payer_name: string;
     payer_iin_bin?: string;
-    escrow_enabled?: boolean;
     due_date?: string;
   },
 ) {

@@ -4,7 +4,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from app.authutil import load_secret
 from app.config import settings
-from app.routers import auth, cabinet, chat, crm, estimates, files, health, materials, moderation, modules, plots, site, specialists
+from app.routers import acts, auth, cabinet, chat, crm, estimates, files, health, materials, moderation, modules, plots, site, specialists
 
 load_secret()
 
@@ -30,6 +30,7 @@ app.include_router(crm.router)
 app.include_router(chat.router)
 app.include_router(materials.router)
 app.include_router(estimates.router)
+app.include_router(acts.router)
 app.include_router(site.router)
 app.include_router(files.router)
 

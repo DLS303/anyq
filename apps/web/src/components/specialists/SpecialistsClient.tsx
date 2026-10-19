@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { fetchSpecialists } from "@/lib/api";
-import { CATEGORY, money } from "@/lib/format";
+import { CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import type { Locale, SpecCategory, Specialist } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { CheckCircle2, HardHat, ShieldCheck, Star, ArrowRight } from "lucide-react";
@@ -87,7 +87,7 @@ export function SpecialistsClient({ locale }: { locale: Locale }) {
                   <span className="pill text-[10px] text-slate-600 font-semibold">{CATEGORY[s.category][locale]}</span>
                   <span className="flex items-center gap-1 text-xs font-bold text-amber-600">
                     <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
-                    <span>{s.rating || "5.0"}</span>
+                    <span>{ratingLabel(s.rating, s.reviews_count)}</span>
                   </span>
                 </div>
 
@@ -96,7 +96,7 @@ export function SpecialistsClient({ locale }: { locale: Locale }) {
                 </h3>
 
                 <p className="text-xs text-slate-500 mt-1 font-medium">
-                  {s.city} · {s.reviews_count} завершенных проектов
+                  {s.city} · {reviewsLabel(s.reviews_count)}
                 </p>
 
                 {s.license_verified ? (
