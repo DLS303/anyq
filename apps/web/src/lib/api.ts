@@ -220,7 +220,7 @@ async function requestEnvelope<T>(path: string, init?: RequestInitExtra) {
   return json;
 }
 
-export type PageResult<T> = { items: T[]; total: number };
+export type PageResult<T> = { items: T[]; total: number | null };
 
 function queryString(params: Record<string, string | undefined>) {
   const query = new URLSearchParams();
@@ -233,7 +233,7 @@ function queryString(params: Record<string, string | undefined>) {
 
 async function requestPage<T>(path: string, init?: RequestInitExtra): Promise<PageResult<T>> {
   const json = await requestEnvelope<T[]>(path, init);
-  const total = typeof json.total === "number" ? json.total : json.data.length;
+  const total = typeof json.total === "number" ? json.total : null;
   return { items: json.data, total };
 }
 

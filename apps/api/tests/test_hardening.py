@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.authutil import hash_password
 from app.main import app
-from app.ratelimit import login_limiter
+from app.ratelimit import LoginRateLimiter, RateLimited, login_limiter
 from app.store import store
 
 client = TestClient(app)
@@ -249,10 +249,17 @@ def test_login_rate_limit_is_per_account_and_ip(monkeypatch):
     other_account = attempt("wrong-pass", account="someone-else@example.com")
     assert other_account.status_code == 401
 
+    shared = False
+    try:
+        LoginRateLimiter().check(email, "203.0.113.10")
+    except RateLimited:
+        shared = True
+    assert shared
+
     clock["now"] += 600
     allowed = attempt("secret12")
     assert allowed.status_code == 200, allowed.text
-    assert login_limiter._failures.get((email, "203.0.113.10"), []) == []
+    assert login_limiter.count(email, "203.0.113.10") == 0
 
 
 def test_cross_border_consent_is_appended():

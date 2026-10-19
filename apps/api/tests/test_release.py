@@ -1,8 +1,14 @@
 import os
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
+from alembic.config import Config
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine.url import make_url
 
+from alembic import command
 from app.authutil import hash_password
 from app.main import app
 from app.schemas import RegisterBody
@@ -46,9 +52,29 @@ def _demo(user_id: str, email: str, password: str) -> str:
     return res.json()["data"]["token"]
 
 
-def test_demo_mode_off_starts_empty_and_first_user_is_owner(monkeypatch, tmp_path):
+def _empty_database(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ANYQ_DEMO_MODE", "")
+    if os.environ.get("ANYQ_TEST_POSTGRES") == "1" and os.environ.get("DATABASE_URL"):
+        parsed = make_url(os.environ["DATABASE_URL"])
+        name = "t" + uuid4().hex[:12]
+        admin = create_engine(
+            parsed.set(database="postgres").render_as_string(hide_password=False),
+            isolation_level="AUTOCOMMIT",
+            future=True,
+        )
+        with admin.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{name}"'))
+        admin.dispose()
+        url = parsed.set(database=name).render_as_string(hide_password=False)
+        monkeypatch.setenv("DATABASE_URL", url)
+        command.upgrade(Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head")
+        return
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("ANYQ_DB_PATH", str(tmp_path / "db.json"))
+
+
+def test_demo_mode_off_starts_empty_and_first_user_is_owner(monkeypatch, tmp_path):
+    _empty_database(monkeypatch, tmp_path)
     fresh = MemoryStore()
     assert fresh.users_by_id == {}
     assert fresh.plots == {}

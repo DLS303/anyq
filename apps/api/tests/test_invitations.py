@@ -69,8 +69,7 @@ def test_invite_expiry_reuse_and_role_lock():
     assert created.status_code == 200, created.text
     payload = created.json()["data"]
     assert payload["path"].startswith("/invite/")
-    with open(store.db_path(), "rb") as handle:
-        assert payload["token"] not in handle.read().decode("latin-1")
+    assert payload["token"] not in store._sql.stored_text()
 
     preview = client.get(f"/v1/invitations/token/{payload['token']}")
     assert preview.status_code == 200
@@ -89,7 +88,7 @@ def test_invite_expiry_reuse_and_role_lock():
     assert any(row.user_id == member.id and row.role_on_site == "foreman" for row in store.directory.values())
 
     reused = _accept(payload["token"], "other@example.com")
-    assert reused.status_code == 409
+    assert reused.status_code == 410
 
     expired_link = client.post(
         "/v1/invitations",
