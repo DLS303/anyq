@@ -13,16 +13,12 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select, true, update
+from sqlalchemy import and_, or_, select, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from app.audit import write as audit_write
-from app.company_features import (
-    ensure_feature,
-    project_company_id,
-    resolve_path_company,
-)
+from app.company_features import ensure_feature, resolve_path_company
 from app.meeting_schema import ActionItemRow, MeetingParticipantRow, MeetingRow
 from app.schemas import User
 from app.site_models import Project
@@ -135,8 +131,10 @@ def _open_access(project, user: User):
     return member, access
 
 
-def _company_of(found_company: object, project: Project) -> str:
-    resolved = project_company_id(project) or str(found_company or "")
+def _stored_company(owner_id: object) -> str:
+    """Same tenant id as resolve_path_company: the project owner's stored key."""
+    owner = store.get_user(str(owner_id or ""))
+    resolved = company_key(owner) if owner is not None else ""
     if not resolved:
         raise HTTPException(status_code=404, detail="Не найдено")
     ensure_feature(resolved, "meetings")
@@ -150,15 +148,15 @@ def access_project(pid: str, user: User) -> Access:
     project = store.get_project(pid)
     if project is None:
         raise HTTPException(status_code=404, detail="Не найдено")
-    return Access(user=user, project=project, company_id=_company_of(company_id, project))
+    ensure_feature(company_id, "meetings")
+    return Access(user=user, project=project, company_id=company_id)
 
 
 def _load_entity(model, entity_id: str, user: User):
     project = aliased(Record)
-    owner = aliased(Record)
     member, access = _open_access(project, user)
     stmt = (
-        select(model, func.coalesce(project.company_key, owner.company_key), project.payload)
+        select(model, project.owner_id, project.payload)
         .join(project, and_(project.collection == "projects", project.doc_id == model.project_id))
         .outerjoin(
             member,
@@ -168,7 +166,6 @@ def _load_entity(model, entity_id: str, user: User):
                 member.user_id == user.id,
             ),
         )
-        .outerjoin(owner, and_(owner.collection == "users", owner.doc_id == project.owner_id))
         .where(model.id == entity_id, model.deleted_at.is_(None), access)
         .limit(1)
     )
@@ -176,18 +173,18 @@ def _load_entity(model, entity_id: str, user: User):
         found = session.execute(stmt).first()
         if found is None:
             return None
-        row, company_id, payload = found
+        row, owner_id, payload = found
         public = _meeting_public(row) if model is MeetingRow else _action_public(row)
-        return public, company_id, payload
+        return public, owner_id, payload
 
 
 def access_meeting(mid: str, user: User) -> Access:
     found = _load_entity(MeetingRow, mid, user)
     if found is None:
         raise HTTPException(status_code=404, detail="Не найдено")
-    meeting, company_id, payload = found
+    meeting, owner_id, payload = found
     project = Project.model_validate(payload)
-    access = Access(user=user, project=project, company_id=_company_of(company_id, project))
+    access = Access(user=user, project=project, company_id=_stored_company(owner_id))
     access.meeting = meeting
     return access
 
@@ -196,9 +193,9 @@ def access_action(aid: str, user: User) -> Access:
     found = _load_entity(ActionItemRow, aid, user)
     if found is None:
         raise HTTPException(status_code=404, detail="Не найдено")
-    item, company_id, payload = found
+    item, owner_id, payload = found
     project = Project.model_validate(payload)
-    access = Access(user=user, project=project, company_id=_company_of(company_id, project))
+    access = Access(user=user, project=project, company_id=_stored_company(owner_id))
     access.item = item
     return access
 
