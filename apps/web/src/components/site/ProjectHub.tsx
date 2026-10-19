@@ -6,8 +6,9 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { addProjectMember, fetchSiteBundle, postSite, removeProjectMember } from "@/lib/api";
 import { money } from "@/lib/format";
-import { DEMO_ONLY_TABS, features } from "@/lib/features";
-import { canEditProject, PILOT_MODE } from "@/lib/pilot";
+import { DEMO_MODE, menuTabVisible, objectUsesPilotLayout, type CompanyFlags } from "@/lib/features";
+import { useProjectFeatures } from "@/lib/useFeature";
+import { canEditProject } from "@/lib/pilot";
 import { siteRoleLabel, statusLabel } from "@/lib/report";
 import { ChunkFallback } from "@/components/ui/ChunkFallback";
 import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
@@ -89,9 +90,8 @@ const LEGACY_TABS: Tab[] = [
 const PILOT_MAIN: Tab[] = ["today", "punch", "procurement", "money", "qa"];
 const PILOT_MORE: Tab[] = ["rfi", "gantt", "crew", "meet", "dir", "sub", "draw", "ks"];
 
-function visibleTabs(tabs: Tab[]) {
-  if (features.demo) return tabs;
-  return tabs.filter((id) => !DEMO_ONLY_TABS.includes(id as (typeof DEMO_ONLY_TABS)[number]));
+function visibleTabs(tabs: Tab[], flags: CompanyFlags | null) {
+  return tabs.filter((id) => menuTabVisible(id, flags));
 }
 
 function tabLabel(id: Tab, m: Msg, pilot: boolean) {
@@ -150,8 +150,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const m = t(locale);
   const router = useRouter();
   const { user } = useAuth();
-  const pilot = !features.demo || PILOT_MODE;
-  const [tab, setTab] = useState<Tab>(pilot ? "today" : "home");
+  const [tab, setTab] = useState<Tab>(DEMO_MODE ? "home" : "today");
   const [showPunch, setShowPunch] = useState(false);
   const [punchError, setPunchError] = useState("");
   const [showExtra, setShowExtra] = useState(false);
@@ -160,6 +159,23 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const bundle = bundleQuery.data;
   const load = bundleQuery.reload;
   const forms = useGuardedSubmit(m.hubSaved, m.hubSaveError, load);
+  const companyFlags =
+    bundle && bundle.features && typeof bundle.features === "object" ? (bundle.features as CompanyFlags) : null;
+  const org = useProjectFeatures(companyFlags);
+  const pilot = objectUsesPilotLayout(companyFlags);
+  const mainTabs = visibleTabs(pilot ? PILOT_MAIN : LEGACY_TABS, companyFlags);
+  const moreTabs = visibleTabs(PILOT_MORE, companyFlags);
+  const menuKey = `${pilot ? "pilot" : "legacy"}:${mainTabs.join(".")}:${moreTabs.join(".")}`;
+
+  useEffect(() => {
+    if (!bundle) return;
+    const [mode, main, more] = menuKey.split(":");
+    const allowed = new Set<string>([
+      ...(main ? main.split(".") : []),
+      ...(mode === "pilot" && more ? more.split(".") : []),
+    ]);
+    if (!allowed.has(tab)) setTab(mode === "pilot" ? "today" : "home");
+  }, [bundle, menuKey, tab]);
 
   function goLogin() {
     router.push(`/${locale}/login`);
@@ -206,8 +222,6 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   const canEdit = canEditProject(user, p, directory);
   const canApprove = Boolean(bundle.can_approve_changes);
   const healthColor = snap.health === "green" ? "bg-pine" : snap.health === "red" ? "bg-clay" : "bg-sand";
-  const mainTabs = visibleTabs(pilot ? PILOT_MAIN : LEGACY_TABS);
-  const moreTabs = visibleTabs(PILOT_MORE);
   const logs = (bundle.daily as DailyEntry[]) || [];
   const punches = (bundle.punches as { id: string; title: string; location: string; trade: string; status: string }[]) || [];
   const budget = (bundle.budget as { id: string; code: string; title: string; budget_kzt: number; committed_kzt: number; actual_kzt: number }[]) || [];
@@ -255,7 +269,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       {pilot ? (
         <>
           <div className="hidden sm:flex sm:flex-wrap sm:gap-2 mb-6">
-            {visibleTabs(PILOT_MAIN).map((id) =>
+            {mainTabs.map((id) =>
               tabButton(
                 id,
                 `min-h-12 rounded-full px-3 text-sm ${tab === id ? "bg-pine text-paper" : "text-ink/70 hover:bg-white/70"}`,
@@ -272,7 +286,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
             className="sm:hidden fixed bottom-0 inset-x-0 z-40 grid grid-cols-5 overflow-hidden border-t border-slate-200/80 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)]"
             aria-label={m.navMenu}
           >
-            {visibleTabs(PILOT_MAIN).map((id) =>
+            {mainTabs.map((id) =>
               tabButton(
                 id,
                 `flex w-full min-w-0 flex-col items-center justify-center min-h-12 px-0.5 text-center text-[10px] leading-tight ${
@@ -340,7 +354,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         />
       ) : null}
 
-      {tab === "rfi" ? (
+      {tab === "rfi" && org.rfi ? (
         <Tool
           title={m.tabRfi}
           empty={m.hubEmpty}
@@ -414,7 +428,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         </Tool>
       ) : null}
 
-      {tab === "sub" && features.submittals ? (
+      {tab === "sub" && org.submittals ? (
         <Tool
           title={m.tabSub}
           empty={m.hubEmpty}
@@ -512,6 +526,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
 
       {tab === "qa" ? (
         <div className="grid md:grid-cols-2 gap-6">
+          {org.checklists ? (
           <Tool
             title={m.toolInspections}
             empty={m.hubEmpty}
@@ -547,6 +562,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
           >
             {user ? <InspectionForm locale={locale} projectId={p.id} onDone={load} /> : null}
           </Tool>
+          ) : null}
           <Tool
             title={m.toolIncidents}
             empty={m.hubEmpty}
@@ -623,7 +639,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         </div>
       ) : null}
 
-      {tab === "draw" && features.drawings ? (
+      {tab === "draw" && org.drawings ? (
         <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
           <Bim3dViewer
             locale={locale}
@@ -643,7 +659,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         </WidgetBoundary>
       ) : null}
 
-      {tab === "gantt" ? (
+      {tab === "gantt" && org.gantt ? (
         <div className="min-w-0 max-w-full">
           <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
             <InteractiveGantt
@@ -683,7 +699,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                 )}
               />
             ) : null}
-            {changes.length > 0 || !pilot || showExtra || canEdit ? (
+            {org.changes && (changes.length > 0 || !pilot || showExtra || canEdit) ? (
               <Tool
                 title={m.hubExtraTitle}
                 empty={m.hubEmpty}
@@ -802,7 +818,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         </Tool>
       ) : null}
 
-      {tab === "meet" ? (
+      {tab === "meet" && org.meetings ? (
         <Tool
           title={m.toolMeetings}
           empty={m.hubEmpty}
@@ -921,7 +937,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
         </Tool>
       ) : null}
 
-      {tab === "ks" && features.ksActs ? (
+      {tab === "ks" && org.ksActs ? (
         <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
           <KsActGenerator
             locale={locale}

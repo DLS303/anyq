@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, API_TIMEOUT_MS, fetchModules, loginRequest, postSite } from "./api";
+import { ApiError, API_TIMEOUT_MS, fetchCompanyFeatures, fetchModules, loginRequest, postSite } from "./api";
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -30,6 +30,17 @@ describe("api client", () => {
   it("returns server data for a GET", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ ok: true, data: [{ id: "mod" }] })));
     await expect(fetchModules()).resolves.toEqual([{ id: "mod" }]);
+  });
+
+  it("reports 404 when another company is requested", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ detail: "Не найдено" }, 404));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(fetchCompanyFeatures("bin:000000000000")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 404,
+    });
+    expect(String(fetchMock.mock.calls[0][0])).toContain("company_id=bin%3A000000000000");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("raises ApiError with the server detail and does not retry a 404", async () => {

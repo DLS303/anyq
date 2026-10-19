@@ -782,6 +782,36 @@ export function fetchSiteBundle(id: string, signal?: AbortSignal) {
   return request<Record<string, unknown>>(`/v1/site/projects/${id}/bundle`, { signal });
 }
 
+export type CompanyFeatureRecord = {
+  id: string | null;
+  company_id: string;
+  key: string;
+  enabled: boolean;
+  changed_by: string;
+  changed_at: string;
+  row_version: number;
+  updated_at: string;
+  deleted_at: string | null;
+};
+
+export function fetchCompanyFeatures(companyId?: string, signal?: AbortSignal) {
+  const query = companyId ? `?company_id=${encodeURIComponent(companyId)}` : "";
+  return request<CompanyFeatureRecord[]>(`/v1/org/features${query}`, { signal });
+}
+
+export function setCompanyFeature(body: {
+  key: string;
+  enabled: boolean;
+  company_id?: string;
+  id?: string;
+  row_version?: number;
+}) {
+  return request<CompanyFeatureRecord>("/v1/org/features", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export function postSite(
   path: string,
   email: string,
