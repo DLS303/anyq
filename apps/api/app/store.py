@@ -2238,52 +2238,88 @@ class MemoryStore:
             if self.get_user_by_email(email):
                 raise ValueError("Такой email уже зарегистрирован")
             uid = f"u-{uuid4().hex[:8]}"
+            from sqlalchemy.exc import OperationalError
+
             from app.tenant import claim_company_key
 
-            key, review = claim_company_key(self._sql.engine, uid, bin_no)
-            user = User(
-                id=uid,
-                email=email,
-                full_name=contact,
-                role=role,
-                phone=phone,
-                company=company,
-                company_bin=bin_no,
-                company_key=key,
-                company_review=review,
-                city=body.city.strip() or "Алматы",
-                pilot=pilot,
-            )
-            self._index_user(user)
-            self.credentials[uid] = password_hash
-            if role == "supplier":
-                mid = f"mat-{uuid4().hex[:8]}"
-                title = body.sku_title.strip()
-                note = f"{company}, БИН {bin_no}. {user.city}."
-                if pilot:
-                    note += " Пилот Engicon."
-                item = Material(
-                    id=mid,
-                    slug=_slugify(title) + "-" + mid[-4:],
-                    supplier_id=uid,
-                    category=body.sku_category,
-                    title_ru=title,
-                    title_kk=title,
-                    unit=body.sku_unit.strip() or "т",
-                    price_kzt=body.sku_price,
-                    min_qty=1,
-                    stock=body.sku_stock,
-                    city=user.city,
-                    description_ru=note,
-                    description_kk=note,
-                    published=True,
-                )
-                self.materials[mid] = item
-            self._append_consent_unlocked(user, ip, user_agent)
-            if body.consent_ai:
-                self.consents.append(self._new_ai_consent(user, ip, user_agent))
-            self._save_unlocked()
-            return user, make_token(uid)
+            material_id = None
+            for attempt in range(5):
+                session = self._sql.factory()
+                try:
+                    key, review = claim_company_key(session, uid, bin_no)
+                    user = User(
+                        id=uid,
+                        email=email,
+                        full_name=contact,
+                        role=role,
+                        phone=phone,
+                        company=company,
+                        company_bin=bin_no,
+                        company_key=key,
+                        company_review=review,
+                        city=body.city.strip() or "Алматы",
+                        pilot=pilot,
+                    )
+                    self._index_user(user)
+                    self.credentials[uid] = password_hash
+                    if role == "supplier":
+                        material_id = f"mat-{uuid4().hex[:8]}"
+                        title = body.sku_title.strip()
+                        note = f"{company}, БИН {bin_no}. {user.city}."
+                        if pilot:
+                            note += " Пилот Engicon."
+                        item = Material(
+                            id=material_id,
+                            slug=_slugify(title) + "-" + material_id[-4:],
+                            supplier_id=uid,
+                            category=body.sku_category,
+                            title_ru=title,
+                            title_kk=title,
+                            unit=body.sku_unit.strip() or "т",
+                            price_kzt=body.sku_price,
+                            min_qty=1,
+                            stock=body.sku_stock,
+                            city=user.city,
+                            description_ru=note,
+                            description_kk=note,
+                            published=True,
+                        )
+                        self.materials[material_id] = item
+                    self._append_consent_unlocked(user, ip, user_agent)
+                    if body.consent_ai:
+                        self.consents.append(self._new_ai_consent(user, ip, user_agent))
+                    self._sql._flush_once(self, session)
+                    return user, make_token(uid)
+                except OperationalError as exc:
+                    session.rollback()
+                    self._forget_registration(uid, email, material_id)
+                    if attempt == 4 or "locked" not in str(exc).lower():
+                        raise
+                    import time
+
+                    time.sleep(0.05 * (attempt + 1))
+                except Exception:
+                    session.rollback()
+                    self._forget_registration(uid, email, material_id)
+                    raise
+                finally:
+                    session.close()
+            raise RuntimeError("Не удалось сохранить регистрацию")
+
+    def _forget_registration(self, user_id: str, email: str, material_id: str | None) -> None:
+        """Drop an uncommitted registration so a later save cannot write it without its BIN claim."""
+        for bag, key in (
+            (self.users, email.lower()),
+            (self.users_by_id, user_id),
+            (self.credentials, user_id),
+        ):
+            if key in bag:
+                del bag[key]
+        if material_id and material_id in self.materials:
+            del self.materials[material_id]
+        for item in list(self.consents):
+            if getattr(item, "user_id", None) == user_id:
+                self.consents.remove(item)
 
     def login(
         self,

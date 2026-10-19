@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -46,14 +47,34 @@ def _flag(company_id: str, dest: str) -> None:
     Path(dest).write_text(json.dumps({"code": code}), encoding="utf-8")
 
 
+def _wait(path: str) -> None:
+    deadline = time.time() + 45
+    while time.time() < deadline:
+        if Path(path).exists():
+            return
+        time.sleep(0.02)
+    raise SystemExit(f"timed out waiting for {path}")
+
+
 def main() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     os.environ["ANYQ_DEMO_MODE"] = "0"
-    kind, dest = sys.argv[1], sys.argv[-1]
+    kind = sys.argv[1]
+    dest, ready, start = sys.argv[-3], sys.argv[-2], sys.argv[-1]
     if kind == "register":
+        from app.store import store
+
+        assert store.users_by_id is not None
+        Path(ready).write_text("ready", encoding="utf-8")
+        _wait(start)
         _register(sys.argv[2], sys.argv[3], dest)
         return
     if kind == "flag":
+        from app.store import store
+
+        assert store.users_by_id is not None
+        Path(ready).write_text("ready", encoding="utf-8")
+        _wait(start)
         _flag(sys.argv[2], dest)
         return
     raise SystemExit(f"unknown worker {kind}")

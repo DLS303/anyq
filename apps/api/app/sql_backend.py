@@ -997,10 +997,11 @@ class SqlRuntime:
     def _create_schema(self) -> None:
         if _production():
             return
+        # Consent triggers are created by migration 0001b. Startup DDL races when
+        # several workers import the app together (CREATE OR REPLACE FUNCTION).
         if not self.url.startswith("sqlite"):
             try:
                 self._ensure_meta()
-                install_consent_triggers(self.engine)
                 with self.factory() as session:
                     copy_legacy_consents(session)
                     session.commit()
@@ -1011,7 +1012,6 @@ class SqlRuntime:
         for attempt in range(8):
             try:
                 Base.metadata.create_all(self.engine)
-                install_consent_triggers(self.engine)
                 self._ensure_meta()
                 with self.factory() as session:
                     copy_legacy_consents(session)
@@ -1281,10 +1281,12 @@ class SqlRuntime:
             raise last
         return set()
 
-    def _flush_once(self, store) -> set[str]:
+    def _flush_once(self, store, session: Session | None = None) -> set[str]:
+        own_session = session is None
         local = store._local
         local.suspend = True
-        session = self.factory()
+        if session is None:
+            session = self.factory()
         touched: set[str] = set()
         snapshots = []
         for attr, _collection in PERSISTED:
@@ -1334,7 +1336,8 @@ class SqlRuntime:
                 bag.pending_del.clear()
             return touched
         finally:
-            session.close()
+            if own_session:
+                session.close()
             local.suspend = False
 
     def _flush_dict(self, session: Session, store, collection: str, bag: TrackedDict, seq: int) -> int:

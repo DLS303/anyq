@@ -160,6 +160,50 @@ def _seed(url: str) -> None:
             ),
             {"token_b": "b" * 64},
         )
+        alpha = _user("u-alpha", "alpha@example.com", "660000000001", "Alpha Yard")
+        beta = _user("u-beta", "beta@example.com", "660000000001", "Beta Yard")
+        mate = _user("u-alpha-mate", "alpha-mate@example.com", "660000000001", "Alpha Yard")
+        solo = _user("u-alpha-self", "alpha-self@example.com", "660000000001", "Alpha Yard")
+        kept = _user("u-kept", "kept@example.com", "550000000001", "Kept Co")
+        kept["company_key"] = "bin:550000000001"
+        other = _user("u-other", "other@example.com", "550000000001", "Other Co")
+        _insert(conn, "users", "u-alpha", alpha, company_key="bin:660000000001", email=alpha["email"], seq=20)
+        _insert(conn, "users", "u-beta", beta, company_key="bin:660000000001", email=beta["email"], seq=21)
+        _insert(conn, "users", "u-alpha-mate", mate, company_key="bin:660000000001", email=mate["email"], seq=22)
+        _insert(conn, "users", "u-alpha-self", solo, company_key="bin:660000000001", email=solo["email"], seq=23)
+        _insert(conn, "users", "u-kept", kept, company_key="bin:550000000001", email=kept["email"], seq=30)
+        _insert(conn, "users", "u-other", other, company_key="bin:550000000001", email=other["email"], seq=31)
+        _insert(
+            conn,
+            "projects",
+            "prj-beta",
+            {
+                "id": "prj-beta",
+                "slug": "beta-yard",
+                "title": "Beta Yard",
+                "owner_id": "u-beta",
+                "address": "Beta street",
+                "status": "active",
+                "start": "",
+                "finish": "",
+            },
+            company_key="bin:660000000001",
+            owner_id="u-beta",
+            project_id="prj-beta",
+            seq=32,
+        )
+        conn.execute(
+            text(
+                "INSERT INTO invitations ("
+                "id, token_hash, role, company_key, company, company_bin, "
+                "invited_by, used_by, used_at, created_at, expires_at"
+                ") VALUES ("
+                "'inv-alpha-mate', :token_c, 'buyer', 'bin:660000000001', 'Alpha Yard', "
+                "'660000000001', 'u-alpha', 'u-alpha-mate', '2026-10-02T00:00:00+00:00', "
+                "'2026-10-01T00:00:00+00:00', '2026-11-01T00:00:00+00:00')"
+            ),
+            {"token_c": "c" * 64},
+        )
     engine.dispose()
 
 
@@ -203,6 +247,24 @@ def _assert_backfill(url: str) -> None:
             row[0]
             for row in conn.execute(text("SELECT legacy_key FROM companies")).all()
         }
+
+        def user_row(doc_id: str):
+            return conn.execute(
+                text(
+                    "SELECT company_key, payload FROM records WHERE collection = 'users' AND doc_id = :id"
+                ),
+                {"id": doc_id},
+            ).one()
+
+        alpha = user_row("u-alpha")
+        beta = user_row("u-beta")
+        mate = user_row("u-alpha-mate")
+        solo = user_row("u-alpha-self")
+        kept = user_row("u-kept")
+        other = user_row("u-other")
+        beta_project = conn.execute(
+            text("SELECT company_key FROM records WHERE collection = 'projects' AND doc_id = 'prj-beta'")
+        ).scalar()
     engine.dispose()
     payload = (
         json.loads(legacy.payload)
@@ -216,12 +278,33 @@ def _assert_backfill(url: str) -> None:
     assert contact == "bin:880000000001"
     assert invite == "bin:880000000001"
     assert "bin:880000000001" in keys
-    for row in (split_a, split_b):
-        body = json.loads(row.payload) if isinstance(row.payload, str) else row.payload
-        assert row.company_key.startswith("user:")
-        assert body["company_review"] is True
+    body_a = json.loads(split_a.payload) if isinstance(split_a.payload, str) else split_a.payload
+    body_b = json.loads(split_b.payload) if isinstance(split_b.payload, str) else split_b.payload
+    assert split_a.company_key == "bin:770000000001"
+    assert body_a["company_review"] is False
+    assert split_b.company_key == "user:u-split-b"
+    assert body_b["company_review"] is True
     assert split_invite == "user:u-split-b"
-    assert "bin:770000000001" not in keys
+    assert "bin:770000000001" in keys
+
+    def body_of(row):
+        return json.loads(row.payload) if isinstance(row.payload, str) else row.payload
+
+    assert alpha.company_key == "bin:660000000001"
+    assert body_of(alpha)["company_review"] is False
+    assert beta.company_key == "user:u-beta"
+    assert body_of(beta)["company_review"] is True
+    assert mate.company_key == "bin:660000000001"
+    assert body_of(mate)["company_review"] is False
+    assert solo.company_key == "user:u-alpha-self"
+    assert body_of(solo)["company_review"] is True
+    assert beta_project == "user:u-beta"
+    assert kept.company_key == "bin:550000000001"
+    assert body_of(kept)["company_review"] is False
+    assert other.company_key == "user:u-other"
+    assert body_of(other)["company_review"] is True
+    assert "bin:660000000001" in keys
+    assert "bin:550000000001" in keys
 
 
 def _assert_api() -> None:
@@ -287,8 +370,9 @@ def _assert_api() -> None:
 def main() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     root = Path(tempfile.mkdtemp(prefix="anyq-pre-pr-"))
-    os.environ["ANYQ_DB_PATH"] = str(root / "db.json")
-    os.environ.pop("DATABASE_URL", None)
+    if os.environ.get("ANYQ_UPGRADE_KEEP_URL") != "1":
+        os.environ["ANYQ_DB_PATH"] = str(root / "db.json")
+        os.environ.pop("DATABASE_URL", None)
     os.environ["ANYQ_DEMO_MODE"] = "0"
     os.environ["ANYQ_DEMO_PASSWORD"] = ""
     os.environ["ANYQ_ENV"] = "development"

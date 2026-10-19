@@ -56,6 +56,7 @@ def _isolated(monkeypatch, tmp_path):
         return
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("ANYQ_DB_PATH", str(tmp_path / "db.json"))
+    command.upgrade(Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head")
 
 
 def _register(store: MemoryStore):
