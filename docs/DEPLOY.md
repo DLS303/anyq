@@ -268,7 +268,29 @@ docker logs anyq-api --tail 50
 
 Существующий `.github/workflows/ci.yml` этот файл не заменяет. Проверки pull request идут через него.
 
-## 10. Что скрипты не делают
+## 10. Партиции журнала аудита
+
+Миграция `20261019_0002_pf0` создаёт партиции `audit_log` на октябрь и ноябрь 2026 года, партицию `DEFAULT`, триггер `BEFORE TRUNCATE` на каждой из них и `REVOKE UPDATE, DELETE, TRUNCATE` для роли `anyq_app`, если эта роль уже есть. Следующие месяцы сами не появляются. Строки без своей партиции попадают в `DEFAULT`, и на новой партиции не будет ни триггера, ни `REVOKE`.
+
+Раз в месяц, до начала следующего месяца, на сервере под пользователем `deploy`:
+
+```bash
+cd /opt/anyq
+docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml exec -T api \
+  python scripts/ensure_audit_partition.py
+```
+
+Скрипт создаёт партицию текущего месяца и следующего. Границы в UTC (`YYYY-MM-01 00:00:00+00`). На каждую новую партицию ставится `BEFORE TRUNCATE` и, если роль `anyq_app` существует, `REVOKE UPDATE, DELETE, TRUNCATE`. Повторный запуск ничего не ломает.
+
+Запускайте скрипт после `alembic upgrade head` и после любого `GRANT` на `audit_log` для `anyq_app`. `GRANT ON ALL TABLES` и `ALTER DEFAULT PRIVILEGES`, выполненные позже, снова выдадут `UPDATE`, `DELETE` и `TRUNCATE`; тогда скрипт нужно запустить ещё раз.
+
+Пример cron на 25-е число, 03:00 по времени сервера:
+
+```text
+0 3 25 * * cd /opt/anyq && docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml exec -T api python scripts/ensure_audit_partition.py
+```
+
+## 11. Что скрипты не делают
 
 - Не покупают сервер и домен и не создают DNS-запись.
 - Не генерируют боевой `JWT_SECRET` за вас: его нужно создать на сервере и оставить только в `deploy/.env`.

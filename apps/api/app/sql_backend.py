@@ -1183,7 +1183,8 @@ class SqlRuntime:
     def _create_schema(self) -> None:
         if _production():
             return
-        # PostgreSQL schema, triggers, and consent copy belong to Alembic.
+        # PostgreSQL schema and consent triggers belong to Alembic. Startup DDL
+        # races when several workers import the app together.
         if not self.url.startswith("sqlite"):
             return
         last: Exception | None = None
@@ -1512,10 +1513,12 @@ class SqlRuntime:
             raise last
         return set()
 
-    def _flush_once(self, store) -> set[str]:
+    def _flush_once(self, store, session: Session | None = None) -> set[str]:
+        own_session = session is None
         local = store._local
         local.suspend = True
-        session = self.factory()
+        if session is None:
+            session = self.factory()
         touched: set[str] = set()
         snapshots = []
         for attr, _collection in PERSISTED:
@@ -1578,7 +1581,8 @@ class SqlRuntime:
                 bag.pending_del.clear()
             return touched
         finally:
-            session.close()
+            if own_session:
+                session.close()
             local.suspend = False
 
     def _flush_dict(self, session: Session, store, collection: str, bag: TrackedDict) -> None:

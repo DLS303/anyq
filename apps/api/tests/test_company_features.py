@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -552,25 +553,56 @@ def test_one_row_version_accepts_a_single_writer():
     assert sorted(codes) == [200, 409]
 
 
-def _worker(args: list[str], dest: Path) -> subprocess.Popen:
+def _worker(args: list[str], dest: Path, ready: Path, start: Path, err: Path) -> subprocess.Popen:
     env = os.environ.copy()
     env["ANYQ_DEMO_MODE"] = "0"
     root = Path(__file__).resolve().parents[1]
+    handle = err.open("w", encoding="utf-8")
     return subprocess.Popen(
-        [sys.executable, str(root / "tests" / "pf0_worker.py"), *args, str(dest)],
+        [sys.executable, str(root / "tests" / "pf0_worker.py"), *args, str(dest), str(ready), str(start)],
         cwd=root,
         env=env,
+        stderr=handle,
     )
+
+
+def _release_after_init(*procs: tuple[subprocess.Popen, Path, Path]) -> None:
+    start = procs[0][2]
+    deadline = time.time() + 45
+    while time.time() < deadline:
+        if all(ready.exists() for _proc, ready, _start in procs):
+            start.write_text("go", encoding="utf-8")
+            return
+        if any(proc.poll() is not None for proc, _ready, _start in procs):
+            break
+        time.sleep(0.02)
+    for proc, _ready, _start in procs:
+        proc.wait(timeout=5)
+    raise AssertionError("workers did not finish startup")
 
 
 def test_two_workers_claim_one_bin(tmp_path):
     bin_no = f"{uuid4().int % 10**12:012d}"
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"
-    left = _worker(["register", "race-a@example.com", bin_no], first)
-    right = _worker(["register", "race-b@example.com", bin_no], second)
-    assert left.wait(timeout=60) == 0, left.returncode
-    assert right.wait(timeout=60) == 0, right.returncode
+    start = tmp_path / "start"
+    left = _worker(
+        ["register", f"race-a-{bin_no}@example.com", bin_no],
+        first,
+        tmp_path / "ready-a",
+        start,
+        tmp_path / "err-a.txt",
+    )
+    right = _worker(
+        ["register", f"race-b-{bin_no}@example.com", bin_no],
+        second,
+        tmp_path / "ready-b",
+        start,
+        tmp_path / "err-b.txt",
+    )
+    _release_after_init((left, tmp_path / "ready-a", start), (right, tmp_path / "ready-b", start))
+    assert left.wait(timeout=60) == 0, (tmp_path / "err-a.txt").read_text()
+    assert right.wait(timeout=60) == 0, (tmp_path / "err-b.txt").read_text()
     rows = [json.loads(first.read_text()), json.loads(second.read_text())]
     winners = [row for row in rows if row["key"] == f"bin:{bin_no}"]
     losers = [row for row in rows if row["key"].startswith("user:")]
@@ -584,10 +616,12 @@ def test_two_workers_first_flag_creation(tmp_path):
     company_id = f"bin:{uuid4().int % 10**12:012d}"
     first = tmp_path / "flag-a.json"
     second = tmp_path / "flag-b.json"
-    left = _worker(["flag", company_id], first)
-    right = _worker(["flag", company_id], second)
-    assert left.wait(timeout=60) == 0, left.returncode
-    assert right.wait(timeout=60) == 0, right.returncode
+    start = tmp_path / "start"
+    left = _worker(["flag", company_id], first, tmp_path / "ready-a", start, tmp_path / "err-a.txt")
+    right = _worker(["flag", company_id], second, tmp_path / "ready-b", start, tmp_path / "err-b.txt")
+    _release_after_init((left, tmp_path / "ready-a", start), (right, tmp_path / "ready-b", start))
+    assert left.wait(timeout=60) == 0, (tmp_path / "err-a.txt").read_text()
+    assert right.wait(timeout=60) == 0, (tmp_path / "err-b.txt").read_text()
     codes = sorted(json.loads(path.read_text())["code"] for path in (first, second))
     assert codes == [200, 409]
 
@@ -609,9 +643,77 @@ def test_first_flag_creation_conflict_returns_409(monkeypatch):
     assert caught.value.status_code == 409
 
 
+def test_audit_partition_statements_cover_truncate_and_revoke():
+    from app.audit_partitions import partition_statements
+
+    sql = "\n".join(partition_statements(2027, 1))
+    assert "CREATE TABLE IF NOT EXISTS audit_log_2027_01" in sql
+    assert "2027-01-01 00:00:00+00" in sql
+    assert "2027-02-01 00:00:00+00" in sql
+    assert "BEFORE TRUNCATE ON audit_log_2027_01" in sql
+    assert "REVOKE UPDATE, DELETE, TRUNCATE ON audit_log_2027_01 FROM anyq_app" in sql
+
+
+def test_failed_register_does_not_keep_the_bin(monkeypatch):
+    from sqlalchemy import text
+
+    from app.schemas import RegisterBody
+
+    def boom(self, _store, session=None):
+        raise RuntimeError("disk")
+
+    monkeypatch.setattr(store._sql, "_flush_once", boom)
+    bin_no = f"{uuid4().int % 10**12:012d}"
+    with pytest.raises(RuntimeError):
+        store.register(
+            RegisterBody(
+                email=f"fail-{bin_no}@example.com",
+                password="secret12",
+                full_name="Fail User",
+                phone="+77001112233",
+                company="Fail LLP",
+                company_bin=bin_no,
+                city="Almaty",
+                role="buyer",
+                consent_offer_pd=True,
+            )
+        )
+    with store._sql.factory() as session:
+        found = session.execute(
+            text("SELECT 1 FROM companies WHERE legacy_key = :key"),
+            {"key": f"bin:{bin_no}"},
+        ).first()
+    assert found is None
+
+
 def test_upgrade_from_pre_pr_data():
     root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     env.pop("DATABASE_URL", None)
+    env["ANYQ_DEMO_MODE"] = "0"
+    subprocess.check_call([sys.executable, str(root / "tests" / "upgrade_pre_pr.py")], cwd=root, env=env)
+
+
+def test_upgrade_same_bin_different_companies_on_postgres():
+    if os.environ.get("ANYQ_TEST_POSTGRES") != "1" or not os.environ.get("DATABASE_URL"):
+        pytest.skip("postgres")
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.engine.url import make_url
+
+    parsed = make_url(os.environ["DATABASE_URL"])
+    name = "t" + uuid4().hex[:12]
+    admin = create_engine(
+        parsed.set(database="postgres").render_as_string(hide_password=False),
+        isolation_level="AUTOCOMMIT",
+        future=True,
+    )
+    with admin.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{name}"'))
+    admin.dispose()
+    url = parsed.set(database=name).render_as_string(hide_password=False)
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["DATABASE_URL"] = url
+    env["ANYQ_UPGRADE_KEEP_URL"] = "1"
     env["ANYQ_DEMO_MODE"] = "0"
     subprocess.check_call([sys.executable, str(root / "tests" / "upgrade_pre_pr.py")], cwd=root, env=env)
