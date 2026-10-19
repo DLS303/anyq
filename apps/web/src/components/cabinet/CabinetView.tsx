@@ -248,8 +248,12 @@ export function CabinetView({ locale }: { locale: Locale }) {
                   </Link>
                 ) : null}
 
-                {(user.role === "specialist" || user.role === "contractor" || user.role === "supervisor" || user.role === "admin") &&
-                o.status !== "completed" ? (
+                {(user.role === "specialist" ||
+                  user.role === "contractor" ||
+                  user.role === "supervisor" ||
+                  user.role === "admin" ||
+                  user.role === "moderator") &&
+                o.status === "requested" ? (
                   <form
                     className="grid w-full gap-2 sm:grid-cols-[1fr_1fr] ml-auto"
                     onSubmit={(e) => {
@@ -303,15 +307,48 @@ export function CabinetView({ locale }: { locale: Locale }) {
                       >
                         {m.quote}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSetStatus(o.id, "completed")}
-                        className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100"
-                      >
-                        {m.complete}
-                      </button>
                     </div>
                   </form>
+                ) : null}
+
+                {(user.role === "buyer" || user.role === "owner") && o.status === "quoted" ? (
+                  <button
+                    type="button"
+                    onClick={() => handleSetStatus(o.id, "accepted")}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100"
+                  >
+                    Принять КП
+                  </button>
+                ) : null}
+
+                {(user.role === "specialist" ||
+                  user.role === "contractor" ||
+                  user.role === "supervisor" ||
+                  user.role === "admin" ||
+                  user.role === "moderator") &&
+                o.status === "accepted" ? (
+                  <button
+                    type="button"
+                    onClick={() => handleSetStatus(o.id, "in_progress")}
+                    className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-900 border border-blue-200 hover:bg-blue-100"
+                  >
+                    В работу
+                  </button>
+                ) : null}
+
+                {(user.role === "specialist" ||
+                  user.role === "contractor" ||
+                  user.role === "supervisor" ||
+                  user.role === "admin" ||
+                  user.role === "moderator") &&
+                o.status === "in_progress" ? (
+                  <button
+                    type="button"
+                    onClick={() => handleSetStatus(o.id, "completed")}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100"
+                  >
+                    {m.complete}
+                  </button>
                 ) : null}
 
                 {user.role === "buyer" && o.status === "completed" && !reviewed[o.id] ? (
@@ -417,30 +454,32 @@ export function CabinetView({ locale }: { locale: Locale }) {
                 </span>
               </div>
 
-              {(user.role === "supplier" || user.role === "admin") ? (
-                <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
-                  <button
-                    type="button"
-                    onClick={() => handleSetMatStatus(o.id, "confirmed")}
-                    className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-900 border border-blue-200 hover:bg-blue-100"
-                  >
-                    {m.confirm}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSetMatStatus(o.id, "shipped")}
-                    className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
-                  >
-                    {m.shipped}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSetMatStatus(o.id, "delivered")}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100"
-                  >
-                    {m.delivered}
-                  </button>
-                </div>
+              {(user.role === "supplier" || user.role === "admin") && o.status === "requested" ? (
+                <button
+                  type="button"
+                  onClick={() => handleSetMatStatus(o.id, "confirmed")}
+                  className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-900 border border-blue-200 hover:bg-blue-100 text-xs font-semibold"
+                >
+                  {m.confirm}
+                </button>
+              ) : null}
+              {(user.role === "supplier" || user.role === "admin") && o.status === "confirmed" ? (
+                <button
+                  type="button"
+                  onClick={() => handleSetMatStatus(o.id, "shipped")}
+                  className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100 text-xs font-semibold"
+                >
+                  {m.shipped}
+                </button>
+              ) : null}
+              {(user.role === "supplier" || user.role === "admin") && o.status === "shipped" ? (
+                <button
+                  type="button"
+                  onClick={() => handleSetMatStatus(o.id, "delivered")}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100 text-xs font-semibold"
+                >
+                  {m.delivered}
+                </button>
               ) : null}
             </div>
           ))}

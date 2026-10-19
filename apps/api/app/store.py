@@ -1,36 +1,38 @@
+import hashlib
 import json
 import os
 import re
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
+from app.authutil import hash_password, make_token, verify_password
 from app.geo import centroid, haversine_km
+from app.legal import PD_VERSION, pd_sha256
 from app.schemas import (
+    FUNNEL_STAGES,
     ChatMessage,
     ChatThread,
+    ConsentRecord,
     CrmActivity,
     CrmActivityCreate,
-    CrmActivityToggle,
     CrmContact,
     CrmContactCreate,
     CrmInvoice,
     CrmInvoiceCreate,
+    CrossBorderConsentBody,
     Deal,
     DealCreate,
     DealMove,
     Favorite,
-    FUNNEL_STAGES,
     Inquiry,
     InquiryCreate,
     Lead,
     LeadConvert,
     LeadCreate,
     Material,
-    RegisterBody,
-    ConsentRecord,
     MaterialCreate,
     MaterialOrder,
     MaterialOrderCreate,
@@ -38,21 +40,34 @@ from app.schemas import (
     OrderCreate,
     Plot,
     PlotCreate,
+    RegisterBody,
     Review,
     ReviewCreate,
     SavedSearch,
-    StoredUpload,
     ServiceOrder,
     Specialist,
+    StoredUpload,
     ThreadCreate,
     User,
 )
-from app.authutil import hash_password, make_token, verify_password
-from app.legal import PD_VERSION, pd_sha256
 from app.seed import PLOTS, USERS
-from app.seed_phase2 import DEALS, MESSAGES, ORDERS, PHASE2_USERS, REVIEWS, SPECIALISTS, THREADS
-from app.seed_crm import CRM_ACTIVITIES, CRM_CONTACTS, CRM_EXTRA_DEALS, CRM_INVOICES, CRM_LEADS
+from app.seed_crm import (
+    CRM_ACTIVITIES,
+    CRM_CONTACTS,
+    CRM_EXTRA_DEALS,
+    CRM_INVOICES,
+    CRM_LEADS,
+)
 from app.seed_materials import MATERIALS, SUPPLIER
+from app.seed_phase2 import (
+    DEALS,
+    MESSAGES,
+    ORDERS,
+    PHASE2_USERS,
+    REVIEWS,
+    SPECIALISTS,
+    THREADS,
+)
 from app.seed_site import (
     BUDGET,
     CHANGES,
@@ -70,6 +85,7 @@ from app.seed_site import (
     TIMESHEETS,
 )
 from app.site_models import (
+    RFI,
     BudgetLine,
     ChangeOrder,
     DailyLog,
@@ -80,14 +96,26 @@ from app.site_models import (
     Meeting,
     Project,
     PunchItem,
-    RFI,
     ScheduleTask,
     Submittal,
     Timesheet,
 )
+from app.transitions import (
+    MATERIAL_ORDER_TRANSITIONS,
+    SERVICE_ORDER_TRANSITIONS,
+    assert_transition,
+)
 from app.trust import trust_score
 
 CADASTRE = re.compile(r"^\d{2}-\d{3}-\d{3}-\d{3}$")
+
+
+def _pilot_flag(value: str) -> str:
+    # An empty or omitted checkbox must stay off. Only an explicit opt-in counts.
+    token = value.strip().lower()
+    if token in {"engicon", "1", "true", "yes"}:
+        return "engicon"
+    return ""
 
 
 class ConsentRequired(Exception):
@@ -108,7 +136,7 @@ def _slugify(text: str) -> str:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 class MemoryStore:
@@ -770,13 +798,8 @@ class MemoryStore:
         order = self.orders.get(order_id)
         if not order:
             raise ValueError("Заказ не найден")
-        spec = self.get_specialist(order.specialist_id)
-        is_spec = spec and spec.user_id == user.id
-        is_client = order.client_id == user.id
-        if user.role not in ("admin", "moderator") and not is_spec and not is_client:
-            raise PermissionError("Нет доступа к заказу")
-        if status == "completed" and not (is_spec or user.role in ("admin", "moderator")):
-            raise PermissionError("Закрыть заказ может исполнитель")
+        actor = self.service_order_actor(user, order)
+        assert_transition(SERVICE_ORDER_TRANSITIONS, actor, order.status, status)
         if status == "quoted" and (quote_kzt is None or quote_kzt <= 0):
             raise ValueError("Сумма КП должна быть больше нуля")
         if quote_kzt is not None and quote_kzt <= 0:
@@ -1489,6 +1512,25 @@ class MemoryStore:
                 return True
         return False
 
+    def service_order_actor(self, user: User, order: ServiceOrder) -> str:
+        if user.role in ("admin", "moderator"):
+            return "staff"
+        spec = self.get_specialist(order.specialist_id)
+        if spec and spec.user_id == user.id:
+            return "provider"
+        if order.client_id == user.id:
+            return "client"
+        raise PermissionError("Нет доступа к заказу")
+
+    def material_order_actor(self, user: User, order: MaterialOrder) -> str:
+        if user.role in ("admin", "moderator"):
+            return "staff"
+        if order.supplier_id == user.id:
+            return "provider"
+        if order.client_id == user.id:
+            return "client"
+        raise PermissionError("Нет доступа к заказу")
+
     def consents_for(self, user_id: str) -> list[ConsentRecord]:
         return [item for item in self.consents if item.user_id == user_id]
 
@@ -1511,6 +1553,37 @@ class MemoryStore:
             login=user.email,
         )
         self.consents.append(record)
+        return record
+
+    def append_cross_border_consent(
+        self,
+        user: User,
+        body: CrossBorderConsentBody,
+        *,
+        ip: str = "",
+        user_agent: str = "",
+    ) -> ConsentRecord:
+        provider = body.provider.strip()
+        country = body.country.strip()
+        if not provider or len(country) < 2:
+            raise ValueError("Укажите провайдера и страну")
+        statement = f"cross_border\nprovider={provider}\ncountry={country}".encode()
+        record = ConsentRecord(
+            id=f"c-{uuid4().hex[:12]}",
+            user_id=user.id,
+            type="cross_border",
+            text_version="cross-border-1",
+            text_sha256=hashlib.sha256(statement).hexdigest(),
+            granted_at=_now(),
+            ip=ip,
+            user_agent=user_agent,
+            login=user.email,
+            provider=provider,
+            country=country,
+        )
+        with self._lock:
+            self.consents.append(record)
+            self._save_unlocked()
         return record
 
     def register(self, body: RegisterBody, *, ip: str = "", user_agent: str = "") -> tuple[User, str]:
@@ -1542,7 +1615,7 @@ class MemoryStore:
                 raise ValueError("Укажите цену позиции")
         if self.get_user_by_email(email):
             raise ValueError("Такой email уже зарегистрирован")
-        pilot = "engicon" if body.pilot.strip().lower() in ("", "engicon", "1", "true", "yes") else ""
+        pilot = _pilot_flag(body.pilot)
         with self._lock:
             uid = f"u-{uuid4().hex[:8]}"
             user = User(
@@ -1722,9 +1795,8 @@ class MemoryStore:
         order = self.material_orders.get(oid)
         if not order:
             raise ValueError("Заказ не найден")
-        allowed = user.role in ("admin", "moderator") or order.supplier_id == user.id
-        if not allowed:
-            raise PermissionError("Статус меняет поставщик")
+        actor = self.material_order_actor(user, order)
+        assert_transition(MATERIAL_ORDER_TRANSITIONS, actor, order.status, status)
         with self._lock:
             order.status = status  # type: ignore[assignment]
             self.material_orders[order.id] = order

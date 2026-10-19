@@ -4,13 +4,30 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from app.authutil import load_secret
 from app.config import settings
-from app.routers import acts, auth, cabinet, chat, crm, estimates, files, health, materials, moderation, modules, plots, site, specialists
+from app.routers import (
+    acts,
+    auth,
+    cabinet,
+    chat,
+    crm,
+    estimates,
+    files,
+    health,
+    materials,
+    moderation,
+    modules,
+    plots,
+    site,
+    specialists,
+)
+from app.security import SecurityHeadersMiddleware
 
 load_secret()
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 
 app.add_middleware(GZipMiddleware, minimum_size=500)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

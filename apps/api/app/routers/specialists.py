@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.deps import require_user
 from app.schemas import OrderCreate, OrderStatusUpdate, ReviewCreate, User
 from app.store import store
+from app.transitions import ConflictError
 
 router = APIRouter(prefix="/v1", tags=["specialists"])
 
@@ -10,6 +11,8 @@ router = APIRouter(prefix="/v1", tags=["specialists"])
 def _http(exc: Exception) -> HTTPException:
     if isinstance(exc, PermissionError):
         return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, ConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=400, detail=str(exc))
 
 
@@ -56,7 +59,7 @@ def order_status(oid: str, body: OrderStatusUpdate, user: User = Depends(require
             body.quote_term,
             body.quote_comment,
         )
-    except (ValueError, PermissionError) as exc:
+    except (ValueError, PermissionError, ConflictError) as exc:
         raise _http(exc) from exc
     return {"ok": True, "data": order}
 

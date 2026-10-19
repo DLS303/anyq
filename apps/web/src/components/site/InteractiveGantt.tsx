@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useRef } from "react";
+import React, { useCallback, useMemo, useState, useRef } from "react";
 import type { Locale, ScheduleTask, TaskStatus } from "@/lib/types";
 import { postSite } from "@/lib/api";
 
@@ -118,10 +118,13 @@ export function InteractiveGantt({ locale, projectId, schedule, email, onReload 
   const headerHeight = 56;
   const svgHeight = headerHeight + filteredTasks.length * rowHeight;
 
-  const dateToX = (d: Date): number => {
-    const diff = daysDiff(minDate, d);
-    return diff * dayWidth;
-  };
+  const dateToX = useCallback(
+    (d: Date): number => {
+      const diff = daysDiff(minDate, d);
+      return diff * dayWidth;
+    },
+    [minDate, dayWidth],
+  );
 
   const today = new Date();
   const todayX = dateToX(today);

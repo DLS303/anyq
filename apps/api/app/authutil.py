@@ -1,4 +1,5 @@
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -62,5 +63,5 @@ def read_token(token: str) -> str | None:
         if int(payload.get("exp", 0)) < time.time():
             return None
         return str(payload.get("sub") or "")
-    except Exception:
+    except (ValueError, TypeError, json.JSONDecodeError, binascii.Error):
         return None

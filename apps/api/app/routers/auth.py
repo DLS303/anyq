@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.deps import require_roles, require_user
-from app.schemas import LoginBody, RegisterBody, User
+from app.ratelimit import RateLimited, login_limiter
+from app.schemas import CrossBorderConsentBody, LoginBody, RegisterBody, User
 from app.store import ConsentRequired, store
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -26,6 +27,11 @@ def register(body: RegisterBody, request: Request):
 @router.post("/login")
 def login(body: LoginBody, request: Request):
     ip, ua = _client_meta(request)
+    account = body.email.strip().lower()
+    try:
+        login_limiter.check(account, ip)
+    except RateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     try:
         user, token = store.login(
             body.email,
@@ -37,7 +43,9 @@ def login(body: LoginBody, request: Request):
     except ConsentRequired as exc:
         raise HTTPException(status_code=428, detail=str(exc)) from exc
     except ValueError as exc:
+        login_limiter.record_failure(account, ip)
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+    login_limiter.clear(account, ip)
     return {"ok": True, "data": {"user": user, "token": token}}
 
 
@@ -49,6 +57,16 @@ def me(user: User = Depends(require_user)):
 @router.get("/consents")
 def my_consents(user: User = Depends(require_user)):
     return {"ok": True, "data": store.consents_for(user.id)}
+
+
+@router.post("/consents/cross-border")
+def grant_cross_border(body: CrossBorderConsentBody, request: Request, user: User = Depends(require_user)):
+    ip, ua = _client_meta(request)
+    try:
+        record = store.append_cross_border_consent(user, body, ip=ip, user_agent=ua)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "data": record}
 
 
 @router.get("/users")

@@ -44,17 +44,34 @@ function applyAuth(headers: Headers) {
   if (token) headers.set("Authorization", `Bearer ${token}`);
 }
 
+function isCredentialPost(path: string) {
+  const bare = path.split("?")[0];
+  return bare === "/v1/auth/login" || bare === "/v1/auth/register";
+}
+
+function sessionExpired(path: string, res: Response, headers: Headers) {
+  if (res.status !== 401 || typeof window === "undefined") return;
+  if (isCredentialPost(path) || !headers.has("Authorization")) return;
+  localStorage.removeItem("superapp_user");
+  localStorage.removeItem("superapp_token");
+  const locale = window.location.pathname.startsWith("/kk") ? "kk" : "ru";
+  if (!window.location.pathname.startsWith(`/${locale}/login`)) {
+    window.location.replace(`/${locale}/login`);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit & { email?: string }): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  applyAuth(headers);
+  if (!isCredentialPost(path)) applyAuth(headers);
   const res = await fetch(`${getApiBase()}${path}`, {
     ...init,
     headers,
     cache: "no-store",
   });
+  sessionExpired(path, res, headers);
   const json = (await res.json()) as Envelope<T>;
   if (!res.ok) throw new Error(detailOf(json, res.statusText));
   return json.data;
@@ -71,9 +88,11 @@ export function fetchPlots(params: Record<string, string | undefined> = {}) {
 
 export async function fetchPlot(id: string, email?: string) {
   void email;
+  const path = `/v1/plots/${id}`;
   const headers = new Headers();
   applyAuth(headers);
-  const res = await fetch(`${getApiBase()}/v1/plots/${id}`, { headers, cache: "no-store" });
+  const res = await fetch(`${getApiBase()}${path}`, { headers, cache: "no-store" });
+  sessionExpired(path, res, headers);
   const json = (await res.json()) as Envelope<Plot> & { calc?: DevCalc; favorite?: boolean };
   if (!res.ok) throw new Error(detailOf(json, res.statusText));
   return { plot: json.data, calc: json.calc, favorite: Boolean(json.favorite) };
@@ -418,12 +437,18 @@ export function fetchThreads(email: string) {
 
 export async function fetchMessages(email: string, tid: string) {
   void email;
+  const path = `/v1/chat/threads/${tid}/messages`;
   const headers = new Headers();
   applyAuth(headers);
-  const res = await fetch(`${getApiBase()}/v1/chat/threads/${tid}/messages`, { headers, cache: "no-store" });
+  const res = await fetch(`${getApiBase()}${path}`, { headers, cache: "no-store" });
+  sessionExpired(path, res, headers);
   const json = (await res.json()) as Envelope<ChatMessage[]> & { thread?: ChatThread };
   if (!res.ok) throw new Error(detailOf(json, res.statusText));
   return { messages: json.data, thread: json.thread };
+}
+
+export function fetchMe() {
+  return request<User>("/v1/auth/me");
 }
 
 export function loginRequest(email: string, password: string, consentOfferPd: boolean) {
