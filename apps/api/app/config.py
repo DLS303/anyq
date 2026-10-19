@@ -20,6 +20,8 @@ class Settings(BaseModel):
     database_url: str | None = os.getenv("DATABASE_URL")
     anyq_env: str = os.getenv("ANYQ_ENV", "development")
     cors_origins: list[str] = resolve_cors_origins()
+    # Current Kazakhstan VAT. KS acts keep the date-based rate in tax.py.
+    vat_rate: float = float(os.getenv("ANYQ_VAT_RATE", "0.16"))
 
 
 settings = Settings()
