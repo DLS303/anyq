@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from app.deps import require_user
@@ -18,20 +18,63 @@ from app.shares import (
     share_is_active,
     token_hash,
 )
-from app.site_models import DailyPhoto, LogWeather, Project
+from app.site_models import DailyPhoto, LogWeather, MemberRole, Project, VoiceNote
 from app.store import store
 
 router = APIRouter(prefix="/v1/site", tags=["site"])
 
 
+MAX_VOICE_BYTES = 2 * 1024 * 1024
+_AUDIO_TYPES = {
+    "audio/webm",
+    "video/webm",
+    "audio/ogg",
+    "application/ogg",
+    "audio/mp4",
+    "video/mp4",
+    "audio/m4a",
+    "audio/x-m4a",
+    "application/octet-stream",
+}
+
+
 class DailyIn(BaseModel):
     day: str
     weather: LogWeather = "clear"
-    temp_c: int = 20
+    temp_c: int | None = None
     workers: int = 0
     notes: str = ""
     delays: str = ""
     delay_hours: float = Field(default=0, ge=0, le=24)
+
+
+class ProjectIn(BaseModel):
+    title: str = Field(min_length=3, max_length=120)
+    address: str = Field(default="", max_length=200)
+    deadline: str | None = None
+    budget_kzt: int | None = None
+
+
+class MemberIn(BaseModel):
+    email: str = Field(min_length=3, max_length=200)
+    role: MemberRole
+
+
+def _audio_file(data: bytes, content_type: str | None) -> tuple[str, str]:
+    if not data:
+        raise ValueError("Пустой аудиофайл")
+    if len(data) > MAX_VOICE_BYTES:
+        raise ValueError("Аудио больше 2 МБ")
+    declared = (content_type or "").split(";", 1)[0].strip().lower()
+    if declared and declared not in _AUDIO_TYPES:
+        raise ValueError("Нужен аудиофайл webm, ogg или mp4")
+    if data.startswith(b"\x1a\x45\xdf\xa3"):
+        return "audio/webm", "webm"
+    if data.startswith(b"OggS"):
+        return "audio/ogg", "ogg"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        return "audio/mp4", "m4a"
+    raise ValueError("Нужен аудиофайл webm, ogg или mp4")
 
 
 class ShareIn(BaseModel):
@@ -196,6 +239,21 @@ def list_projects(user: User = Depends(require_user)):
     return {"ok": True, "data": snaps}
 
 
+@router.post("/projects")
+def create_project(
+    body: ProjectIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    def create():
+        return store.create_project(user, body.title, body.address, body.deadline, body.budget_kzt)
+
+    try:
+        return _saved(user, idempotency_key, body, create)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+
+
 @router.get("/projects/{pid}")
 def get_project(pid: str, user: User = Depends(require_user)):
     project = _guard_pid(user, pid)
@@ -225,9 +283,47 @@ def bundle(pid: str, user: User = Depends(require_user)):
             "timesheets": store._by_project(store.timesheets, p.id),
             "meetings": store._by_project(store.meetings, p.id),
             "directory": store._by_project(store.directory, p.id),
+            "members": store.list_project_members(p),
+            "can_manage_members": store.can_manage_project(user, p),
             "can_approve_changes": store.is_assigned_supervisor(user, p),
         },
     }
+
+
+@router.get("/projects/{pid}/members")
+def list_members(pid: str, user: User = Depends(require_user)):
+    project = _guard_pid(user, pid)
+    return {"ok": True, "data": store.list_project_members(project)}
+
+
+@router.post("/projects/{pid}/members")
+def add_member(
+    pid: str,
+    body: MemberIn,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    _project_or_404(pid)
+
+    def create():
+        return store.add_project_member(user, pid, body.email, body.role)
+
+    try:
+        return _saved(user, idempotency_key, body, create)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.delete("/projects/{pid}/members/{user_id}")
+def remove_member(pid: str, user_id: str, user: User = Depends(require_user)):
+    try:
+        return {"ok": True, "data": store.remove_project_member(user, pid, user_id)}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/projects/{pid}/daily")
@@ -302,6 +398,47 @@ async def add_daily_photos(
         )
         added.append({"has_people": item.has_people, "has_plates": item.has_plates, "taken_at": item.taken_at})
     return {"ok": True, "data": {"log": member_daily(store.daily_logs[log.id]), "added": added}}
+
+
+@router.post("/daily/{log_id}/voice")
+async def add_daily_voice(
+    log_id: str,
+    user: User = Depends(require_user),
+    file: UploadFile = File(...),
+    duration_s: int = Form(0),
+):
+    log, project = _owned_log(user, log_id)
+    if duration_s < 0 or duration_s > 120:
+        raise HTTPException(400, "Голосовая заметка не длиннее 120 секунд")
+    raw = await file.read()
+    try:
+        media_type, ext = _audio_file(raw, file.content_type)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    file_id = f"f-{uuid4().hex[:12]}"
+    write_stored_file("voice", f"{project.id}/voice/{file_id}.{ext}", raw)
+    store.add_upload(
+        user,
+        f"{project.id}/voice/{file_id}.{ext}",
+        media_type,
+        project.id,
+        kind="voice",
+        daily_log_id=log.id,
+        file_id=file_id,
+    )
+    try:
+        store.add_daily_voice(
+            log.id,
+            VoiceNote(
+                file_id=file_id,
+                duration_s=duration_s,
+                created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                content_type=media_type,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "data": member_daily(store.daily_logs[log.id])}
 
 
 @router.post("/daily/{log_id}/share")

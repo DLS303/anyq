@@ -1,6 +1,10 @@
+from dataclasses import asdict
+
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict
 
 from app.deps import require_roles, require_user
+from app.legal import consent_documents
 from app.ratelimit import RateLimited, login_limiter
 from app.schemas import CrossBorderConsentBody, LoginBody, RegisterBody, User
 from app.store import ConsentRequired, store
@@ -37,6 +41,7 @@ def login(body: LoginBody, request: Request):
             body.email,
             body.password,
             consent=body.consent_offer_pd,
+            consent_ai=body.consent_ai,
             ip=ip,
             user_agent=ua,
         )
@@ -57,6 +62,36 @@ def me(user: User = Depends(require_user)):
 @router.get("/consents")
 def my_consents(user: User = Depends(require_user)):
     return {"ok": True, "data": store.consents_for(user.id)}
+
+
+@router.get("/consents/documents")
+def consent_document_versions(user: User = Depends(require_user)):
+    _ = user
+    return {"ok": True, "data": [asdict(item) for item in consent_documents()]}
+
+
+class AiConsentIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+@router.post("/consents/ai")
+def grant_ai(request: Request, body: AiConsentIn | None = None, user: User = Depends(require_user)):
+    _ = body
+    ip, ua = _client_meta(request)
+    record = store.append_ai_consent(user, ip=ip, user_agent=ua)
+    return {"ok": True, "data": record}
+
+
+@router.post("/consents/{consent_id}/revoke")
+def revoke_consent(consent_id: str, request: Request, user: User = Depends(require_user)):
+    ip, ua = _client_meta(request)
+    try:
+        record = store.revoke_consent(user, consent_id, ip=ip, user_agent=ua)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "data": record}
 
 
 @router.post("/consents/cross-border")

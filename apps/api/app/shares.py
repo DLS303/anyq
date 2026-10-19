@@ -88,6 +88,15 @@ def member_daily(log: DailyLog) -> dict:
         "author_id": log.author_id,
         "author_role": log.author_role,
         "photos": photos,
+        "voice_notes": [
+            {
+                "file_id": note.file_id,
+                "url": f"/v1/files/{note.file_id}",
+                "duration_s": note.duration_s,
+                "created_at": note.created_at,
+            }
+            for note in log.voice_notes
+        ],
         "share_active": share_is_active(log),
         "share_expires_at": log.share_expires_at if log.share_token_sha256 and not log.share_revoked else None,
     }

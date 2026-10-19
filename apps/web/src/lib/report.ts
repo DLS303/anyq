@@ -62,7 +62,7 @@ export function statusLabel(code: string, m: Msg) {
   }
 }
 
-export const SITE_ROLES = ["buyer", "contractor", "supervisor", "architect", "surveyor", "supplier", "foreman"] as const;
+export const SITE_ROLES = ["buyer", "contractor", "supervisor", "architect", "surveyor", "supplier", "foreman", "procurement", "customer"] as const;
 
 export function siteRoleLabel(role: string, m: Msg) {
   switch (role) {
@@ -72,6 +72,10 @@ export function siteRoleLabel(role: string, m: Msg) {
       return m.roleSurveyor;
     case "foreman":
       return m.roleForeman;
+    case "procurement":
+      return m.roleProcurement;
+    case "customer":
+      return m.roleCustomer;
     default:
       return roleLabel(role, m);
   }
