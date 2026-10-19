@@ -30,6 +30,7 @@ from sqlalchemy import (
     desc,
     event,
     func,
+    inspect,
     or_,
     select,
     text,
@@ -215,6 +216,79 @@ class PhotoJob(Base):
     taken_at: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[str] = mapped_column(String(40), index=True)
     finished_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class CompanyFeature(Base):
+    """Company feature flag. Logical key is (company_id, key)."""
+
+    __tablename__ = "company_features"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company_id: Mapped[str] = mapped_column(String(180), nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    changed_at: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    deleted_at: Mapped[str | None] = mapped_column(String(40))
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "key", name="uq_company_features_company_key"),
+        Index("ix_company_features_company_id", "company_id"),
+    )
+
+
+class AuditLog(Base):
+    """Append-only events. Feature toggles use feature.enable and feature.disable."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event: Mapped[str] = mapped_column(String(64), nullable=False)
+    company_id: Mapped[str] = mapped_column(String(180), nullable=False)
+    actor: Mapped[str] = mapped_column(String(80), nullable=False)
+    at: Mapped[str] = mapped_column(String(40), nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    __table_args__ = (Index("ix_audit_log_company_id", "company_id"),)
+
+
+def install_audit_guards(bind) -> None:
+    """Reject UPDATE and DELETE on audit_log. SQLite and PostgreSQL 16."""
+    if not inspect(bind).has_table("audit_log"):
+        return
+    dialect = bind.dialect.name
+    if dialect == "sqlite":
+        bind.exec_driver_sql(
+            "CREATE TRIGGER IF NOT EXISTS trg_audit_log_no_update BEFORE UPDATE ON audit_log "
+            "BEGIN SELECT RAISE(ABORT, 'append-only'); END"
+        )
+        bind.exec_driver_sql(
+            "CREATE TRIGGER IF NOT EXISTS trg_audit_log_no_delete BEFORE DELETE ON audit_log "
+            "BEGIN SELECT RAISE(ABORT, 'append-only'); END"
+        )
+        return
+    if dialect != "postgresql":
+        return
+    bind.exec_driver_sql(
+        "CREATE OR REPLACE FUNCTION forbid_audit_log_mutation() RETURNS trigger "
+        "LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'append-only'; END $$"
+    )
+    bind.exec_driver_sql(
+        "DO $$ BEGIN "
+        "IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_log_no_update') THEN "
+        "CREATE TRIGGER trg_audit_log_no_update BEFORE UPDATE ON audit_log "
+        "FOR EACH ROW EXECUTE FUNCTION forbid_audit_log_mutation(); "
+        "END IF; END $$"
+    )
+    bind.exec_driver_sql(
+        "DO $$ BEGIN "
+        "IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_log_no_delete') THEN "
+        "CREATE TRIGGER trg_audit_log_no_delete BEFORE DELETE ON audit_log "
+        "FOR EACH ROW EXECUTE FUNCTION forbid_audit_log_mutation(); "
+        "END IF; END $$"
+    )
 
 
 # Attribute on MemoryStore -> collection name in `records`.
