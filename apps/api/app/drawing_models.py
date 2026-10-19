@@ -1,12 +1,14 @@
 """SQL rows for drawing sheets. Kept off the records metadata so migration 0001 does not create them."""
 
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
-from sqlalchemy.orm import Mapped, mapped_column
-
-from app.sql_backend import Base
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-class StoredFile(Base):
+class DrawingBase(DeclarativeBase):
+    pass
+
+
+class StoredFile(DrawingBase):
     __tablename__ = "files"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -29,7 +31,7 @@ class StoredFile(Base):
     )
 
 
-class DrawingSetRow(Base):
+class DrawingSetRow(DrawingBase):
     __tablename__ = "drawing_sets"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -45,7 +47,7 @@ class DrawingSetRow(Base):
     __table_args__ = (Index("ix_drawing_sets_company_updated", "company_id", "updated_at"),)
 
 
-class DrawingRow(Base):
+class DrawingRow(DrawingBase):
     __tablename__ = "drawings"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -72,7 +74,7 @@ class DrawingRow(Base):
     )
 
 
-class DrawingRevisionRow(Base):
+class DrawingRevisionRow(DrawingBase):
     __tablename__ = "drawing_revisions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

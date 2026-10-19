@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
+from app.company_features import require_feature
 from app.deps import require_user
 from app.drawings import (
     MAX_PDF_BYTES,
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/v1/site", tags=["drawings"])
 
 
 def gate(request: Request, user: User = Depends(require_user)) -> Access:
-    return load_access(request, user.id)
+    return load_access(request, user)
 
 
 def _version(value: str | None) -> int | None:
@@ -39,13 +40,14 @@ def _bytes(upload: UploadFile) -> bytes:
 
 
 @router.get("/projects/{pid}/drawing-sheets")
-def drawing_sheets(access: Access = Depends(gate)):
+def drawing_sheets(access: Access = Depends(gate), _: User = Depends(require_feature("drawings"))):
     return {"ok": True, "data": list_sheets(access)}
 
 
 @router.post("/projects/{pid}/drawings")
 def post_drawing(
     access: Access = Depends(gate),
+    _: User = Depends(require_feature("drawings")),
     file: UploadFile = File(...),
     id: str | None = Form(default=None),
     revision_id: str | None = Form(default=None),

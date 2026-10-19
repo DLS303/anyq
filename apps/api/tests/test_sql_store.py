@@ -21,7 +21,7 @@ def test_plots_are_paged_in_sql():
     second = client.get("/v1/plots", params={"limit": 1, "offset": 1})
     assert second.status_code == 200
     assert second.json()["data"][0]["id"] != body["data"][0]["id"]
-    assert second.json()["total"] == body["total"]
+    assert "total" not in second.json()
 
 
 def test_two_connections_see_each_others_writes(tmp_path, monkeypatch):

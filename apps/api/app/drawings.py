@@ -9,29 +9,23 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, Request
-from sqlalchemy import and_, exists, inspect, or_, select, text, update
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy import and_, func, or_, select, true, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
-from types import SimpleNamespace
-
 from app.audit import write as audit_write
-from app.company_features import company_id_of, ensure_feature
-from app.drawing_models import DrawingRevisionRow, DrawingRow, DrawingSetRow, StoredFile
+from app.company_features import ensure_feature
+from app.drawing_models import DrawingBase, DrawingRevisionRow, DrawingRow, DrawingSetRow, StoredFile
 from app.paths import resolve_stored_file, write_stored_file
 from app.pdf_clean import strip_pdf
-from app.sql_backend import Base, Record
+from app.schemas import User
+from app.sql_backend import Record
 from app.store import store
+from app.tenant import company_key
 
 MAX_PDF_BYTES = 50 * 1024 * 1024
 UPLOAD_ROLES = frozenset({"owner", "supervisor"})
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
-_AUDIT_COLUMNS = (
-    ("entity_type", "VARCHAR(64)"),
-    ("entity_id", "VARCHAR(36)"),
-    ("project_id", "VARCHAR(80)"),
-    ("changes", "TEXT"),
-)
 _ready = False
 _lock = threading.Lock()
 
@@ -51,33 +45,8 @@ def ensure_schema() -> None:
     with _lock:
         if _ready:
             return
-        Base.metadata.create_all(
-            store._sql.engine,
-            tables=[
-                StoredFile.__table__,
-                DrawingSetRow.__table__,
-                DrawingRow.__table__,
-                DrawingRevisionRow.__table__,
-            ],
-        )
-        _ensure_audit_columns()
+        DrawingBase.metadata.create_all(store._sql.engine)
         _ready = True
-
-
-def _ensure_audit_columns() -> None:
-    binder = store._sql.engine
-    if not inspect(binder).has_table("audit_log"):
-        return
-    have = {col["name"] for col in inspect(binder).get_columns("audit_log")}
-    missing = [(name, ddl) for name, ddl in _AUDIT_COLUMNS if name not in have]
-    if not missing:
-        return
-    with binder.begin() as conn:
-        for name, ddl in missing:
-            try:
-                conn.execute(text(f"ALTER TABLE audit_log ADD COLUMN {name} {ddl}"))
-            except OperationalError:
-                continue
 
 
 def parse_uuid(value: str | None, *, required: bool = True) -> str | None:
@@ -113,59 +82,63 @@ def _clean(value: object) -> str:
     return str(value).strip().strip('"')
 
 
-def _access_statement(kind: str, path_id: str, user_id: str):
-    project = aliased(Record)
+def _allowed(project, member, user: User):
+    """Same membership rule as resolve_path_company: owner, directory, or stored company key."""
+    access = or_(
+        member.user_id == user.id,
+        project.owner_id == user.id,
+        project.company_key == company_key(user),
+    )
+    if user.role == "admin":
+        return true()
+    return access
+
+
+def _access_columns(project, member, owner):
+    return (
+        func.coalesce(project.company_key, owner.company_key).label("company_id"),
+        project.doc_id.label("project_id"),
+        project.owner_id.label("owner_id"),
+        member.payload["role_on_site"].as_string().label("site_role"),
+    )
+
+
+def _with_membership(stmt, project, user: User):
     member = aliased(Record)
     owner = aliased(Record)
-    seat = aliased(Record)
-    listed = aliased(Record)
-    site_role = (
-        select(seat.payload["role_on_site"].as_string())
-        .where(
-            seat.collection == "directory",
-            seat.project_id == project.doc_id,
-            seat.user_id == user_id,
-        )
-        .limit(1)
-        .scalar_subquery()
-    )
-    columns = (
-        project.doc_id.label("project_id"),
-        owner.doc_id.label("owner_id"),
-        owner.payload["company_bin"].as_string().label("owner_bin"),
-        owner.company_key.label("company_key"),
-        member.payload["role"].as_string().label("user_role"),
-        site_role.label("site_role"),
-        (member.doc_id == project.owner_id).label("is_owner"),
-    )
-    member_ok = or_(
-        member.doc_id == project.owner_id,
-        and_(member.company_key == owner.company_key, owner.company_key.like("bin:%")),
-        exists(
-            select(listed.doc_id).where(
-                listed.collection == "directory",
-                listed.project_id == project.doc_id,
-                listed.user_id == user_id,
-            )
-        ),
-    )
-    if kind == "project":
-        entity = aliased(Record)
-        return (
-            select(*columns)
-            .select_from(entity)
-            .join(project, and_(project.collection == "projects", project.doc_id == entity.doc_id))
-            .join(owner, and_(owner.collection == "users", owner.doc_id == project.owner_id))
-            .join(member, and_(member.collection == "users", member.doc_id == user_id))
-            .where(entity.collection == "projects", entity.doc_id == path_id, member_ok)
-        )
     return (
-        select(*columns)
+        stmt.add_columns(*_access_columns(project, member, owner))
+        .outerjoin(
+            member,
+            and_(
+                member.collection == "directory",
+                member.project_id == project.doc_id,
+                member.user_id == user.id,
+            ),
+        )
+        .outerjoin(owner, and_(owner.collection == "users", owner.doc_id == project.owner_id))
+        .where(_allowed(project, member, user))
+        .limit(1)
+    )
+
+
+def _access_statement(kind: str, path_id: str, user: User):
+    project = aliased(Record)
+    if kind == "project":
+        return _with_membership(
+            select()
+            .select_from(project)
+            .where(project.collection == "projects", project.doc_id == path_id),
+            project,
+            user,
+        )
+    return _with_membership(
+        select()
         .select_from(DrawingRow)
         .join(project, and_(project.collection == "projects", project.doc_id == DrawingRow.project_id))
-        .join(owner, and_(owner.collection == "users", owner.doc_id == project.owner_id))
-        .join(member, and_(member.collection == "users", member.doc_id == user_id))
-        .where(DrawingRow.id == path_id, DrawingRow.deleted_at.is_(None), member_ok)
+        .where(DrawingRow.id == path_id, DrawingRow.deleted_at.is_(None)),
+        project,
+        user,
     )
 
 
@@ -179,22 +152,21 @@ def path_entity(request: Request) -> tuple[str, str]:
     raise HTTPException(status_code=404, detail="Не найдено")
 
 
-def load_access(request: Request, user_id: str) -> Access:
+def load_access(request: Request, user: User) -> Access:
     ensure_schema()
     kind, path_id = path_entity(request)
     with store._sql.factory() as session:
-        row = session.execute(_access_statement(kind, path_id, user_id)).first()
-    if row is None:
+        row = session.execute(_access_statement(kind, path_id, user)).first()
+    if row is None or not row.company_id:
         raise HTTPException(status_code=404, detail="Не найдено")
-    company_id = company_id_of(SimpleNamespace(id=str(row.owner_id), company_bin=_clean(row.owner_bin)))
-    ensure_feature(company_id, "drawings")
+    ensure_feature(str(row.company_id), "drawings")
     return Access(
-        company_id=company_id,
+        company_id=str(row.company_id),
         project_id=str(row.project_id),
-        user_id=user_id,
-        user_role=_clean(row.user_role),
+        user_id=user.id,
+        user_role=_clean(user.role),
         site_role=_clean(row.site_role),
-        is_owner=bool(row.is_owner),
+        is_owner=str(row.owner_id or "") == user.id,
     )
 
 
@@ -394,7 +366,7 @@ def create_sheet(
                 {"rev": chosen_rev, "file_id": file_id, "drawing_id": drawing_id},
                 session=session,
                 company_id=access.company_id,
-                actor=user_id,
+                actor_user_id=user_id,
             )
             session.commit()
         except IntegrityError as exc:
@@ -486,7 +458,7 @@ def add_revision(
                 {"rev": chosen, "file_id": file_id, "drawing_id": drawing_id},
                 session=session,
                 company_id=drawing.company_id,
-                actor=user_id,
+                actor_user_id=user_id,
             )
             session.commit()
         except IntegrityError as exc:

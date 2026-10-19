@@ -1,7 +1,7 @@
 """Drawing sheets, revisions, and file rows.
 
 Revision ID: 20261019_0003_pf1a
-Revises: 20261019_0002
+Revises: 20261019_0002_pf0
 Create Date: 2026-10-19
 
 down_revision is the company-feature revision from PR #18.
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20261019_0003_pf1a"
-down_revision = "20261019_0002"
+down_revision = "20261019_0002_pf0"
 branch_labels = None
 depends_on = None
 
@@ -102,17 +102,9 @@ def upgrade() -> None:
             "CREATE UNIQUE INDEX ux_drawing_current ON drawing_revisions (drawing_id) "
             "WHERE is_current AND deleted_at IS NULL"
         )
-    op.add_column("audit_log", sa.Column("entity_type", sa.String(length=64), nullable=True))
-    op.add_column("audit_log", sa.Column("entity_id", sa.String(length=36), nullable=True))
-    op.add_column("audit_log", sa.Column("project_id", sa.String(length=80), nullable=True))
-    op.add_column("audit_log", sa.Column("changes", sa.Text(), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("audit_log", "changes")
-    op.drop_column("audit_log", "project_id")
-    op.drop_column("audit_log", "entity_id")
-    op.drop_column("audit_log", "entity_type")
     op.execute("DROP INDEX IF EXISTS ux_drawing_current")
     op.execute("DROP INDEX IF EXISTS ux_drawing_rev")
     op.drop_index("ix_drawing_revisions_company_updated", table_name="drawing_revisions")

@@ -33,8 +33,7 @@ class AcceptIn(BaseModel):
 
 def _fail(exc: Exception) -> None:
     if isinstance(exc, InvitationClosed):
-        status = 410 if exc.code in {"expired", "revoked"} else 409
-        raise HTTPException(status, str(exc)) from exc
+        raise HTTPException(410, str(exc)) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(403, str(exc) or "Недостаточно прав") from exc
     if isinstance(exc, LookupError):

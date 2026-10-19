@@ -277,11 +277,11 @@ def test_new_revision_becomes_current_and_conflict_is_409():
             session.commit()
         session.rollback()
         audit = session.execute(
-            text("SELECT event, changes FROM audit_log WHERE entity_id = :id"),
+            text("SELECT action, changes FROM audit_log WHERE entity_id = :id"),
             {"id": sheet["revisions"][0]["id"]},
         ).first()
     assert audit is not None
-    assert audit.event == "drawing.upload"
+    assert audit.action == "drawing.upload"
     assert "7701" not in (audit.changes or "")
     assert "storage_key" not in (audit.changes or "")
 

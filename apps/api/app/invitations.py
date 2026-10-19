@@ -188,23 +188,12 @@ def accept(token: str, body, *, ip: str = "", user_agent: str = "") -> tuple:
         raise ValueError("Нужно согласие на обработку персональных данных")
     from app.store import store
 
-    user, auth = store.create_invited_account(
+    return store.accept_invitation(
+        row,
         email=body.email,
         password=body.password,
         full_name=body.full_name,
         phone=body.phone,
-        role=row.role,
-        company=row.company,
-        company_bin=row.company_bin,
-        project_id=row.project_id,
         ip=ip,
         user_agent=user_agent,
     )
-    with _session() as session:
-        current = session.get(InvitationRow, row.id)
-        if current is None or current.used_at or current.revoked_at:
-            raise InvitationClosed("used", "Приглашение уже использовано")
-        current.used_at = utc_now()
-        current.used_by = user.id
-        session.commit()
-    return user, auth
