@@ -2,25 +2,32 @@
 
 import io
 import json
+import logging
 import os
 import sqlite3
 import subprocess
 import sys
+import threading
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.audit import _mask
 from app.company_features import company_id_of
+from app.log_redact import TokenRedactingFilter, redact_text
 from app.main import app
-from app.paths import uploads_dir
+from app.paths import publish_exclusive, uploads_dir, write_exclusive_temp
 from app.pf0_tables import AuditLog
-from app.rfi_service import add_business_days
+from app.rfi_service import add_business_days, count_open_by_project, create_rfi
 from app.rfi_tables import access_tokens, rfi_files
 from app.schemas import User
+from app.site_models import RFI
 from app.store import store
 
 client = TestClient(app)
@@ -328,6 +335,7 @@ def test_foreign_company_is_404_on_read_write_files_and_links(monkeypatch):
     public = client.get(f"/v1/public/rfi/{token}")
     assert public.status_code == 200, public.text
     assert public.headers["x-robots-tag"] == "noindex, nofollow"
+    assert public.headers["referrer-policy"] == "no-referrer"
     assert "+15551230000" not in public.text
     assert "Ada North" not in public.text
     replied = client.post(f"/v1/public/rfi/{token}", json={"answer": "Land it on grid C"})
@@ -495,6 +503,25 @@ def test_reused_file_id_does_not_replace_bytes(monkeypatch):
     assert on_disk.read_bytes() == original_bytes
     assert list(uploads_dir().glob(".tmp-*")) == []
 
+    fresh_version = int(uploaded.json()["data"]["row_version"])
+    before = {path.name for path in uploads_dir().iterdir() if path.is_file()}
+    reused = client.post(
+        f"/v1/site/projects/{pid}/rfis/{first_id}/files",
+        files={"file": ("e.jpg", _jpeg_color("white"), "image/jpeg")},
+        data={"id": shared_id, "row_version": str(fresh_version)},
+        headers=_auth(owner_token),
+    )
+    assert reused.status_code == 409, reused.text
+    assert on_disk.read_bytes() == original_bytes
+    after = {path.name for path in uploads_dir().iterdir() if path.is_file()}
+    assert after == before
+    assert list(uploads_dir().glob(".tmp-*")) == []
+    with store._sql.factory() as session:
+        rows = session.execute(
+            select(rfi_files).where(rfi_files.c.rfi_id == first_id, rfi_files.c.file_id == shared_id)
+        ).mappings().all()
+    assert len(rows) == 1
+
 
 def test_alembic_rfi_revision_roundtrip(tmp_path):
     db = tmp_path / "rfi.sqlite"
@@ -513,9 +540,181 @@ def test_alembic_rfi_revision_roundtrip(tmp_path):
     indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert "ix_rfis_project_status_due" in indexes
     assert "ix_rfis_company_updated" in indexes
-    assert "ix_rfi_files_file_id" in indexes
+    assert "uq_rfi_files_rfi_file" in indexes
+    assert "ix_access_tokens_entity_id" in indexes
+    rfi_sql = connection.execute("SELECT sql FROM sqlite_master WHERE name = 'rfis'").fetchone()[0]
+    assert "uq_rfis_project_number" in rfi_sql
+    file_fks = {row[2] for row in connection.execute("PRAGMA foreign_key_list(rfi_files)")}
+    token_fks = {row[2] for row in connection.execute("PRAGMA foreign_key_list(access_tokens)")}
+    rfi_fks = {row[2] for row in connection.execute("PRAGMA foreign_key_list(rfis)")}
+    assert "rfis" in file_fks
+    assert "rfis" in token_fks
+    assert "external_contacts" in rfi_fks
     file_columns = {row[1] for row in connection.execute("PRAGMA table_info(rfi_files)")}
     assert {"file_id", "storage_key", "created_by", "updated_by"} <= file_columns
     columns = {row[1] for row in connection.execute("PRAGMA table_info(audit_log)")}
     assert {"entity_type", "entity_id", "project_id", "changes"} <= columns
     connection.close()
+
+
+def test_parallel_creates_use_distinct_numbers(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    _token, user = _owner("rfi-race@example.com", "101010101010")
+    pid = _project(_token, "Race Yard")
+    _flag(_token, True, 0)
+    access = {"project_id": pid, "company_id": company_id_of(user)}
+    barrier = threading.Barrier(6)
+    errors: list[BaseException] = []
+    numbers: list[str] = []
+    lock = threading.Lock()
+
+    def once(index: int) -> None:
+        barrier.wait()
+        try:
+            data = create_rfi(user, access, {"id": str(uuid4()), "question": f"Race {index}"})
+        except (HTTPException, IntegrityError, OperationalError) as exc:
+            with lock:
+                errors.append(exc)
+            return
+        with lock:
+            numbers.append(data["number"])
+
+    threads = [threading.Thread(target=once, args=(index,)) for index in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert sorted(numbers) == [f"RFI-{index:03d}" for index in range(1, 7)]
+    counts = count_open_by_project([pid, "missing-project"])
+    assert counts[pid] == 6
+    assert counts["missing-project"] == 0
+
+
+def test_revoke_and_close_invalidate_the_reply_link(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    token, _user = _owner("rfi-revoke@example.com", "202020202020")
+    pid = _project(token, "Link Yard")
+    _flag(token, True, 0)
+    created = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": str(uuid4()), "question": "Can this link be withdrawn?"},
+        headers=_auth(token),
+    )
+    assert created.status_code == 200, created.text
+    record_id = created.json()["data"]["id"]
+    link_id = str(uuid4())
+    link = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link",
+        json={"id": link_id, "expires_in_days": 14},
+        headers=_auth(token),
+    )
+    assert link.status_code == 200, link.text
+    share = link.json()["data"]["token"]
+    opened = client.get(f"/v1/public/rfi/{share}")
+    assert opened.status_code == 200, opened.text
+    revoked = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link/revoke",
+        json={"id": link_id},
+        headers=_auth(token),
+    )
+    assert revoked.status_code == 200, revoked.text
+    assert "token" not in revoked.json()["data"]
+    assert client.get(f"/v1/public/rfi/{share}").status_code == 404
+    again = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link",
+        json={"id": str(uuid4()), "expires_in_days": 14},
+        headers=_auth(token),
+    )
+    assert again.status_code == 200, again.text
+    second = again.json()["data"]["token"]
+    closed = client.post(
+        f"/v1/site/rfis/{record_id}/status",
+        json={"status": "closed", "row_version": 1},
+        headers=_auth(token),
+    )
+    assert closed.status_code == 200, closed.text
+    assert client.get(f"/v1/public/rfi/{second}").status_code == 404
+    other = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": str(uuid4()), "question": "Delete this question"},
+        headers=_auth(token),
+    )
+    assert other.status_code == 200, other.text
+    other_id = other.json()["data"]["id"]
+    third = client.post(
+        f"/v1/site/projects/{pid}/rfis/{other_id}/link",
+        json={"id": str(uuid4()), "expires_in_days": 14},
+        headers=_auth(token),
+    )
+    assert third.status_code == 200, third.text
+    removed = client.post(
+        f"/v1/site/rfis/{other_id}/delete",
+        json={"row_version": 1},
+        headers=_auth(token),
+    )
+    assert removed.status_code == 200, removed.text
+    assert client.get(f"/v1/public/rfi/{third.json()['data']['token']}").status_code == 404
+
+
+def test_demo_bundle_omits_questions_when_the_flag_is_off(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    token, _user = _owner("rfi-demo@example.com", "303030303030")
+    pid = _project(token, "Demo Yard")
+    _flag(token, True, 0)
+    created = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": str(uuid4()), "question": "Shown only while the flag is on"},
+        headers=_auth(token),
+    )
+    assert created.status_code == 200, created.text
+    record_id = created.json()["data"]["id"]
+    legacy = RFI(id="legacy-hidden", project_id=pid, number="RFI-OLD", title="Old", question="Old")
+    store.rfis[legacy.id] = legacy
+    try:
+        _flag(token, False, 1)
+        hidden = client.get(f"/v1/site/projects/{pid}/bundle", headers=_auth(token))
+        assert hidden.status_code == 200, hidden.text
+        assert hidden.json()["data"]["rfis"] == []
+        _flag(token, True, 0)
+        shown = client.get(f"/v1/site/projects/{pid}/bundle", headers=_auth(token))
+        assert shown.status_code == 200, shown.text
+        ids = [row["id"] for row in shown.json()["data"]["rfis"]]
+        assert ids == [record_id]
+    finally:
+        store.rfis.pop(legacy.id, None)
+
+
+def test_publish_exclusive_leaves_the_existing_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANYQ_UPLOADS_DIR", str(tmp_path))
+    first = write_exclusive_temp("upload", b"one")
+    publish_exclusive("upload", first, "abc123")
+    second = write_exclusive_temp("upload", b"two")
+    with pytest.raises(FileExistsError):
+        publish_exclusive("upload", second, "abc123")
+    assert (tmp_path / "abc123").read_bytes() == b"one"
+    assert list(tmp_path.glob(".tmp-*")) == []
+
+
+def test_reply_token_is_redacted_in_logs():
+    secret = "a" * 43
+    message = f'GET /v1/public/rfi/{secret} HTTP/1.1 referer /ru/r/rfi/{secret}'
+    assert secret not in redact_text(message)
+    assert "/v1/public/rfi/[redacted]" in redact_text(message)
+    logger = logging.getLogger("test.rfi.redact")
+    logger.addFilter(TokenRedactingFilter())
+    logger.setLevel(logging.INFO)
+    captured: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    handler = Capture()
+    logger.addHandler(handler)
+    try:
+        logger.info('"%s"', f"GET /v1/public/rfi/{secret} HTTP/1.1")
+    finally:
+        logger.removeHandler(handler)
+    assert captured
+    assert secret not in captured[0]

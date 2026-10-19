@@ -20,7 +20,6 @@ const WEB_CSP = [
 const SECURITY_HEADERS = [
   { key: "Strict-Transport-Security", value: "max-age=86400" },
   { key: "X-Content-Type-Options", value: "nosniff" },
-  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Content-Security-Policy", value: WEB_CSP },
 ];
@@ -42,7 +41,10 @@ const nextConfig: NextConfig = {
       },
       {
         source: "/:locale/r/rfi/:token",
-        headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
+        headers: [
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+        ],
       },
     ];
   },

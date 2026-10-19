@@ -5,7 +5,18 @@ Kept off the store metadata. Revision 0005 creates them with op.create_table.
 
 from __future__ import annotations
 
-from sqlalchemy import Column, Index, Integer, MetaData, String, Table, Text, text
+from sqlalchemy import (
+    Column,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    text,
+)
 
 metadata = MetaData()
 
@@ -43,6 +54,12 @@ rfis = Table(
     Column("status", String(20), nullable=False),
     Column("assignee_user_id", String(80)),
     Column("assignee_contact_id", String(36)),
+    ForeignKeyConstraint(
+        ["assignee_contact_id"],
+        ["external_contacts.id"],
+        name="fk_rfis_assignee_contact",
+    ),
+    UniqueConstraint("project_id", "number", name="uq_rfis_project_number"),
     Column("due_date", String(10)),
     Column("drawing_revision_id", String(80)),
     Column("attachments", Text, nullable=False),
@@ -75,6 +92,7 @@ access_tokens = Table(
     Column("purpose", String(32), nullable=False),
     Column("token_sha256", String(64), nullable=False),
     Column("entity_id", String(36), nullable=False),
+    ForeignKeyConstraint(["entity_id"], ["rfis.id"], name="fk_access_tokens_entity"),
     Column("expires_at", String(40), nullable=False),
     Column("used_at", String(40)),
     Column("created_by", String(80), nullable=False),
@@ -85,6 +103,7 @@ access_tokens = Table(
     Column("deleted_at", String(40)),
     Index("ix_access_tokens_token_sha256", "token_sha256", unique=True),
     Index("ix_access_tokens_company_updated", "company_id", "updated_at"),
+    Index("ix_access_tokens_entity_id", "entity_id"),
 )
 
 rfi_files = Table(
@@ -95,6 +114,7 @@ rfi_files = Table(
     Column("company_id", String(180), nullable=False),
     Column("project_id", String(80), nullable=False),
     Column("rfi_id", String(36), nullable=False),
+    ForeignKeyConstraint(["rfi_id"], ["rfis.id"], name="fk_rfi_files_rfi"),
     Column("storage_key", String(80), nullable=False),
     Column("sha256", String(64), nullable=False),
     Column("size", Integer, nullable=False),
@@ -105,6 +125,13 @@ rfi_files = Table(
     Column("updated_at", String(40), nullable=False),
     Column("row_version", Integer, nullable=False),
     Column("deleted_at", String(40)),
-    Index("ix_rfi_files_file_id", "file_id"),
+    Index(
+        "uq_rfi_files_rfi_file",
+        "rfi_id",
+        "file_id",
+        unique=True,
+        sqlite_where=text("deleted_at IS NULL"),
+        postgresql_where=text("deleted_at IS NULL"),
+    ),
     Index("ix_rfi_files_company_updated", "company_id", "updated_at"),
 )

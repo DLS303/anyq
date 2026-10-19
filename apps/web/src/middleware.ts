@@ -31,8 +31,10 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
   const response = NextResponse.next();
-  const policy = referrerPolicyFor(pathname);
-  if (policy) response.headers.set("Referrer-Policy", policy);
+  const tokenPage = /^\/(ru|kk)\/r\/(rfi|material)\//.test(pathname);
+  const policy = tokenPage ? "no-referrer" : referrerPolicyFor(pathname) || "strict-origin-when-cross-origin";
+  response.headers.set("Referrer-Policy", policy);
+  if (tokenPage) response.headers.set("X-Robots-Tag", "noindex, nofollow");
   return response;
 }
 

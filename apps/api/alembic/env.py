@@ -3,6 +3,7 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
+from app.rfi_tables import metadata as rfi_metadata
 from app.sql_backend import Base, resolve_database_url
 
 config = context.config
@@ -10,7 +11,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 config.set_main_option("sqlalchemy.url", resolve_database_url())
-target_metadata = Base.metadata
+# Question tables are compared with the migration. The audit log stays out:
+# its PostgreSQL shape is partitioned DDL, not the application model.
+target_metadata = [Base.metadata, rfi_metadata]
 
 
 _SKIP_INDEXES = {
@@ -21,13 +24,21 @@ _SKIP_INDEXES = {
 }
 
 
+def _table_names() -> set[str]:
+    metas = target_metadata if isinstance(target_metadata, (list, tuple)) else [target_metadata]
+    names: set[str] = set()
+    for meta in metas:
+        names.update(meta.tables)
+    return names
+
+
 def _ours(table) -> bool:
-    return table is not None and table.name in target_metadata.tables
+    return table is not None and table.name in _table_names()
 
 
 def include_object(object_, name, type_, reflected, compare_to):
     if type_ == "table":
-        return name in target_metadata.tables
+        return name in _table_names()
     if type_ == "index":
         if name in _SKIP_INDEXES:
             return False
