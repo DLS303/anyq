@@ -587,3 +587,5 @@ class StoredUpload(BaseModel):
     content_type: str
     created_at: str
     project_id: str | None = None
+    kind: Literal["upload", "original", "public"] = "upload"
+    daily_log_id: str | None = None

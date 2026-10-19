@@ -27,6 +27,34 @@ SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
 )
 
 
+class PublicRobotsMiddleware:
+    """Public report routes stay out of search indexes, including error responses."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not str(scope.get("path", "")).startswith("/v1/public/"):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                existing = {name.lower() for name, _value in headers}
+                extra = (
+                    (b"x-robots-tag", b"noindex, nofollow"),
+                    (b"cache-control", b"private, max-age=300"),
+                )
+                for name, value in extra:
+                    if name not in existing:
+                        headers.append((name, value))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
 class SecurityHeadersMiddleware:
     def __init__(self, app):
         self.app = app

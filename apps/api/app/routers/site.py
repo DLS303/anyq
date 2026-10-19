@@ -1,9 +1,23 @@
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 from app.deps import require_user
+from app.media import process_upload
+from app.paths import write_stored_file
 from app.schemas import User
-from app.site_models import Project
+from app.shares import (
+    DEFAULT_SHARE_DAYS,
+    MAX_SHARE_DAYS,
+    MIN_SHARE_DAYS,
+    member_daily,
+    new_share_token,
+    share_is_active,
+    token_hash,
+)
+from app.site_models import DailyPhoto, Project
 from app.store import store
 
 router = APIRouter(prefix="/v1/site", tags=["site"])
@@ -16,6 +30,10 @@ class DailyIn(BaseModel):
     workers: int = 0
     notes: str = ""
     delays: str = ""
+
+
+class ShareIn(BaseModel):
+    expires_in_days: int = Field(default=DEFAULT_SHARE_DAYS, ge=MIN_SHARE_DAYS, le=MAX_SHARE_DAYS)
 
 
 class RfiIn(BaseModel):
@@ -119,6 +137,16 @@ def _guard_pid(user: User, pid: str) -> Project:
     return _guard(user, _project_or_404(pid))
 
 
+def _owned_log(user: User, log_id: str):
+    log = store.daily_logs.get(log_id)
+    if not log:
+        raise HTTPException(404, "Запись не найдена")
+    project = store.get_project(log.project_id)
+    if not project or not store.can_access_project(user, project):
+        raise HTTPException(403, "Недостаточно прав")
+    return log, project
+
+
 def _guard_item(user: User, table: dict, item_id: str) -> None:
     item = table.get(item_id)
     if not item:
@@ -151,7 +179,7 @@ def bundle(pid: str, user: User = Depends(require_user)):
         "ok": True,
         "data": {
             "snapshot": store.project_snapshot(p.id),
-            "daily": store._by_project(store.daily_logs, p.id),
+            "daily": [member_daily(item) for item in store._by_project(store.daily_logs, p.id)],
             "rfis": store._by_project(store.rfis, p.id),
             "submittals": store._by_project(store.submittals, p.id),
             "punches": store._by_project(store.punches, p.id),
@@ -172,9 +200,90 @@ def bundle(pid: str, user: User = Depends(require_user)):
 def add_daily(pid: str, body: DailyIn, user: User = Depends(require_user)):
     _guard_pid(user, pid)
     try:
-        return {"ok": True, "data": store.add_daily(pid, body.model_dump(), user.id)}
+        return {"ok": True, "data": member_daily(store.add_daily(pid, body.model_dump(), user.id, user.role))}
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+
+
+@router.post("/daily/{log_id}/photos")
+async def add_daily_photos(
+    log_id: str,
+    user: User = Depends(require_user),
+    files: list[UploadFile] = File(...),
+):
+    log, project = _owned_log(user, log_id)
+    if not files:
+        raise HTTPException(400, "Нужно фото")
+    if len(log.photos) + len(files) > 10:
+        raise HTTPException(400, "Не больше 10 фото")
+    processed = []
+    for upload in files:
+        raw = await upload.read()
+        try:
+            processed.append(process_upload(raw))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    added = []
+    for item in processed:
+        original_id = f"f-{uuid4().hex[:12]}"
+        public_id = f"f-{uuid4().hex[:12]}"
+        write_stored_file("original", f"{project.id}/{original_id}.jpg", item.original)
+        write_stored_file("public", f"{project.id}/{public_id}.jpg", item.public)
+        store.add_upload(
+            user,
+            f"{project.id}/{original_id}.jpg",
+            item.content_type,
+            project.id,
+            kind="original",
+            daily_log_id=log.id,
+            file_id=original_id,
+        )
+        store.add_upload(
+            user,
+            f"{project.id}/{public_id}.jpg",
+            "image/jpeg",
+            project.id,
+            kind="public",
+            daily_log_id=log.id,
+            file_id=public_id,
+        )
+        store.add_daily_photo(
+            log.id,
+            DailyPhoto(
+                original_id=original_id,
+                public_id=public_id,
+                has_people=item.has_people,
+                has_plates=item.has_plates,
+                taken_at=item.taken_at,
+            ),
+        )
+        added.append({"has_people": item.has_people, "has_plates": item.has_plates, "taken_at": item.taken_at})
+    return {"ok": True, "data": {"log": member_daily(store.daily_logs[log.id]), "added": added}}
+
+
+@router.post("/daily/{log_id}/share")
+def share_daily(log_id: str, body: ShareIn | None = None, user: User = Depends(require_user)):
+    log, _project = _owned_log(user, log_id)
+    days = body.expires_in_days if body else DEFAULT_SHARE_DAYS
+    if share_is_active(log):
+        return {
+            "ok": True,
+            "data": {"token": None, "expires_at": log.share_expires_at, "active": True},
+        }
+    token = new_share_token()
+    expires = datetime.now(UTC) + timedelta(days=days)
+    stored = store.set_daily_share(log.id, token_hash(token), expires.isoformat(timespec="seconds"))
+    return {
+        "ok": True,
+        "data": {"token": token, "expires_at": stored.share_expires_at, "active": True},
+    }
+
+
+@router.delete("/daily/{log_id}/share")
+def revoke_share(log_id: str, user: User = Depends(require_user)):
+    log, _project = _owned_log(user, log_id)
+    store.revoke_daily_share(log.id)
+    return {"ok": True, "data": {"active": False}}
 
 
 @router.post("/projects/{pid}/rfis")

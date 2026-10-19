@@ -28,6 +28,8 @@ env/
 # Local data
 data/db.json
 data/uploads/
+data/private/
+data/public/
 *.sqlite
 *.dump
 backups/

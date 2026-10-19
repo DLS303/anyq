@@ -24,6 +24,14 @@ class Project(BaseModel):
     budget_kzt: int = 0
 
 
+class DailyPhoto(BaseModel):
+    original_id: str
+    public_id: str
+    has_people: bool = False
+    has_plates: bool = False
+    taken_at: str | None = None
+
+
 class DailyLog(BaseModel):
     id: str
     project_id: str
@@ -34,6 +42,11 @@ class DailyLog(BaseModel):
     notes: str = ""
     delays: str = ""
     author_id: str = ""
+    author_role: str = ""
+    photos: list[DailyPhoto] = []
+    share_token_sha256: str | None = None
+    share_expires_at: str | None = None
+    share_revoked: bool = False
 
 
 class RFI(BaseModel):
