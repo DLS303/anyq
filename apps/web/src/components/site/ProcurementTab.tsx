@@ -8,6 +8,7 @@ import {
   downloadProc,
   fetchProcPicker,
   fetchProcRequests,
+  fetchProcSavings,
   fetchProcSheet,
   fetchProjects,
   importProcLines,
@@ -24,7 +25,8 @@ import { useAuth } from "@/lib/auth";
 import { ErrorRetry, LoadingSkeleton, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { toast } from "@/lib/toast";
 import { t } from "@/i18n/messages";
-import type { Locale, ProcImportResult, ProcOfferCell, ProcSheet, ProcSheetLine } from "@/lib/types";
+import type { Locale, Overprice, ProcImportResult, ProcOfferCell, ProcSheet, ProcSheetLine } from "@/lib/types";
+import { SavingsBanner } from "./SavingsBanner";
 
 const field = "w-full min-h-12 border border-ink/15 bg-white px-3 text-sm";
 const primary =
@@ -231,6 +233,7 @@ export function ProcurementTab({
   const listQuery = useAsync(() => fetchProcRequests(projectId), [projectId]);
   const priceId = screen.kind === "prices" ? screen.requestId : null;
   const sheetQuery = useAsync(() => (priceId ? fetchProcSheet(priceId) : Promise.resolve(null)), [priceId]);
+  const savingsQuery = useAsync(() => (priceId ? fetchProcSavings(priceId) : Promise.resolve(null)), [priceId]);
   const pickerQuery = useAsync(() => fetchProcPicker(projectId, needle), [projectId, needle]);
   const projectsQuery = useAsync(async () => {
     const rows = await fetchProjects();
@@ -249,14 +252,20 @@ export function ProcurementTab({
   const reload = () => {
     listQuery.reload();
     sheetQuery.reload();
+    savingsQuery.reload();
     pickerQuery.reload();
   };
   const sendForm = useGuardedSubmit(m.procSent, m.hubSaveError, reload);
   const repeatForm = useGuardedSubmit(m.procRepeated, m.hubSaveError, reload);
   const saveForm = useGuardedSubmit(m.procSaveQty, m.hubSaveError, reload);
   const offerForm = useGuardedSubmit(m.procSavedOffer, m.hubSaveError, reload);
-  const winnerForm = useGuardedSubmit(m.procSelected, m.hubSaveError, () => sheetQuery.reload());
+  const winnerForm = useGuardedSubmit(m.procSelected, m.hubSaveError, () => {
+    sheetQuery.reload();
+    savingsQuery.reload();
+  });
   const sheet = sheetQuery.data;
+  const savings = savingsQuery.data;
+  const overByOffer = new Map((savings?.overprice || []).map((item) => [item.offer_id, item]));
 
   useEffect(() => {
     if (sheet?.lines[0] && !sheet.lines.some((line) => line.id === lineId)) setLineId(sheet.lines[0].id);
@@ -317,16 +326,25 @@ export function ProcurementTab({
     }
   }
 
-  function priceCell(offer: ProcOfferCell | null, lineQty: number) {
+  function aboveMarket(item: Overprice) {
+    return fill(m.savingsAbove, {
+      per: Math.round(item.per_unit),
+      unit: item.unit,
+      pct: Math.round(item.pct * 100),
+    });
+  }
+
+  function priceCell(offer: ProcOfferCell | null, lineQty: number, warn?: Overprice) {
     if (!offer) return <span className="text-ink/40">—</span>;
     return (
-      <span className="block">
+      <span className="block" title={warn ? aboveMarket(warn) : undefined}>
         <span className={offer.is_best ? "font-semibold" : ""}>{tenge(offer.price_kzt, locale)}</span>
         <span className="mt-1 block text-xs text-ink/60">
           {vatText(offer.vat_included, m)}
           {offer.is_best ? ` · ${m.procBest}` : ""}
           {offer.is_selected ? " · ✓" : ""}
         </span>
+        {warn ? <span className="mt-1 block text-xs text-rose-700">{aboveMarket(warn)}</span> : null}
         {offer.short && offer.qty_available != null ? (
           <span className="mt-1 block text-xs text-ink/60">{fill(m.procShort, { n: offer.qty_available, m: lineQty })}</span>
         ) : null}
@@ -555,6 +573,7 @@ export function ProcurementTab({
                   })}
                 </p>
               </div>
+              {savings ? <SavingsBanner locale={locale} savings={savings} /> : null}
               {access.can_decide ? (
                 <button
                   type="button"
@@ -592,12 +611,13 @@ export function ProcurementTab({
                         </th>
                         {sheet.suppliers.map((item) => {
                           const offer = line.cells[item.name] || null;
+                          const warn = offer ? overByOffer.get(offer.id) : undefined;
                           return (
                             <td
                               key={item.name}
-                              className={`px-3 py-3 align-top ${offer?.is_best ? "bg-emerald-100" : ""}`}
+                              className={`px-3 py-3 align-top ${offer?.is_best ? "bg-emerald-100" : ""} ${warn ? "ring-1 ring-inset ring-rose-600" : ""}`}
                             >
-                              {priceCell(offer, line.qty)}
+                              {priceCell(offer, line.qty, warn)}
                             </td>
                           );
                         })}

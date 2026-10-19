@@ -22,6 +22,8 @@ class Settings(BaseModel):
     cors_origins: list[str] = resolve_cors_origins()
     # Current Kazakhstan VAT. KS acts keep the date-based rate in tax.py.
     vat_rate: float = float(os.getenv("ANYQ_VAT_RATE", "0.16"))
+    # An offer this far above the website reference is flagged. It is not a saving.
+    overprice_threshold: float = float(os.getenv("ANYQ_OVERPRICE_THRESHOLD", "0.15"))
 
 
 settings = Settings()

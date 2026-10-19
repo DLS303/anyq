@@ -23,6 +23,8 @@ import type {
   ProcPicker,
   ProcRepeatLine,
   ProcSheet,
+  ProcSavings,
+  ObjectBudgetView,
   Review,
   ServiceOrder,
   Specialist,
@@ -691,6 +693,60 @@ export function createProcRequest(projectId: string, title: string, idempotencyK
 
 export function fetchProcSheet(requestId: string) {
   return request<ProcSheet>(`/v1/procurement/requests/${requestId}/sheet`);
+}
+
+export function fetchProcSavings(requestId: string) {
+  return request<ProcSavings>(`/v1/procurement/requests/${requestId}/savings`);
+}
+
+export function fetchObjectBudget(projectId: string) {
+  return request<ObjectBudgetView>(`/v1/site/projects/${projectId}/object-budget`);
+}
+
+export function saveObjectBudget(
+  projectId: string,
+  body: {
+    total_kzt: number;
+    materials_kzt?: number | null;
+    works_kzt?: number | null;
+    equipment_kzt?: number | null;
+    other_kzt?: number | null;
+  },
+  idempotencyKey?: string,
+) {
+  return request<ObjectBudgetView>(`/v1/site/projects/${projectId}/object-budget`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function addObjectExpense(
+  projectId: string,
+  body: { amount_kzt: number; category: string; note: string; photo?: File | null },
+  idempotencyKey?: string,
+) {
+  if (body.photo) {
+    const form = new FormData();
+    form.set("amount_kzt", String(body.amount_kzt));
+    form.set("category", body.category);
+    form.set("note", body.note);
+    form.set("photo", body.photo);
+    return request<ObjectBudgetView>(`/v1/site/projects/${projectId}/expenses`, {
+      method: "POST",
+      body: form,
+      headers: withKey(idempotencyKey),
+    });
+  }
+  return request<ObjectBudgetView>(`/v1/site/projects/${projectId}/expenses`, {
+    method: "POST",
+    body: JSON.stringify({ amount_kzt: body.amount_kzt, category: body.category, note: body.note }),
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function deleteObjectExpense(projectId: string, expenseId: string) {
+  return request<{ id: string }>(`/v1/site/projects/${projectId}/expenses/${expenseId}`, { method: "DELETE" });
 }
 
 export function fetchProcPicker(projectId: string, q = "") {

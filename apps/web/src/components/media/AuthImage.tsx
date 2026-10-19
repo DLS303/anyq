@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 function needsSession(src: string) {
-  return src.startsWith("/v1/files/") || src.startsWith("/uploads/");
+  return src.startsWith("/v1/files/") || src.startsWith("/uploads/") || src.includes("/expenses/");
 }
 
 export function AuthImage({ src, alt = "", className }: { src: string; alt?: string; className?: string }) {

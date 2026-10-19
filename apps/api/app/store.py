@@ -105,6 +105,7 @@ from app.site_models import (
     Timesheet,
     VoiceNote,
 )
+from app.store_budget import dump_budget, load_budget
 from app.store_procurement import dump_lists, load_into
 from app.transitions import (
     MATERIAL_ORDER_TRANSITIONS,
@@ -303,6 +304,8 @@ class MemoryStore:
         self.proc_lines = {}
         self.proc_offers = {}
         self.proc_docs = {}
+        self.object_budgets = {}
+        self.object_expenses = {}
         self._load()
         self._ensure_seed_users()
         self._ensure_demo_passwords()
@@ -427,6 +430,7 @@ class MemoryStore:
         self.budget_lines = {item["id"]: BudgetLine.model_validate(item) for item in raw.get("budget_lines", [])}
         self.change_orders = {item["id"]: ChangeOrder.model_validate(item) for item in raw.get("change_orders", [])}
         load_into(self, raw)
+        load_budget(self, raw)
         self.timesheets = {item["id"]: Timesheet.model_validate(item) for item in raw.get("timesheets", [])}
         self.meetings = {item["id"]: Meeting.model_validate(item) for item in raw.get("meetings", [])}
         self.directory = {item["id"]: DirectoryRow.model_validate(item) for item in raw.get("directory", [])}
@@ -491,6 +495,7 @@ class MemoryStore:
             "files": [x.model_dump() for x in self.files.values()],
             "consents": [x.model_dump() for x in self.consents],
             **dump_lists(self),
+            **dump_budget(self),
         }
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
