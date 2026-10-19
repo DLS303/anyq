@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { fetchMe } from "./api";
 import type { User } from "./types";
 
 const USER_KEY = "superapp_user";
@@ -20,14 +21,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState("");
 
   useEffect(() => {
+    let cancelled = false;
+    const tok = localStorage.getItem(TOKEN_KEY) || "";
     try {
       const raw = localStorage.getItem(USER_KEY);
-      const tok = localStorage.getItem(TOKEN_KEY) || "";
       if (raw) setUser(JSON.parse(raw) as User);
-      setToken(tok);
     } catch {
       /* ignore */
     }
+    setToken(tok);
+    if (!tok) {
+      setUser(null);
+      return;
+    }
+    fetchMe()
+      .then((fresh) => {
+        if (cancelled) return;
+        localStorage.setItem(USER_KEY, JSON.stringify(fresh));
+        setUser(fresh);
+        setToken(localStorage.getItem(TOKEN_KEY) || tok);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        if (!localStorage.getItem(TOKEN_KEY)) {
+          setUser(null);
+          setToken("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const value = useMemo<AuthState>(

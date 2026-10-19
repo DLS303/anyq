@@ -252,7 +252,7 @@ def test_cors_allowlist():
 
 
 def test_production_requires_secret(monkeypatch):
-    import app.authutil as authutil
+    from app import authutil
     from app.config import resolve_cors_origins
 
     monkeypatch.setenv("ANYQ_ENV", "production")

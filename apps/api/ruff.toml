@@ -1,0 +1,3 @@
+# FastAPI uses Depends(), File(), and Query() in parameter defaults.
+# That is dependency injection, not a mutable default value.
+lint.ignore = ["B008"]

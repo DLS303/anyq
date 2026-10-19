@@ -1,4 +1,5 @@
 from app.site_models import (
+    RFI,
     BudgetLine,
     ChangeOrder,
     DailyLog,
@@ -9,7 +10,6 @@ from app.site_models import (
     Meeting,
     Project,
     PunchItem,
-    RFI,
     ScheduleTask,
     Submittal,
     Timesheet,

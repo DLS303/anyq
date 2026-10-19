@@ -1,4 +1,5 @@
 from typing import Literal
+
 from pydantic import BaseModel, Field
 
 Role = Literal[
@@ -544,8 +545,8 @@ class RegisterBody(BaseModel):
     company: str = ""
     company_bin: str = ""
     city: str = "Алматы"
-    role: Literal["buyer", "contractor", "supplier"] = "buyer"
-    pilot: str = "engicon"
+    role: Literal["buyer", "contractor", "supplier"]
+    pilot: str = ""
     sku_title: str = ""
     sku_category: MaterialCat = "concrete"
     sku_unit: str = "т"
@@ -563,13 +564,20 @@ class LoginBody(BaseModel):
 class ConsentRecord(BaseModel):
     id: str
     user_id: str
-    type: Literal["offer_pd"] = "offer_pd"
+    type: Literal["offer_pd", "cross_border"] = "offer_pd"
     text_version: str
     text_sha256: str
     granted_at: str
     ip: str = ""
     user_agent: str = ""
     login: str = ""
+    provider: str = ""
+    country: str = ""
+
+
+class CrossBorderConsentBody(BaseModel):
+    provider: str = Field(min_length=1, max_length=120)
+    country: str = Field(min_length=2, max_length=80)
 
 
 class StoredUpload(BaseModel):

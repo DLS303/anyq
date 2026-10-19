@@ -327,11 +327,6 @@ function Footer({ locale }: { locale: Locale }) {
               <p className="text-xs text-slate-400">Цифровая экосистема девелопмента РК</p>
             </div>
           </div>
-          <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
-            <span>СНиП РК 3.01-101-2013</span>
-            <span>·</span>
-            <span>Smart Bridge Ready</span>
-          </div>
         </div>
         <p className="mt-4 text-xs leading-relaxed text-slate-500">{m.footer}</p>
         <p className="mt-2 text-xs">

@@ -121,12 +121,16 @@ export function SignaturePad({
                 {/* Show saved signature */}
                 {activeRole === "contractor" && contractorDone && contractorDataUrl && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-50">
+                    {/* Canvas data URL; next/image does not optimize it. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={contractorDataUrl} alt="Подпись подрядчика" className="max-h-36 object-contain" />
                     <p className="text-xs text-emerald-600 mt-1 font-semibold">✓ Подпись сохранена</p>
                   </div>
                 )}
                 {activeRole === "customer" && customerDone && customerDataUrl && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-50">
+                    {/* Canvas data URL; next/image does not optimize it. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={customerDataUrl} alt="Подпись заказчика" className="max-h-36 object-contain" />
                     <p className="text-xs text-emerald-600 mt-1 font-semibold">✓ Подпись сохранена</p>
                   </div>

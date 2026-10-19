@@ -91,6 +91,24 @@ def test_review_requires_stars_text_and_completed_order():
     assert too_early.status_code == 400
 
     surveyor = _demo("u-surv", "surveyor@demo.superapp", "survey-pass-1")
+    quoted = client.post(
+        f"/v1/orders/{order_id}/status",
+        json={"status": "quoted", "quote_kzt": 120000, "quote_term": "5 дней", "quote_comment": "Выезд"},
+        headers=_auth(surveyor),
+    )
+    assert quoted.status_code == 200, quoted.text
+    accepted = client.post(
+        f"/v1/orders/{order_id}/status",
+        json={"status": "accepted"},
+        headers=_auth(buyer),
+    )
+    assert accepted.status_code == 200, accepted.text
+    started = client.post(
+        f"/v1/orders/{order_id}/status",
+        json={"status": "in_progress"},
+        headers=_auth(surveyor),
+    )
+    assert started.status_code == 200, started.text
     done = client.post(
         f"/v1/orders/{order_id}/status",
         json={"status": "completed"},

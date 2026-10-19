@@ -32,7 +32,7 @@ def vat_rate(act_date: date | str, no_vat: bool = False) -> float:
 def vat_quote(act_date: date | str, no_vat: bool = False) -> dict:
     day = parse_act_date(act_date)
     rate = vat_rate(day, no_vat=no_vat)
-    percent = int(round(rate * 100))
+    percent = round(rate * 100)
     return {
         "act_date": day.isoformat(),
         "no_vat": bool(no_vat),

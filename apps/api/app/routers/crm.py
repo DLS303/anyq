@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.deps import require_user
 from app.schemas import (
+    FUNNEL_STAGES,
     CrmActivityCreate,
     CrmActivityToggle,
     CrmContactCreate,
@@ -9,7 +10,6 @@ from app.schemas import (
     DealCreate,
     DealMove,
     DealToProject,
-    FUNNEL_STAGES,
     LeadConvert,
     LeadCreate,
     User,

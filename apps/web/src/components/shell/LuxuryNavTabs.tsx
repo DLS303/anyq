@@ -112,8 +112,10 @@ export function LuxuryNavTabs({ items }: { items: NavItem[] }) {
 
     if (typeof document !== "undefined" && "startViewTransition" in document) {
       e.preventDefault();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (document as any).startViewTransition(() => {
+      const withTransition = document as Document & {
+        startViewTransition: (callback: () => void) => void;
+      };
+      withTransition.startViewTransition(() => {
         startTransition(() => {
           router.push(href);
         });

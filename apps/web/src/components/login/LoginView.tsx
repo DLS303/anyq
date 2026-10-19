@@ -32,8 +32,8 @@ export function LoginView({
   const [company, setCompany] = useState("");
   const [companyBin, setCompanyBin] = useState("");
   const [city, setCity] = useState("Алматы");
-  const [role, setRole] = useState<RegRole>("supplier");
-  const [pilotOn, setPilotOn] = useState(true);
+  const [role, setRole] = useState<RegRole | "">("");
+  const [pilotOn, setPilotOn] = useState(false);
   const [skuTitle, setSkuTitle] = useState("");
   const [skuCategory, setSkuCategory] = useState<MaterialCat>("concrete");
   const [skuUnit, setSkuUnit] = useState("т");
@@ -95,6 +95,10 @@ export function LoginView({
       setError("Укажите телефон");
       return;
     }
+    if (!role) {
+      setError("Выберите роль");
+      return;
+    }
     if (role === "supplier") {
       if (skuTitle.trim().length < 2) {
         setError("Укажите первую позицию для каталога");
@@ -130,10 +134,10 @@ export function LoginView({
       });
       login(res.user, res.token);
       if (role === "supplier") {
-        toast(`«${skuTitle.trim()}» уже в каталоге. Пилот Engicon.`);
+        toast(pilotOn ? `«${skuTitle.trim()}» уже в каталоге. Пилот Engicon.` : `«${skuTitle.trim()}» уже в каталоге.`);
         router.push(`/${locale}/materials`);
       } else {
-        toast(`${company.trim()} в пилоте Engicon`);
+        toast(pilotOn ? `${company.trim()} в пилоте Engicon` : `${company.trim()} зарегистрирована`);
         router.push(`/${locale}/cabinet`);
       }
     } catch (err) {
@@ -320,15 +324,19 @@ export function LoginView({
               </div>
 
               <label className="block">
-                <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Роль в пилоте</span>
+                <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Роль</span>
                 <select
                   className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                  required
                   value={role}
                   onChange={(e) => setRole(e.target.value as RegRole)}
                 >
-                  <option value="supplier">Поставщик — позиция сразу в каталоге</option>
-                  <option value="buyer">Заказчик Engicon</option>
+                  <option value="" disabled>
+                    Выберите роль
+                  </option>
+                  <option value="buyer">Заказчик</option>
                   <option value="contractor">Подрядчик</option>
+                  <option value="supplier">Поставщик — позиция сразу в каталоге</option>
                 </select>
               </label>
 
