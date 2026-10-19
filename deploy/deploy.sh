@@ -92,7 +92,8 @@ smoke() {
   fi
   curl "${curl_opts[@]}" "$base/healthz" | grep -q '"ok":true'
   curl "${curl_opts[@]}" "$base/health" | grep -q '"ok":true'
-  curl "${curl_opts[@]}" "$base/v1/health/ready" | grep -q '"ok":true'
+  curl "${curl_opts[@]}" "$base/v1/version" | grep -q '"version"'
+  docker exec anyq-api python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/v1/health/ready', timeout=6).read().decode())" | grep -q '"ok":true'
   curl "${curl_opts[@]}" "$base/v1/modules" | grep -q '"ok":true'
   curl "${curl_opts[@]}" -o /dev/null "$base/ru"
 }

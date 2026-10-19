@@ -83,6 +83,18 @@ def test_ready_ok_when_dependencies_pass():
         assert word not in lowered
 
 
+def test_ready_503_when_uploads_dir_is_missing(tmp_path, monkeypatch):
+    _stamp_head()
+    missing = tmp_path / "absent-volume" / "uploads"
+    monkeypatch.setenv("ANYQ_UPLOADS_DIR", str(missing))
+    res = client.get("/v1/health/ready")
+    assert res.status_code == 503
+    assert res.json() == {"ok": False, "checks": ["uploads"]}
+    assert not missing.exists()
+    assert not missing.parent.exists()
+    assert "absent-volume" not in res.text
+
+
 def test_ready_names_alembic_when_revision_is_not_head():
     _drop_alembic_version()
     res = client.get("/v1/health/ready")
@@ -156,6 +168,9 @@ def test_dev_docs_remain_available():
     assert spec.status_code == 200
     assert spec.json()["openapi"]
     assert client.get("/redoc").status_code == 200
+    root = client.get("/")
+    assert root.status_code == 200
+    assert root.json()["docs"] == "/docs"
 
 
 def test_production_docs_return_404(tmp_path):
@@ -178,6 +193,10 @@ for path in ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"):
     lowered = res.text.lower()
     assert "swagger" not in lowered
     assert "<html" not in lowered
+root = client.get("/")
+assert root.status_code == 200, root.text
+assert "docs" not in root.json()
+assert "/docs" not in root.text
 print("docs-hidden")
 """
     env = os.environ.copy()
@@ -215,6 +234,11 @@ def test_caddy_does_not_route_api_docs():
     assert "handle /docs" not in text
     assert "handle /redoc" not in text
     assert "handle /openapi.json" not in text
+    ready = re.search(r"handle /v1/health/ready \{(?P<body>.*?)\n\t\}", text, re.DOTALL)
+    assert ready is not None
+    assert "respond 404" in ready.group("body")
+    assert "reverse_proxy" not in ready.group("body")
+    assert text.index("handle /v1/health/ready") < text.index("handle /v1/*")
 
 
 def test_deploy_uses_readiness_and_build_identity():
@@ -225,7 +249,10 @@ def test_deploy_uses_readiness_and_build_identity():
     assert "GIT_SHA:" in compose
     assert "BUILD_TIME:" in compose
     script = (REPO / "deploy" / "deploy.sh").read_text()
-    assert '"$base/v1/health/ready"' in script
+    assert '"$base/v1/health/ready"' not in script
+    assert "127.0.0.1:8010/v1/health/ready" in script
+    assert "docker exec anyq-api" in script
+    assert '"$base/v1/version"' in script
     api_docker = (REPO / "apps" / "api" / "Dockerfile").read_text()
     web_docker = (REPO / "apps" / "web" / "Dockerfile").read_text()
     assert "ARG GIT_SHA=" in api_docker

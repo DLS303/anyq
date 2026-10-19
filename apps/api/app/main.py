@@ -79,9 +79,11 @@ def changed_by_other(_request: Request, exc: ChangedByOther):
 
 @app.get("/")
 def root():
-    return {
+    body = {
         "ok": True,
         "product": "SuperAPP",
         "phase": 2,
-        "docs": "/docs",
     }
+    if not _production:
+        body["docs"] = "/docs"
+    return body

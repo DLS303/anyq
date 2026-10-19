@@ -26,6 +26,10 @@ http://127.0.0.1:8080 {
 		-Server
 	}
 
+	handle /v1/health/ready {
+		respond 404
+	}
+
 	handle /v1/* {
 		reverse_proxy api:8010 {
 			transport http {

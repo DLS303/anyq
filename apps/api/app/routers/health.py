@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.config import settings
-from app.paths import uploads_dir
+from app.paths import uploads_path
 from app.store import store
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,9 @@ def _alembic_ok() -> bool:
 
 def _uploads_ok() -> bool:
     try:
-        root = uploads_dir()
+        root = uploads_path()
+        if not root.is_dir() or not os.access(root, os.W_OK):
+            return False
         with tempfile.NamedTemporaryFile(dir=root, prefix=".ready-", delete=True) as handle:
             handle.write(b"1")
             handle.flush()
