@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import type { Locale } from "@/lib/types";
+import { fetchActVat } from "@/lib/api";
 import dynamic from "next/dynamic";
 
 const SignaturePad = dynamic(
@@ -49,6 +50,14 @@ interface KsHeader {
   report_end: string;
   act_num: string;
   ks3_num: string;
+  act_date: string;
+}
+
+interface ActTax {
+  percent: number;
+  noVat: boolean;
+  priorKzt: number;
+  basis: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,6 +70,29 @@ function today() {
 function monthStart() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function taxAmount(base: number, tax: ActTax) {
+  if (tax.noVat || tax.percent <= 0) return 0;
+  return Math.round(base * (tax.percent / 100));
+}
+
+function vatRowLabel(tax: ActTax) {
+  return tax.noVat ? "Без НДС" : `НДС ${tax.percent}%`;
+}
+
+function vatFootnote(tax: ActTax, actDate: string) {
+  if (tax.noVat) return "НДС не начисляется: исполнитель не является плательщиком НДС.";
+  return `Суммы в тенге (KZT). НДС ${tax.percent}% на дату акта ${actDate} согласно ${tax.basis}.`;
+}
+
+function priorNote(prev: number) {
+  if (prev === 0) return "«Выполнено ранее» — сумма ранее подписанных актов. Подписанных актов нет, сумма 0.";
+  return "«Выполнено ранее» — сумма ранее подписанных актов.";
+}
+
+function signCaption(signed?: string) {
+  return signed ? "подпись" : "подпись / расшифровка";
 }
 
 // ─── Budget → work items converter ───────────────────────────────────────────
@@ -84,12 +116,15 @@ function printKs2(
   header: KsHeader,
   items: KsWorkItem[],
   locale: string,
+  tax: ActTax,
   contractorSig?: string,
   customerSig?: string
 ) {
   const total = items.reduce((s, r) => s + r.qty_period * r.price_kzt, 0);
-  const nds = Math.round(total * 0.12);
+  const nds = taxAmount(total, tax);
   const withNds = total + nds;
+  const vatLabel = vatRowLabel(tax);
+  const grandLabel = tax.noVat ? "ИТОГО К ОПЛАТЕ (без НДС):" : "ИТОГО (с НДС):";
 
   const rows = items
     .map(
@@ -137,7 +172,7 @@ function printKs2(
 
   <table class="meta">
     <tr><td class="label">Организация-подрядчик:</td><td>${header.contractor}</td><td class="label">Акт №:</td><td>${header.act_num}</td></tr>
-    <tr><td class="label">Заказчик:</td><td>${header.customer}</td><td class="label">Дата составления:</td><td>${today()}</td></tr>
+    <tr><td class="label">Заказчик:</td><td>${header.customer}</td><td class="label">Дата составления:</td><td>${header.act_date}</td></tr>
     <tr><td class="label">Объект строительства:</td><td>${header.object}</td><td class="label">Отчётный период:</td><td>${header.report_start} — ${header.report_end}</td></tr>
     <tr><td class="label">Договор подряда №:</td><td>${header.contract_num}</td><td class="label">Дата договора:</td><td>${header.contract_date}</td></tr>
   </table>
@@ -164,17 +199,17 @@ function printKs2(
         <td style="text-align:right">${fmt(total)}</td>
       </tr>
       <tr class="total-row">
-        <td colspan="6" style="text-align:right">НДС 12%:</td>
+        <td colspan="6" style="text-align:right">${vatLabel}:</td>
         <td style="text-align:right">${fmt(nds)}</td>
       </tr>
       <tr class="total-row">
-        <td colspan="6" style="text-align:right">ИТОГО (с НДС):</td>
+        <td colspan="6" style="text-align:right">${grandLabel}</td>
         <td style="text-align:right">${fmt(withNds)}</td>
       </tr>
     </tbody>
   </table>
 
-  <p class="footnote">Суммы в тенге (KZT). НДС 12% согласно Налоговому кодексу РК.</p>
+  <p class="footnote">${vatFootnote(tax, header.act_date)}</p>
 
   <div class="sign">
     <div class="sign-block">
@@ -187,7 +222,7 @@ function printKs2(
         }
       </div>
       <p>__________________ / ________________</p>
-      <p style="font-size:8pt; color: #555;">${contractorSig ? "✓ ЭЦП / Цифровая подпись" : "подпись / расшифровка"}</p>
+      <p style="font-size:8pt; color: #555;">${signCaption(contractorSig)}</p>
     </div>
     <div class="sign-block">
       <p><b>Принял:</b> Заказчик (${header.customer})</p>
@@ -199,7 +234,7 @@ function printKs2(
         }
       </div>
       <p>__________________ / ________________</p>
-      <p style="font-size:8pt; color: #555;">${customerSig ? "✓ ЭЦП / Цифровая подпись" : "подпись / расшифровка"}</p>
+      <p style="font-size:8pt; color: #555;">${signCaption(customerSig)}</p>
     </div>
   </div>
 </body>
@@ -211,14 +246,17 @@ function printKs3(
   header: KsHeader,
   items: KsWorkItem[],
   locale: string,
+  tax: ActTax,
   contractorSig?: string,
   customerSig?: string
 ) {
   const cur = items.reduce((s, r) => s + r.qty_period * r.price_kzt, 0);
-  const prev = Math.round(cur * 0.3); // demo
-  const total = cur + prev;
-  const nds = Math.round(total * 0.12);
-  const withNds = total + nds;
+  const prev = tax.priorKzt;
+  const fromStart = cur + prev;
+  const nds = taxAmount(cur, tax);
+  const withNds = cur + nds;
+  const vatLabel = vatRowLabel(tax);
+  const grandLabel = tax.noVat ? "ИТОГО К ОПЛАТЕ (без НДС):" : "ИТОГО С НДС (к оплате):";
 
   const html = `<!DOCTYPE html>
 <html lang="${locale}">
@@ -251,7 +289,7 @@ function printKs3(
 
   <table class="meta">
     <tr><td class="label">Организация-подрядчик:</td><td>${header.contractor}</td><td class="label">Справка №:</td><td>${header.ks3_num}</td></tr>
-    <tr><td class="label">Заказчик:</td><td>${header.customer}</td><td class="label">Дата:</td><td>${today()}</td></tr>
+    <tr><td class="label">Заказчик:</td><td>${header.customer}</td><td class="label">Дата:</td><td>${header.act_date}</td></tr>
     <tr><td class="label">Объект строительства:</td><td>${header.object}</td><td class="label">Отчётный период:</td><td>${header.report_start} — ${header.report_end}</td></tr>
     <tr><td class="label">Договор подряда №:</td><td>${header.contract_num}</td><td class="label">от:</td><td>${header.contract_date}</td></tr>
   </table>
@@ -270,15 +308,15 @@ function printKs3(
       <tr>
         <td style="text-align:center">1</td>
         <td>${header.object}</td>
-        <td style="text-align:right">${fmt(total)}</td>
-        <td style="text-align:right">${fmt(total)}</td>
+        <td style="text-align:right">${fmt(fromStart)}</td>
+        <td style="text-align:right">—</td>
         <td style="text-align:right">${fmt(cur)}</td>
       </tr>
       <tr>
         <td style="text-align:center">2</td>
-        <td>Ранее предъявлено к оплате</td>
+        <td>Выполнено ранее</td>
         <td style="text-align:right">${fmt(prev)}</td>
-        <td style="text-align:right">${fmt(prev)}</td>
+        <td style="text-align:right">—</td>
         <td style="text-align:right">—</td>
       </tr>
       <tr class="total-row">
@@ -286,15 +324,17 @@ function printKs3(
         <td style="text-align:right">${fmt(cur)}</td>
       </tr>
       <tr class="total-row">
-        <td colspan="4" style="text-align:right">НДС 12%:</td>
+        <td colspan="4" style="text-align:right">${vatLabel}:</td>
         <td style="text-align:right">${fmt(nds)}</td>
       </tr>
       <tr class="grand">
-        <td colspan="4" style="text-align:right">ИТОГО С НДС (к оплате):</td>
+        <td colspan="4" style="text-align:right">${grandLabel}</td>
         <td style="text-align:right">${fmt(withNds)}</td>
       </tr>
     </tbody>
   </table>
+
+  <p style="font-size:8pt; color:#555; margin-top:6px;">${priorNote(prev)} ${vatFootnote(tax, header.act_date)} С начала года отдельно не считается: такой разбивки в подписанных актах нет.</p>
 
   <div class="sign">
     <div class="sign-block">
@@ -307,7 +347,7 @@ function printKs3(
         }
       </div>
       <p>__________________ / ________________</p>
-      <p style="font-size:8pt; color: #555;">${contractorSig ? "✓ ЭЦП / Цифровая подпись" : "подпись / расшифровка / дата"}</p>
+      <p style="font-size:8pt; color: #555;">${signCaption(contractorSig)}</p>
     </div>
     <div class="sign-block">
       <p><b>Заказчик:</b> ${header.customer}</p>
@@ -319,12 +359,12 @@ function printKs3(
         }
       </div>
       <p>__________________ / ________________</p>
-      <p style="font-size:8pt; color: #555;">${customerSig ? "✓ ЭЦП / Цифровая подпись" : "подпись / расшифровка / дата"}</p>
+      <p style="font-size:8pt; color: #555;">${signCaption(customerSig)}</p>
     </div>
   </div>
 </body>
 </html>`;
-  return { html, cur, prev, total, nds, withNds };
+  return { html, cur, prev, total: fromStart, nds, withNds };
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -353,6 +393,7 @@ export function KsActGenerator({
     report_end: today(),
     act_num: "КС-2/01",
     ks3_num: "КС-3/01",
+    act_date: today(),
   });
 
   const [items, setItems] = useState<KsWorkItem[]>(() => budgetToItems(budget));
@@ -369,6 +410,32 @@ export function KsActGenerator({
   // Loading states
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [noVat, setNoVat] = useState(false);
+  const [tax, setTax] = useState<ActTax | null>(null);
+
+  useEffect(() => {
+    if (!header.act_date) {
+      setTax(null);
+      return;
+    }
+    let cancelled = false;
+    fetchActVat(header.act_date, noVat, projectId)
+      .then((row) => {
+        if (cancelled) return;
+        setTax({
+          percent: row.vat_percent,
+          noVat: row.no_vat,
+          priorKzt: row.prior_signed_kzt,
+          basis: row.basis || "НК РК № 214-VIII, ст. 503",
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setTax(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [header.act_date, noVat, projectId]);
 
   function updateItem(id: string, field: keyof KsWorkItem, val: string | number) {
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, [field]: val } : it)));
@@ -394,12 +461,16 @@ export function KsActGenerator({
   }
 
   function openPreview(type: "ks2" | "ks3") {
+    if (!tax) {
+      alert("Ставка НДС ещё не получена с сервера");
+      return;
+    }
     if (type === "ks2") {
-      const result = printKs2(header, items, locale, contractorSig, customerSig);
+      const result = printKs2(header, items, locale, tax, contractorSig, customerSig);
       setPreviewHtml(result.html);
       setTotals({ total: result.total, nds: result.nds, withNds: result.withNds });
     } else {
-      const result = printKs3(header, items, locale, contractorSig, customerSig);
+      const result = printKs3(header, items, locale, tax, contractorSig, customerSig);
       setPreviewHtml(result.html);
       setTotals({ total: result.cur, nds: result.nds, withNds: result.withNds });
     }
@@ -416,6 +487,10 @@ export function KsActGenerator({
 
   // 1-Click Direct PDF Export using jsPDF + html2canvas
   async function downloadDirectPdf(type: "ks2" | "ks3") {
+    if (!tax) {
+      alert("Ставка НДС ещё не получена с сервера");
+      return;
+    }
     setIsGeneratingPdf(true);
     try {
       const html2canvas = (await import("html2canvas")).default;
@@ -431,8 +506,8 @@ export function KsActGenerator({
 
       const { html } =
         type === "ks2"
-          ? printKs2(header, items, locale, contractorSig, customerSig)
-          : printKs3(header, items, locale, contractorSig, customerSig);
+          ? printKs2(header, items, locale, tax, contractorSig, customerSig)
+          : printKs3(header, items, locale, tax, contractorSig, customerSig);
 
       tempContainer.innerHTML = html;
       document.body.appendChild(tempContainer);
@@ -472,18 +547,22 @@ export function KsActGenerator({
 
   // Export to Excel (.xlsx) using xlsx library
   async function exportToExcel() {
+    if (!tax) {
+      alert("Ставка НДС ещё не получена с сервера");
+      return;
+    }
     setIsExportingExcel(true);
     try {
       const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
 
       const total = items.reduce((s, r) => s + r.qty_period * r.price_kzt, 0);
-      const nds = Math.round(total * 0.12);
+      const nds = taxAmount(total, tax);
       const withNds = total + nds;
 
       const data = [
         ["УНИФИЦИРОВАННАЯ ФОРМА КС-2"],
-        ["АКТ О ПРИЁМКЕ ВЫПОЛНЕННЫХ РАБОТ №", header.act_num, "от", today()],
+        ["АКТ О ПРИЁМКЕ ВЫПОЛНЕННЫХ РАБОТ №", header.act_num, "от", header.act_date],
         [],
         ["Подрядчик:", header.contractor],
         ["Заказчик:", header.customer],
@@ -511,17 +590,20 @@ export function KsActGenerator({
         ]),
         [],
         ["", "", "", "", "", "ИТОГО (без НДС):", total],
-        ["", "", "", "", "", "НДС 12%:", nds],
-        ["", "", "", "", "", "ВСЕГО К ОПЛАТЕ (с НДС):", withNds],
+        ["", "", "", "", "", `${vatRowLabel(tax)}:`, nds],
+        ["", "", "", "", "", tax.noVat ? "ВСЕГО К ОПЛАТЕ (без НДС):" : "ВСЕГО К ОПЛАТЕ (с НДС):", withNds],
+        ["", "", "", "", "", "Выполнено ранее:", tax.priorKzt],
         [],
         ["Сдал (Подрядчик):", header.contractor, "", "", "Принял (Заказчик):", header.customer],
         [
-          contractorSig ? "✓ ЭЦП Подтверждена" : "Подпись: ________________________",
+          contractorSig ? "подпись" : "Подпись: ________________________",
           "",
           "",
           "",
-          customerSig ? "✓ ЭЦП Подтверждена" : "Подпись: ________________________",
+          customerSig ? "подпись" : "Подпись: ________________________",
         ],
+        [priorNote(tax.priorKzt)],
+        [vatFootnote(tax, header.act_date)],
       ];
 
       const ws = XLSX.utils.aoa_to_sheet(data);
@@ -546,7 +628,8 @@ export function KsActGenerator({
   }
 
   const grandTotal = items.reduce((s, r) => s + r.qty_period * r.price_kzt, 0);
-  const nds = Math.round(grandTotal * 0.12);
+  const nds = tax ? taxAmount(grandTotal, tax) : 0;
+  const payableLabel = tax?.noVat ? "К оплате (без НДС)" : "К оплате (с НДС)";
 
   return (
     <div className="space-y-4">
@@ -559,13 +642,13 @@ export function KsActGenerator({
                 {isKk ? "КС-2 / КС-3 актілер генераторы" : "📄 Генератор актов КС-2 / КС-3"}
               </h3>
               <span className="text-[10px] bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded-full">
-                jsPDF + Excel + ЭЦП
+                PDF + Excel + подпись
               </span>
             </div>
             <p className="text-xs text-ink/50 mt-0.5">
               {isKk
                 ? "Қол қою, PDF басып шығару және Excel-ге экспорттау"
-                : "Электронная подпись (SignaturePad) · Экспорт в Excel (.xlsx) · Прямой PDF"}
+                : "Подпись на экране · Экспорт в Excel (.xlsx) · Прямой PDF"}
             </p>
           </div>
 
@@ -582,7 +665,7 @@ export function KsActGenerator({
                   ? "Подписано обеими сторонами ✓"
                   : contractorSig || customerSig
                   ? "Частично подписано (1/2)"
-                  : "Электронная подпись"}
+                  : "Подпись"}
               </span>
             </button>
 
@@ -658,11 +741,11 @@ export function KsActGenerator({
           <p className="text-xl font-bold text-ink mt-0.5">{grandTotal.toLocaleString()} ₸</p>
         </div>
         <div className="bg-white border border-ink/10 rounded-xl p-3">
-          <p className="text-[10px] text-ink/45 uppercase tracking-wider">НДС 12%</p>
-          <p className="text-xl font-bold text-amber-600 mt-0.5">{nds.toLocaleString()} ₸</p>
+          <p className="text-[10px] text-ink/45 uppercase tracking-wider">{tax ? vatRowLabel(tax) : "НДС"}</p>
+          <p className="text-xl font-bold text-amber-600 mt-0.5">{tax ? `${nds.toLocaleString()} ₸` : "…"}</p>
         </div>
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-          <p className="text-[10px] text-emerald-600 uppercase tracking-wider font-semibold">К оплате (с НДС)</p>
+          <p className="text-[10px] text-emerald-600 uppercase tracking-wider font-semibold">{payableLabel}</p>
           <p className="text-xl font-bold text-emerald-800 mt-0.5">{(grandTotal + nds).toLocaleString()} ₸</p>
         </div>
       </div>
@@ -684,6 +767,7 @@ export function KsActGenerator({
               ["report_end", "Конец периода"],
               ["act_num", "Номер КС-2"],
               ["ks3_num", "Номер КС-3"],
+              ["act_date", "Дата акта"],
             ] as [keyof KsHeader, string][]
           ).map(([field, label]) => (
             <div key={field}>
@@ -696,7 +780,24 @@ export function KsActGenerator({
               />
             </div>
           ))}
+          <label className="flex items-end gap-2 text-sm pb-1">
+            <input
+              type="checkbox"
+              checked={noVat}
+              onChange={(e) => setNoVat(e.target.checked)}
+              className="mb-1"
+            />
+            <span>
+              <span className="block text-[10px] text-ink/50 uppercase tracking-wider">Режим НДС</span>
+              без НДС
+            </span>
+          </label>
         </div>
+        <p className="px-4 pb-3 text-[11px] text-ink/50">
+          {tax
+            ? `${vatFootnote(tax, header.act_date)} ${priorNote(tax.priorKzt)}`
+            : "Ставка НДС загружается с сервера по дате акта."}
+        </p>
       </div>
 
       {/* Work items table */}
@@ -788,12 +889,12 @@ export function KsActGenerator({
                 <td />
               </tr>
               <tr className="bg-amber-50 font-semibold">
-                <td colSpan={6} className="px-3 py-2 text-right text-xs text-amber-700">НДС 12%:</td>
+                <td colSpan={6} className="px-3 py-2 text-right text-xs text-amber-700">{tax ? `${vatRowLabel(tax)}:` : "НДС:"}</td>
                 <td className="px-3 py-2 text-right font-mono text-amber-700">{nds.toLocaleString()}</td>
                 <td />
               </tr>
               <tr className="bg-emerald-50 font-bold">
-                <td colSpan={6} className="px-3 py-2 text-right text-xs text-emerald-800">ИТОГО (с НДС):</td>
+                <td colSpan={6} className="px-3 py-2 text-right text-xs text-emerald-800">{tax?.noVat ? "ИТОГО (без НДС):" : "ИТОГО (с НДС):"}</td>
                 <td className="px-3 py-2 text-right font-mono text-emerald-800">{(grandTotal + nds).toLocaleString()}</td>
                 <td />
               </tr>

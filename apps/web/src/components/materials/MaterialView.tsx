@@ -243,7 +243,7 @@ export function MaterialView({ locale, item }: { locale: Locale; item: Material 
             {error ? <p className="text-xs text-red-600 font-semibold">{error}</p> : null}
 
             <p className="text-[11px] text-slate-400 text-center">
-              Безопасная сделка · Оплата через Kaspi Pay / Эскроу счета ANYQ
+              Заявка на поставку. Оплата через сервис не проводится.
             </p>
           </div>
         )}

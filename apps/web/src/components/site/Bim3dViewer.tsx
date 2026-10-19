@@ -674,13 +674,15 @@ export function Bim3dViewer({ locale, drawings, projectId, projectTitle = "Ко�
       <div className="p-4 bg-mist/30 border-b border-ink/10 flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-pine font-bold text-xs uppercase tracking-wider">Three.js · BIM Digital Twin</span>
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
+              демо / иллюстративная модель
+            </span>
             <h2 className="font-serif text-lg font-bold">
-              {isKk ? "3D BIM моделі және жұмыс сызбалары" : "Интерактивная 3D BIM модель и рабочие чертежи"}
+              {isKk ? "3D моделі және жұмыс сызбалары" : "Интерактивная 3D модель и рабочие чертежи"}
             </h2>
           </div>
           <p className="text-xs text-ink/60 mt-0.5">
-            {projectTitle} · {isKk ? "АР / КЖ / ОВ / ВК бөлімдері" : "Разделы АР / КЖ / ОВ / ВК · Инженерные слои и сечения"}
+            {projectTitle} · {isKk ? "Көрсетілген өлшемдер иллюстрация." : "Размеры и объёмы ниже — иллюстрация, не обмеры объекта."}
           </p>
         </div>
 
@@ -933,7 +935,7 @@ export function Bim3dViewer({ locale, drawings, projectId, projectTitle = "Ко�
             <div className="absolute top-3 left-3 z-10 bg-paper/85 backdrop-blur-xs p-2.5 rounded shadow-sm border border-ink/10 text-xs space-y-1 pointer-events-none">
               <p className="font-semibold text-ink flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-pine animate-pulse" />
-                <span>ANYQ 3D BIM Viewer v2.4</span>
+                <span>демо / иллюстративная модель</span>
               </p>
               <p className="text-[10px] text-ink/60">
                 ЛКМ: Вращение · ПКМ: Панорамирование · Колесо: Зум
@@ -943,8 +945,11 @@ export function Bim3dViewer({ locale, drawings, projectId, projectTitle = "Ко�
             {/* Quick Dimension Specs Bar */}
             <div className="absolute bottom-3 left-3 right-3 z-10 bg-paper/90 backdrop-blur-xs p-2.5 rounded shadow border border-ink/10 flex flex-wrap items-center justify-between text-xs gap-3">
               <div className="flex flex-wrap items-center gap-4">
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900">
+                  демо / иллюстративная модель
+                </span>
                 <div>
-                  <span className="text-ink/45 text-[10px] block">Габариты здания:</span>
+                  <span className="text-ink/45 text-[10px] block">Габариты (иллюстрация):</span>
                   <span className="font-bold">12.0 × 9.6 × 8.85 м</span>
                 </div>
                 <div>

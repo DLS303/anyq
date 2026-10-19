@@ -220,6 +220,7 @@ export function CrmChessView({ locale }: { locale: Locale }) {
       const wb = XLSX.utils.book_new();
 
       const data = [
+        ["демо / иллюстративная модель"],
         ["ШАХМАТКА КВАРТИР И ПОМЕЩЕНИЙ · ЖК БЕСАГАШ РЕЗИДЕНС"],
         [`Корпус: ${building.name}`, `Секций: ${building.sections}`, `Этажей: ${building.floors}`],
         [],
@@ -282,8 +283,11 @@ export function CrmChessView({ locale }: { locale: Locale }) {
             <h3 className="font-serif text-lg font-bold text-ink">
               {isKk ? "Шахматка / Генплан" : "🏗 Шахматка / Генплан"}
             </h3>
+            <p className="mt-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
+              демо / иллюстративная модель
+            </p>
             <p className="text-xs text-ink/50 mt-0.5">
-              {isKk ? "Қабат бойынша жоспар" : "Интерактивная сетка квартир по этажам · ЖК «Бесагаш Резиденс»"}
+              {isKk ? "Қабат бойынша жоспар. Деректер нақты объект емес." : "Интерактивная сетка квартир по этажам. Цены и статусы не относятся к реальному объекту."}
             </p>
           </div>
           <div className="flex items-center gap-2">

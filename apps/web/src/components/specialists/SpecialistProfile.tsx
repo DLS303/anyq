@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { createOrder } from "@/lib/api";
-import { CATEGORY, money } from "@/lib/format";
+import { CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import type { Locale, Review, Specialist } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { CheckCircle2, ShieldCheck, Star, MessageSquare, Briefcase, ExternalLink, X, Send } from "lucide-react";
@@ -96,9 +96,9 @@ export function SpecialistProfile({
           <div className="mt-5 flex flex-wrap items-center gap-4 text-xs font-semibold text-slate-600">
             <span className="flex items-center gap-1 text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200">
               <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
-              <span>{specialist.rating || "5.0"} рейтинг</span>
+              <span>{ratingLabel(specialist.rating, specialist.reviews_count)}</span>
             </span>
-            <span>{specialist.reviews_count} завершенных проектов</span>
+            <span>{reviewsLabel(specialist.reviews_count)}</span>
             <span>•</span>
             <span>{specialist.city}</span>
             {specialist.bin ? (
@@ -191,7 +191,7 @@ export function SpecialistProfile({
               {error ? <p className="text-xs text-red-600 font-semibold">{error}</p> : null}
 
               <p className="text-[11px] text-slate-400 text-center">
-                Все договоренности фиксируются в договоре и защищены эскроу ANYQ
+                Заявка фиксируется в заказе. Оплата через сервис не проводится.
               </p>
             </div>
           )}

@@ -758,7 +758,15 @@ class MemoryStore:
             return [o for o in self.orders.values() if o.specialist_id == spec.id]
         return [o for o in self.orders.values() if o.client_id == user.id]
 
-    def set_order_status(self, user: User, order_id: str, status: str, quote_kzt: int | None = None) -> ServiceOrder:
+    def set_order_status(
+        self,
+        user: User,
+        order_id: str,
+        status: str,
+        quote_kzt: int | None = None,
+        quote_term: str = "",
+        quote_comment: str = "",
+    ) -> ServiceOrder:
         order = self.orders.get(order_id)
         if not order:
             raise ValueError("Заказ не найден")
@@ -769,10 +777,17 @@ class MemoryStore:
             raise PermissionError("Нет доступа к заказу")
         if status == "completed" and not (is_spec or user.role in ("admin", "moderator")):
             raise PermissionError("Закрыть заказ может исполнитель")
+        if status == "quoted" and (quote_kzt is None or quote_kzt <= 0):
+            raise ValueError("Сумма КП должна быть больше нуля")
+        if quote_kzt is not None and quote_kzt <= 0:
+            raise ValueError("Сумма КП должна быть больше нуля")
         with self._lock:
             order.status = status  # type: ignore[assignment]
             if quote_kzt is not None:
                 order.quote_kzt = quote_kzt
+            if status == "quoted":
+                order.quote_term = (quote_term or "").strip()
+                order.quote_comment = (quote_comment or "").strip()
             order.updated_at = _now()
             if order.deal_id and order.deal_id in self.deals:
                 deal = self.deals[order.deal_id]
@@ -791,9 +806,14 @@ class MemoryStore:
         if not order or order.client_id != client.id:
             raise PermissionError("Отзыв только от заказчика сделки")
         if order.status != "completed":
-            raise ValueError("Отзыв после закрытого заказа (как у Kaspi)")
+            raise ValueError("Отзыв можно оставить после завершения заказа")
         if any(r.order_id == order_id for r in self.reviews.values()):
             raise ValueError("Отзыв уже оставлен")
+        text = body.text.strip()
+        if not text:
+            raise ValueError("Напишите текст отзыва")
+        if body.stars < 1 or body.stars > 5:
+            raise ValueError("Оценка от 1 до 5")
         with self._lock:
             rid = f"rev-{uuid4().hex[:8]}"
             item = Review(
@@ -802,7 +822,7 @@ class MemoryStore:
                 specialist_id=order.specialist_id,
                 client_id=client.id,
                 stars=body.stars,
-                text=body.text,
+                text=text,
                 created_at=_now(),
             )
             self.reviews[rid] = item
@@ -1180,7 +1200,8 @@ class MemoryStore:
                 status="sent",
                 payer_name=body.payer_name,
                 payer_iin_bin=body.payer_iin_bin,
-                escrow_enabled=body.escrow_enabled,
+                escrow_enabled=False,
+                marked_manually=False,
                 due_date=body.due_date or _now()[:10],
                 created_at=_now(),
             )
@@ -1191,7 +1212,7 @@ class MemoryStore:
                 deal_id=body.deal_id,
                 activity_type="invoice",
                 title=f"Выставлен счет {num} на {body.amount_kzt:,} ₸",
-                description=f"Плательщик: {body.payer_name}. Эскроу: {'Да' if body.escrow_enabled else 'Нет'}",
+                description=f"Плательщик: {body.payer_name}.",
                 completed=False,
                 due_date=invoice.due_date,
                 author_name="Система",
@@ -1200,15 +1221,52 @@ class MemoryStore:
             self._save_unlocked()
             return invoice
 
+    def payment_recipient_ids(self, deal: Deal) -> set[str]:
+        ids: set[str] = set()
+        if deal.owner_id and deal.owner_id != deal.client_id:
+            ids.add(deal.owner_id)
+        if deal.supplier_id and deal.supplier_id != deal.client_id:
+            ids.add(deal.supplier_id)
+        if deal.specialist_id:
+            spec = self.specialists.get(deal.specialist_id)
+            if spec and spec.user_id and spec.user_id != deal.client_id:
+                ids.add(spec.user_id)
+        return ids
+
+    def can_mark_invoice_paid(self, user: User, invoice: CrmInvoice) -> bool:
+        if invoice.status == "paid":
+            return False
+        deal = self.deals.get(invoice.deal_id)
+        if not deal:
+            return False
+        return user.id in self.payment_recipient_ids(deal)
+
+    def invoice_payload(self, user: User, invoice: CrmInvoice) -> dict:
+        data = invoice.model_dump()
+        data["escrow_enabled"] = False
+        data["can_mark_paid"] = self.can_mark_invoice_paid(user, invoice)
+        return data
+
+    def prior_signed_acts_kzt(self, project_id: str | None = None) -> int:
+        """Sum of previously signed KS acts for a project. None are stored yet."""
+        del project_id
+        return 0
+
     def pay_crm_invoice(self, user: User, invoice_id: str) -> CrmInvoice:
         inv = self.crm_invoices.get(invoice_id)
         if not inv:
             raise LookupError("Счет не найден")
         if not self.can_access_invoice(user, inv):
             raise PermissionError("Недостаточно прав")
+        if inv.status == "paid":
+            raise ValueError("Счет уже отмечен оплаченным")
+        if not self.can_mark_invoice_paid(user, inv):
+            raise PermissionError("Отметить оплату может только получатель")
         with self._lock:
             inv.status = "paid"
             inv.paid_at = _now()
+            inv.marked_manually = True
+            inv.escrow_enabled = False
             self.crm_invoices[inv.id] = inv
             for a in self.crm_activities.values():
                 if a.deal_id == inv.deal_id and a.activity_type == "invoice" and inv.number in a.title:
@@ -1219,52 +1277,78 @@ class MemoryStore:
                 id=aid,
                 deal_id=inv.deal_id,
                 activity_type="note",
-                title=f"Оплата получена: счет {inv.number} (Kaspi Pay / Эскроу)",
-                description=f"Сумма {inv.amount_kzt:,} ₸ зачислена на эскроу-счет сделки.",
+                title=f"Оплачено (отмечено вручную): счет {inv.number}",
+                description=f"Сумма {inv.amount_kzt:,} ₸ отмечена получателем вручную. Платеж через сервис не проводился.",
                 completed=True,
-                author_name="Kaspi Эскроу",
+                author_id=user.id,
+                author_name=user.full_name,
                 created_at=_now(),
             )
             self._save_unlocked()
             return inv
 
-    def deal_to_project(self, user: User, deal_id: str) -> Project:
+    def deal_to_project(
+        self,
+        user: User,
+        deal_id: str,
+        address: str = "",
+        finish: str = "",
+        budget_kzt: int | None = None,
+    ) -> Project:
         deal = self.require_deal(user, deal_id)
         with self._lock:
+            existing_id = deal.project_id or ""
+            if existing_id and existing_id in self.projects:
+                return self.projects[existing_id]
+            if budget_kzt is not None and budget_kzt < 0:
+                raise ValueError("Бюджет не может быть отрицательным")
+            budget = deal.amount_kzt if budget_kzt is None else budget_kzt
+            contractor_id = None
+            if deal.specialist_id:
+                spec = self.specialists.get(deal.specialist_id)
+                contractor_id = spec.user_id if spec else None
             pid = f"prj-{deal.id[-8:]}"
-            slug = f"project-{deal.id[-8:]}"
+            if pid in self.projects:
+                deal.project_id = pid
+                self._save_unlocked()
+                return self.projects[pid]
             project = Project(
                 id=pid,
-                slug=slug,
+                slug=f"project-{deal.id[-8:]}",
                 title=f"Стройка: {deal.title}",
                 plot_id=deal.plot_id,
                 owner_id=deal.client_id,
-                contractor_id=deal.specialist_id or "sp-smr",
-                address="г. Алматы",
+                contractor_id=contractor_id,
+                address=(address or "").strip(),
                 status="active",
                 start=_now()[:10],
-                finish="2027-05-30",
-                budget_kzt=deal.amount_kzt or 25_000_000,
+                finish=(finish or "").strip(),
+                budget_kzt=budget,
             )
             self.projects[pid] = project
             deal.project_id = pid
-            bl_id = f"bl-{uuid4().hex[:8]}"
-            self.budget_lines[bl_id] = BudgetLine(
-                id=bl_id,
-                project_id=pid,
-                code="01-SMR",
-                title=deal.title,
-                budget_kzt=project.budget_kzt,
-                committed_kzt=project.budget_kzt,
-                actual_kzt=0,
-            )
+            if budget > 0:
+                bl_id = f"bl-{uuid4().hex[:8]}"
+                self.budget_lines[bl_id] = BudgetLine(
+                    id=bl_id,
+                    project_id=pid,
+                    code="01-SMR",
+                    title=deal.title,
+                    budget_kzt=budget,
+                    committed_kzt=0,
+                    actual_kzt=0,
+                )
             aid = f"act-{uuid4().hex[:8]}"
+            if budget:
+                budget_note = f" Бюджет {budget:,} ₸ взят из сделки или формы."
+            else:
+                budget_note = " Адрес, срок и бюджет не заполнены."
             self.crm_activities[aid] = CrmActivity(
                 id=aid,
                 deal_id=deal.id,
                 activity_type="note",
-                title="Сделка переведена в ProjectHub (Строительный проект)",
-                description=f"Создан строительный проект {pid} с бюджетом {project.budget_kzt:,} ₸.",
+                title="Сделка передана в карточку объекта",
+                description=f"Создан объект {pid}.{budget_note}",
                 completed=True,
                 author_name=user.full_name,
                 created_at=_now(),
@@ -1288,6 +1372,8 @@ class MemoryStore:
             stage_counts[key] = stage_counts.get(key, 0) + 1
 
         active_leads = [lead for lead in leads if lead.status != "junk"]
+        converted_leads = [lead for lead in active_leads if lead.status == "converted" or lead.deal_id]
+        lead_to_deal_pct = round(100 * len(converted_leads) / len(active_leads), 1) if active_leads else None
         pending_activities = [item for item in activities if not item.completed]
         return {
             "total_deals": len(deals),
@@ -1296,6 +1382,7 @@ class MemoryStore:
             "won_deals_kzt": won_sum_kzt,
             "total_leads": len(leads),
             "active_leads_count": len(active_leads),
+            "lead_to_deal_pct": lead_to_deal_pct,
             "pending_activities_count": len(pending_activities),
             "total_contacts": len(contacts),
             "funnel_counts": funnel_counts,

@@ -115,31 +115,13 @@ export function CrmAnalyticsView({ locale }: { locale: Locale }) {
           <div className="space-y-4 text-xs">
             <div className="p-3 bg-paper rounded-lg border border-ink/10">
               <div className="flex items-center justify-between mb-1">
-                <span className="font-semibold text-ink">Конверсия Лид → Сделка:</span>
-                <span className="font-bold text-emerald-700 font-mono text-sm">68.4%</span>
+                <span className="font-semibold text-ink">Конверсия лид → сделка:</span>
+                <span className="font-bold text-emerald-700 font-mono text-sm">
+                  {data.lead_to_deal_pct == null ? "нет данных" : `${data.lead_to_deal_pct}%`}
+                </span>
               </div>
               <p className="text-ink/55 text-[11px]">
-                Сделки приходят из сметы, подряда и поставок. Конверсия считается по строительной воронке.
-              </p>
-            </div>
-
-            <div className="p-3 bg-paper rounded-lg border border-ink/10">
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-semibold text-ink">Сделки с защитой Эскроу:</span>
-                <span className="font-bold text-pine font-mono text-sm">100%</span>
-              </div>
-              <p className="text-ink/55 text-[11px]">
-                Средства покупателей и заказчиков замораживаются до подписания актов ввода или регистрации права собственности.
-              </p>
-            </div>
-
-            <div className="p-3 bg-paper rounded-lg border border-ink/10">
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-semibold text-ink">Средний цикл сделки (Земля):</span>
-                <span className="font-bold text-ink font-mono text-sm">14 дней</span>
-              </div>
-              <p className="text-ink/55 text-[11px]">
-                Сокращен с обычных 45 дней за счет онлайн-выписки кадастровых паспортов и прямого доступа к аккредитованным геодезистам.
+                Доля ваших лидов со статусом «конвертирован» или с привязанной сделкой. Считается по доступным вам записям.
               </p>
             </div>
           </div>

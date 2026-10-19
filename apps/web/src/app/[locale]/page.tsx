@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchMaterials, fetchSpecialists } from "@/lib/api";
-import { MATERIAL_CAT, CATEGORY, money } from "@/lib/format";
+import { MATERIAL_CAT, CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import { t } from "@/i18n/messages";
 import type { Locale } from "@/lib/types";
 import { HomeStage } from "@/components/home/HomeStage";
@@ -123,13 +123,13 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
                 <div className="flex items-center justify-between mb-2">
                   <span className="pill text-[10px] text-slate-600">{CATEGORY[s.category][locale]}</span>
                   <span className="flex items-center gap-1 text-xs font-bold text-amber-600">
-                    ★ {s.rating || "5.0"}
+                    {s.reviews_count ? `★ ${ratingLabel(s.rating, s.reviews_count)}` : ratingLabel(s.rating, s.reviews_count)}
                   </span>
                 </div>
                 <h3 className="text-xl font-bold text-slate-900 group-hover:text-pine transition-colors">
                   {locale === "kk" ? s.company_kk : s.company_ru}
                 </h3>
-                <p className="text-xs text-slate-500 mt-1">{s.city} · {s.reviews_count} завершенных заказов</p>
+                <p className="text-xs text-slate-500 mt-1">{s.city} · {reviewsLabel(s.reviews_count)}</p>
                 {s.license_verified ? (
                   <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 text-[11px] font-semibold border border-emerald-200/60">
                     <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
@@ -159,12 +159,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
 
       {/* Enterprise Standards & Trust Banner */}
       <section className="home-rise bg-gradient-to-br from-slate-900 to-pine text-white rounded-3xl p-8 sm:p-10 shadow-2xl">
-        <div className="grid md:grid-cols-4 gap-6 text-center sm:text-left">
-          <div>
-            <p className="text-3xl font-bold text-amber-400">100%</p>
-            <p className="text-sm font-semibold mt-1">СНиП РК и Госэкспертиза</p>
-            <p className="text-xs text-slate-400 mt-1">Все расчеты соответствуют строительным нормам РК</p>
-          </div>
+        <div className="grid md:grid-cols-3 gap-6 text-center sm:text-left">
           <div>
             <p className="text-3xl font-bold text-emerald-400">BOQ</p>
             <p className="text-sm font-semibold mt-1">Автосмета по объекту</p>

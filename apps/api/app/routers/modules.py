@@ -35,10 +35,10 @@ MODULES = [
     ),
     ModuleInfo(
         id="fintech-escrow",
-        title="FinTech & Escrow Service",
+        title="Payments",
         phase=3,
         status="stub",
-        notes="Номинальный счёт, Kaspi Pay, факторинг.",
+        notes="Оплата в пилоте не подключена. Получатель отмечает счёт вручную.",
     ),
     ModuleInfo(
         id="gov-gateway",

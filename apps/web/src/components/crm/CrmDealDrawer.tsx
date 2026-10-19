@@ -46,6 +46,9 @@ export function CrmDealDrawer({
   const [invoiceIin, setInvoiceIin] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [projectCreated, setProjectCreated] = useState<string | null>(deal.project_id || null);
+  const [projectAddress, setProjectAddress] = useState("");
+  const [projectFinish, setProjectFinish] = useState("");
+  const [projectBudget, setProjectBudget] = useState("");
 
   function loadDetails() {
     if (!user) return;
@@ -88,7 +91,7 @@ export function CrmDealDrawer({
     }
   }
 
-  async function handlePayInvoice(invId: string) {
+  async function handleMarkPaid(invId: string) {
     if (!user) return;
     try {
       await payInvoice(user.email, invId);
@@ -101,12 +104,28 @@ export function CrmDealDrawer({
 
   async function handleConvertToProject() {
     if (!user) return;
+    const budgetRaw = projectBudget.trim();
+    const budget = budgetRaw === "" ? null : Number(budgetRaw);
+    if (budget !== null && (!Number.isFinite(budget) || budget < 0)) {
+      alert("Укажите бюджет числом или оставьте поле пустым");
+      return;
+    }
     try {
-      const res = await dealToProject(user.email, currentDeal.id);
+      const res = await dealToProject(user.email, currentDeal.id, {
+        address: projectAddress.trim(),
+        finish: projectFinish,
+        budget_kzt: budget,
+      });
       setProjectCreated(String(res.id));
       loadDetails();
       onDealUpdated();
-      alert("Строительный проект успешно сформирован в ProjectHub!");
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("anyq-toast", {
+            detail: { message: "Объект создан. Пустые адрес, срок и бюджет можно заполнить позже." },
+          }),
+        );
+      }
     } catch (e) {
       alert((e as Error).message);
     }
@@ -130,7 +149,6 @@ export function CrmDealDrawer({
           amount_kzt: Number(invoiceAmount),
           payer_name: invoicePayer.trim() || currentDeal.client_name || "Клиент",
           payer_iin_bin: invoiceIin.trim(),
-          escrow_enabled: true,
           due_date: dueDate || new Date().toISOString().slice(0, 10),
         });
       } else {
@@ -282,23 +300,46 @@ export function CrmDealDrawer({
                   🏗️ Интеграция с ProjectHub (СМР)
                 </span>
                 <p className="text-xs text-amber-800/80 mb-3">
-                  Свяжите сделку со строительной площадкой: передайте смету, ведомости объемов и журнал работ.
+                  Создаётся карточка объекта. Адрес, срок и бюджет берутся только из полей ниже или из суммы сделки. Пустые поля остаются пустыми.
                 </p>
                 {projectCreated ? (
                   <Link
                     href={`/${locale}/site/${projectCreated}`}
                     className="block text-center py-2 px-3 bg-pine text-white text-xs font-medium rounded hover:bg-pine/90"
                   >
-                    Перейти на объект в ProjectHub →
+                    Перейти на объект →
                   </Link>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={handleConvertToProject}
-                    className="w-full py-2 px-3 bg-amber-600 text-white text-xs font-semibold rounded hover:bg-amber-700 shadow-sm"
-                  >
-                    🚀 Запустить стройку в ProjectHub
-                  </button>
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      value={projectAddress}
+                      onChange={(e) => setProjectAddress(e.target.value)}
+                      placeholder="Адрес объекта"
+                      className="w-full px-2 py-1.5 text-xs border border-amber-200 rounded bg-white"
+                    />
+                    <input
+                      type="date"
+                      value={projectFinish}
+                      onChange={(e) => setProjectFinish(e.target.value)}
+                      className="w-full px-2 py-1.5 text-xs border border-amber-200 rounded bg-white"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      value={projectBudget}
+                      onChange={(e) => setProjectBudget(e.target.value)}
+                      placeholder="Бюджет, ₸ (пусто — сумма сделки)"
+                      className="w-full px-2 py-1.5 text-xs border border-amber-200 rounded bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleConvertToProject}
+                      className="w-full py-2 px-3 bg-amber-600 text-white text-xs font-semibold rounded hover:bg-amber-700 shadow-sm"
+                    >
+                      Создать объект
+                    </button>
+                  </div>
                 )}
               </div>
             )}
@@ -328,7 +369,7 @@ export function CrmDealDrawer({
                   <>
                     <input
                       type="text"
-                      placeholder="Назначение платежа (напр. Задаток 10% через Эскроу)"
+                      placeholder="Назначение платежа"
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
                       className="w-full px-3 py-2 text-sm border border-ink/15 rounded bg-white"
@@ -446,14 +487,18 @@ export function CrmDealDrawer({
                       </div>
                       <div className="text-right">
                         <span className="font-bold text-sm text-pine block font-mono">{money(inv.amount_kzt, locale)}</span>
-                        {inv.status !== "paid" && (
+                        {inv.status === "paid" ? (
+                          <span className="mt-1 block text-[11px] font-medium text-emerald-700">оплачено (отмечено вручную)</span>
+                        ) : inv.can_mark_paid ? (
                           <button
                             type="button"
-                            onClick={() => handlePayInvoice(inv.id)}
-                            className="mt-1 px-2.5 py-1 bg-emerald-600 text-white rounded text-[11px] font-medium hover:bg-emerald-700 shadow-xs"
+                            onClick={() => handleMarkPaid(inv.id)}
+                            className="mt-1 px-2.5 py-1 bg-ink text-white rounded text-[11px] font-medium hover:bg-ink/80 shadow-xs"
                           >
-                            💳 Оплатить (Kaspi Эскроу)
+                            Отметить оплаченным
                           </button>
+                        ) : (
+                          <span className="mt-1 block text-[11px] text-ink/45">отметку ставит получатель</span>
                         )}
                       </div>
                     </div>

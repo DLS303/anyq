@@ -1,6 +1,9 @@
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+from app.tax import vat_rate
 
 Region = Literal["almaty", "astana", "shymkent", "west", "north", "other"]
 HouseType = Literal["gasblock", "brick", "monolith", "frame", "sip"]
@@ -89,7 +92,7 @@ FINISH_LEVELS: dict[FinishLevel, dict[str, str | float]] = {
     "turnkey": {"title": "Чистовая под ключ", "finish_rate": 96_000, "benchmark_rate": 225_000},
 }
 
-VAT_RATE = 0.16
+VAT_RATE = vat_rate(date.today())
 
 
 def _money(value: float) -> int:

@@ -174,9 +174,9 @@ export function CrmBoard({ locale }: { locale: Locale }) {
             { id: "leads", label: "📥 Лиды", desc: "Входящие заявки" },
             { id: "contacts", label: "👥 Контакты & Компании", desc: "База контрагентов" },
             { id: "activities", label: "📋 Дела & Задачи", desc: "Звонки и выезды" },
-            { id: "invoices", label: "🧾 Счета & Эскроу", desc: "Оплаты Kaspi" },
+            { id: "invoices", label: "🧾 Счета", desc: "Отметка оплаты вручную" },
             { id: "analytics", label: "📊 Воронка & Аналитика", desc: "KPI и конверсия" },
-            { id: "chess", label: "🏗 Шахматка", desc: "Генплан и сетка квартир" },
+            { id: "chess", label: "🏗 Шахматка", desc: "демо / иллюстративная модель" },
           ].map((tab) => (
             <button
               key={tab.id}

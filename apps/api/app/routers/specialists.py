@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.deps import require_user
-from app.schemas import OrderCreate, ReviewCreate, User
+from app.schemas import OrderCreate, OrderStatusUpdate, ReviewCreate, User
 from app.store import store
 
 router = APIRouter(prefix="/v1", tags=["specialists"])
@@ -46,14 +46,16 @@ def my_orders(user: User = Depends(require_user)):
 
 
 @router.post("/orders/{oid}/status")
-def order_status(
-    oid: str,
-    status: str = Query(...),
-    quote_kzt: int | None = None,
-    user: User = Depends(require_user),
-):
+def order_status(oid: str, body: OrderStatusUpdate, user: User = Depends(require_user)):
     try:
-        order = store.set_order_status(user, oid, status, quote_kzt)
+        order = store.set_order_status(
+            user,
+            oid,
+            body.status,
+            body.quote_kzt,
+            body.quote_term,
+            body.quote_comment,
+        )
     except (ValueError, PermissionError) as exc:
         raise _http(exc) from exc
     return {"ok": True, "data": order}

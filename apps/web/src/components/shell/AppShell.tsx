@@ -328,11 +328,6 @@ function Footer({ locale }: { locale: Locale }) {
             </div>
           </div>
           <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
-            <span className="flex items-center gap-1.5 text-emerald-700">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              API & GIS активны
-            </span>
-            <span>·</span>
             <span>СНиП РК 3.01-101-2013</span>
             <span>·</span>
             <span>Smart Bridge Ready</span>

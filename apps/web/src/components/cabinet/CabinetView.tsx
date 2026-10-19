@@ -48,6 +48,9 @@ export function CabinetView({ locale }: { locale: Locale }) {
   const [skus, setSkus] = useState<Material[]>([]);
   const [error, setError] = useState("");
   const [addingSku, setAddingSku] = useState(false);
+  const [quotes, setQuotes] = useState<Record<string, { amount: string; term: string; comment: string }>>({});
+  const [reviews, setReviews] = useState<Record<string, { stars: number; text: string }>>({});
+  const [reviewed, setReviewed] = useState<Record<string, boolean>>({});
 
   function load() {
     if (!user) return;
@@ -69,10 +72,27 @@ export function CabinetView({ locale }: { locale: Locale }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  async function handleSetStatus(orderId: string, status: string, quote?: number) {
+  function quoteDraft(orderId: string) {
+    return quotes[orderId] ?? { amount: "", term: "", comment: "" };
+  }
+
+  function reviewDraft(orderId: string) {
+    return reviews[orderId] ?? { stars: 0, text: "" };
+  }
+
+  async function handleSetStatus(
+    orderId: string,
+    status: string,
+    quote?: { amount: number; term: string; comment: string },
+  ) {
     if (!user) return;
     try {
-      await setOrderStatus(user.email, orderId, status, quote);
+      await setOrderStatus(user.email, orderId, {
+        status,
+        quote_kzt: quote?.amount,
+        quote_term: quote?.term,
+        quote_comment: quote?.comment,
+      });
       load();
       if (typeof window !== "undefined") {
         window.dispatchEvent(
@@ -209,6 +229,13 @@ export function CabinetView({ locale }: { locale: Locale }) {
               </div>
 
               <p className="text-slate-600 text-sm mt-2 leading-relaxed">{o.message}</p>
+              {o.quote_term || o.quote_comment ? (
+                <p className="text-xs text-slate-500 mt-1">
+                  {o.quote_term ? `Срок: ${o.quote_term}` : ""}
+                  {o.quote_term && o.quote_comment ? " · " : ""}
+                  {o.quote_comment || ""}
+                </p>
+              ) : null}
 
               <div className="flex flex-wrap items-center gap-3 mt-4 pt-3 border-t border-slate-100 text-xs font-semibold">
                 {o.thread_id ? (
@@ -223,46 +250,137 @@ export function CabinetView({ locale }: { locale: Locale }) {
 
                 {(user.role === "specialist" || user.role === "contractor" || user.role === "supervisor" || user.role === "admin") &&
                 o.status !== "completed" ? (
-                  <div className="flex items-center gap-2 ml-auto">
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(o.id, "quoted", 150000)}
-                      className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
-                    >
-                      {m.quote} (150 000 ₸)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(o.id, "completed")}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100"
-                    >
-                      {m.complete}
-                    </button>
-                  </div>
+                  <form
+                    className="grid w-full gap-2 sm:grid-cols-[1fr_1fr] ml-auto"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const draft = quoteDraft(o.id);
+                      const amount = Number(draft.amount);
+                      if (!Number.isFinite(amount) || amount <= 0) {
+                        setError("Сумма КП должна быть больше нуля");
+                        return;
+                      }
+                      handleSetStatus(o.id, "quoted", {
+                        amount,
+                        term: draft.term.trim(),
+                        comment: draft.comment.trim(),
+                      });
+                    }}
+                  >
+                    <input
+                      type="number"
+                      min={1}
+                      required
+                      value={quoteDraft(o.id).amount}
+                      onChange={(e) =>
+                        setQuotes((prev) => ({ ...prev, [o.id]: { ...quoteDraft(o.id), amount: e.target.value } }))
+                      }
+                      placeholder="Сумма, ₸"
+                      className="px-3 py-1.5 rounded-lg border border-amber-200 bg-white"
+                    />
+                    <input
+                      type="text"
+                      value={quoteDraft(o.id).term}
+                      onChange={(e) =>
+                        setQuotes((prev) => ({ ...prev, [o.id]: { ...quoteDraft(o.id), term: e.target.value } }))
+                      }
+                      placeholder="Срок"
+                      className="px-3 py-1.5 rounded-lg border border-amber-200 bg-white"
+                    />
+                    <input
+                      type="text"
+                      value={quoteDraft(o.id).comment}
+                      onChange={(e) =>
+                        setQuotes((prev) => ({ ...prev, [o.id]: { ...quoteDraft(o.id), comment: e.target.value } }))
+                      }
+                      placeholder="Комментарий к КП"
+                      className="px-3 py-1.5 rounded-lg border border-amber-200 bg-white sm:col-span-2"
+                    />
+                    <div className="flex items-center gap-2 sm:col-span-2">
+                      <button
+                        type="submit"
+                        className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
+                      >
+                        {m.quote}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSetStatus(o.id, "completed")}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100"
+                      >
+                        {m.complete}
+                      </button>
+                    </div>
+                  </form>
                 ) : null}
 
-                {user.role === "buyer" && o.status === "completed" ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      reviewOrder(user.email, o.id, 5, "Работы выполнены в полном объеме, акты подписаны")
+                {user.role === "buyer" && o.status === "completed" && !reviewed[o.id] ? (
+                  <form
+                    className="grid w-full gap-2 ml-auto"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const draft = reviewDraft(o.id);
+                      if (draft.stars < 1 || draft.stars > 5) {
+                        setError("Оценка от 1 до 5");
+                        return;
+                      }
+                      if (!draft.text.trim()) {
+                        setError("Напишите текст отзыва");
+                        return;
+                      }
+                      reviewOrder(user.email, o.id, draft.stars, draft.text.trim())
                         .then(() => {
+                          setReviewed((prev) => ({ ...prev, [o.id]: true }));
                           load();
                           if (typeof window !== "undefined") {
                             window.dispatchEvent(
                               new CustomEvent("anyq-toast", {
-                                detail: { message: "Отзыв 5★ успешно опубликован!" },
+                                detail: { message: "Отзыв опубликован" },
                               })
                             );
                           }
                         })
-                        .catch((err: Error) => setError(err.message))
-                    }
-                    className="ml-auto px-3 py-1.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100 flex items-center gap-1"
+                        .catch((err: Error) => setError(err.message));
+                    }}
                   >
-                    <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
-                    <span>Поставить оценку 5★</span>
-                  </button>
+                    <div className="flex items-center gap-1">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <button
+                          key={star}
+                          type="button"
+                          onClick={() =>
+                            setReviews((prev) => ({ ...prev, [o.id]: { ...reviewDraft(o.id), stars: star } }))
+                          }
+                          className="p-1"
+                          aria-label={`${star} из 5`}
+                        >
+                          <Star
+                            className={`h-4 w-4 ${
+                              star <= reviewDraft(o.id).stars
+                                ? "fill-amber-500 text-amber-500"
+                                : "text-slate-300"
+                            }`}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      required
+                      rows={2}
+                      value={reviewDraft(o.id).text}
+                      onChange={(e) =>
+                        setReviews((prev) => ({ ...prev, [o.id]: { ...reviewDraft(o.id), text: e.target.value } }))
+                      }
+                      placeholder="Текст отзыва"
+                      className="px-3 py-1.5 rounded-lg border border-amber-200 bg-white font-normal"
+                    />
+                    <button
+                      type="submit"
+                      className="justify-self-start px-3 py-1.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
+                    >
+                      Отправить отзыв
+                    </button>
+                  </form>
                 ) : null}
               </div>
             </div>

@@ -149,6 +149,8 @@ export type ServiceOrder = {
   message: string;
   status: string;
   quote_kzt: number | null;
+  quote_term?: string;
+  quote_comment?: string;
   deal_id: string | null;
   thread_id: string | null;
   created_at: string;
@@ -232,7 +234,9 @@ export type CrmInvoice = {
   status: InvoiceStatus;
   payer_name: string;
   payer_iin_bin: string;
-  escrow_enabled: boolean;
+  escrow_enabled?: boolean;
+  marked_manually?: boolean;
+  can_mark_paid?: boolean;
   due_date: string;
   paid_at: string;
   created_at: string;
@@ -272,6 +276,7 @@ export type CrmAnalytics = {
   won_deals_kzt: number;
   total_leads: number;
   active_leads_count: number;
+  lead_to_deal_pct: number | null;
   pending_activities_count: number;
   total_contacts: number;
   funnel_counts: Record<string, number>;

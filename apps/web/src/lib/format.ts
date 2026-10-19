@@ -5,6 +5,22 @@ export function money(n: number, locale: Locale) {
   return `${formatted} ₸`;
 }
 
+export function ratingLabel(rating: number, count: number): string {
+  if (!count) return "Новый";
+  return Number(rating).toFixed(1);
+}
+
+export function reviewsLabel(count: number): string {
+  const n = Math.abs(count) % 100;
+  const n1 = n % 10;
+  let word = "отзывов";
+  if (n < 11 || n > 14) {
+    if (n1 === 1) word = "отзыв";
+    else if (n1 >= 2 && n1 <= 4) word = "отзыва";
+  }
+  return `${count} ${word}`;
+}
+
 export function titleOf(plot: Plot, locale: Locale) {
   return locale === "kk" ? plot.title_kk : plot.title_ru;
 }

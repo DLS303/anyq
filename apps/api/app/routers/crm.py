@@ -8,6 +8,7 @@ from app.schemas import (
     CrmInvoiceCreate,
     DealCreate,
     DealMove,
+    DealToProject,
     FUNNEL_STAGES,
     LeadConvert,
     LeadCreate,
@@ -49,7 +50,7 @@ def create_deal(body: DealCreate, user: User = Depends(require_user)):
 def get_deal(deal_id: str, user: User = Depends(require_user)):
     deal = _call(lambda: store.require_deal(user, deal_id))
     activities = store.list_crm_activities(user, deal_id=deal_id)
-    invoices = store.list_crm_invoices(user, deal_id=deal_id)
+    invoices = [store.invoice_payload(user, item) for item in store.list_crm_invoices(user, deal_id=deal_id)]
     return {"ok": True, "data": deal, "activities": activities, "invoices": invoices}
 
 
@@ -60,8 +61,11 @@ def move(deal_id: str, body: DealMove, user: User = Depends(require_user)):
 
 
 @router.post("/deals/{deal_id}/to-project")
-def to_project(deal_id: str, user: User = Depends(require_user)):
-    project = _call(lambda: store.deal_to_project(user, deal_id))
+def to_project(deal_id: str, body: DealToProject | None = None, user: User = Depends(require_user)):
+    payload = body or DealToProject()
+    project = _call(
+        lambda: store.deal_to_project(user, deal_id, payload.address, payload.finish, payload.budget_kzt)
+    )
     return {"ok": True, "data": project}
 
 
@@ -114,19 +118,19 @@ def toggle_activity(activity_id: str, body: CrmActivityToggle, user: User = Depe
 @router.get("/invoices")
 def invoices(deal_id: str | None = None, user: User = Depends(require_user)):
     rows = _call(lambda: store.list_crm_invoices(user, deal_id))
-    return {"ok": True, "data": rows}
+    return {"ok": True, "data": [store.invoice_payload(user, item) for item in rows]}
 
 
 @router.post("/invoices")
 def create_invoice(body: CrmInvoiceCreate, user: User = Depends(require_user)):
     inv = _call(lambda: store.create_crm_invoice(user, body))
-    return {"ok": True, "data": inv}
+    return {"ok": True, "data": store.invoice_payload(user, inv)}
 
 
 @router.post("/invoices/{invoice_id}/pay")
 def pay_invoice(invoice_id: str, user: User = Depends(require_user)):
     inv = _call(lambda: store.pay_crm_invoice(user, invoice_id))
-    return {"ok": True, "data": inv}
+    return {"ok": True, "data": store.invoice_payload(user, inv)}
 
 
 @router.get("/analytics")
