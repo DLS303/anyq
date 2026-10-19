@@ -3,6 +3,8 @@
 import React, { useCallback, useMemo, useState, useRef } from "react";
 import type { Locale, ScheduleTask, TaskStatus } from "@/lib/types";
 import { postSite } from "@/lib/api";
+import { t as msg } from "@/i18n/messages";
+import { toast } from "@/lib/toast";
 
 type ViewMode = "day" | "week" | "month";
 
@@ -11,6 +13,11 @@ interface Props {
   projectId: string;
   schedule: ScheduleTask[];
   email: string;
+  canEdit?: boolean;
+  pilotEmpty?: boolean;
+  emptyText?: string;
+  emptyAction?: string;
+  onNeedLogin?: () => void;
   onReload: () => void;
 }
 
@@ -48,8 +55,20 @@ function daysDiff(d1: Date, d2: Date): number {
   return Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-export function InteractiveGantt({ locale, projectId, schedule, email, onReload }: Props) {
+export function InteractiveGantt({
+  locale,
+  projectId,
+  schedule,
+  email,
+  canEdit = false,
+  pilotEmpty = false,
+  emptyText = "",
+  emptyAction = "",
+  onNeedLogin,
+  onReload,
+}: Props) {
   const isKk = locale === "kk";
+  const copy = msg(locale);
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -258,7 +277,7 @@ export function InteractiveGantt({ locale, projectId, schedule, email, onReload 
       await postSite(`schedule/${task.id}/progress`, email, { pct: nextPct });
       onReload();
     } catch (e) {
-      console.error("Failed to update progress:", e);
+      toast(e instanceof Error ? e.message : copy.ganttProgressError);
     }
   }
 
@@ -314,7 +333,7 @@ export function InteractiveGantt({ locale, projectId, schedule, email, onReload 
       setIsModalOpen(false);
       onReload();
     } catch (err) {
-      alert("Ошибка при сохранении: " + (err as Error).message);
+      toast(err instanceof Error ? err.message : copy.ganttSaveError);
     } finally {
       setSaving(false);
     }
@@ -327,7 +346,7 @@ export function InteractiveGantt({ locale, projectId, schedule, email, onReload 
       setIsModalOpen(false);
       onReload();
     } catch (err) {
-      alert("Ошибка при удалении: " + (err as Error).message);
+      toast(err instanceof Error ? err.message : copy.ganttDeleteError);
     }
   }
 
@@ -343,8 +362,25 @@ export function InteractiveGantt({ locale, projectId, schedule, email, onReload 
   const inProgressTasks = schedule.filter((t) => t.status === "in_progress" || (t.pct > 0 && t.pct < 100)).length;
   const avgPct = totalTasks > 0 ? Math.round(schedule.reduce((acc, t) => acc + t.pct, 0) / totalTasks) : 0;
 
+  if (pilotEmpty && schedule.length === 0 && !isModalOpen) {
+    return (
+      <div className="border border-ink/10 bg-white/50 p-6 text-center">
+        <p className="text-sm text-ink/70">{emptyText}</p>
+        <div className="mt-4 flex justify-center">
+          <button
+            type="button"
+            className="inline-flex min-h-12 items-center justify-center rounded-full bg-pine px-4 text-sm font-medium text-paper"
+            onClick={() => (canEdit ? openAddModal() : onNeedLogin?.())}
+          >
+            {canEdit ? emptyAction : copy.hubLogin}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="bg-paper border border-ink/10 rounded-sm shadow-sm overflow-hidden text-ink">
+    <div className="min-w-0 max-w-full bg-paper border border-ink/10 rounded-sm shadow-sm overflow-hidden text-ink">
       {/* Top Action Bar */}
       <div className="p-4 bg-mist/30 border-b border-ink/10 flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
@@ -425,34 +461,38 @@ export function InteractiveGantt({ locale, projectId, schedule, email, onReload 
             <option value="blocked">{isKk ? "Бұғатталған" : "Приостановлены"}</option>
           </select>
 
-          <button
-            type="button"
-            onClick={openAddModal}
-            className="px-3 py-1 bg-pine text-paper text-xs font-semibold rounded hover:bg-pine/90 transition-colors shadow-sm flex items-center gap-1"
-          >
-            <span>+</span>
-            <span>{isKk ? "Жұмыс қосу" : "Добавить работу"}</span>
-          </button>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={openAddModal}
+              className="px-3 py-1 bg-pine text-paper text-xs font-semibold rounded hover:bg-pine/90 transition-colors shadow-sm flex items-center gap-1"
+            >
+              <span>+</span>
+              <span>{isKk ? "Жұмыс қосу" : "Добавить работу"}</span>
+            </button>
+          ) : null}
         </div>
       </div>
 
       {/* Main Gantt Split Container */}
       <div className="grid grid-cols-1 lg:grid-cols-12 border-t border-ink/10">
         {/* Left Side: Tasks Table */}
-        <div className="lg:col-span-5 xl:col-span-4 border-r border-ink/10 bg-paper overflow-x-auto">
+        <div className="min-w-0 lg:col-span-5 xl:col-span-4 border-r border-ink/10 bg-paper overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-mist/50 border-b border-ink/10 h-[56px] text-ink/60 uppercase tracking-wider text-[10px]">
                 <th className="px-3 py-2 font-semibold">{isKk ? "Кезең атауы" : "Этап / Работа"}</th>
                 <th className="px-2 py-2 font-semibold w-24">{isKk ? "Мерзімі" : "Сроки"}</th>
                 <th className="px-2 py-2 font-semibold w-20 text-center">{isKk ? "Орындалу" : "Прогресс"}</th>
-                <th className="px-2 py-2 font-semibold w-16 text-right">{isKk ? "Әрекет" : "Действия"}</th>
+                {canEdit ? (
+                  <th className="px-2 py-2 font-semibold w-16 text-right">{isKk ? "Әрекет" : "Действия"}</th>
+                ) : null}
               </tr>
             </thead>
             <tbody>
               {filteredTasks.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="p-6 text-center text-ink/40">
+                  <td colSpan={canEdit ? 4 : 3} className="p-6 text-center text-ink/40">
                     {isKk ? "Жұмыстар табылмады" : "Нет работ в выбранном фильтре"}
                   </td>
                 </tr>
@@ -524,32 +564,34 @@ export function InteractiveGantt({ locale, projectId, schedule, email, onReload 
                         </div>
                       </td>
 
-                      <td className="px-2 py-1 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            title={isKk ? "+10% қосу" : "+10% к прогрессу"}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleQuickPct(t, 10);
-                            }}
-                            className="text-[10px] px-1 py-0.5 border border-ink/15 rounded hover:bg-pine hover:text-paper transition-colors"
-                          >
-                            +10%
-                          </button>
-                          <button
-                            type="button"
-                            title={isKk ? "Өзгерту" : "Редактировать"}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openEditModal(t);
-                            }}
-                            className="text-[11px] text-ink/50 hover:text-pine px-1"
-                          >
-                            ✎
-                          </button>
-                        </div>
-                      </td>
+                      {canEdit ? (
+                        <td className="px-2 py-1 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              title={isKk ? "+10% қосу" : "+10% к прогрессу"}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleQuickPct(t, 10);
+                              }}
+                              className="text-[10px] px-1 py-0.5 border border-ink/15 rounded hover:bg-pine hover:text-paper transition-colors"
+                            >
+                              +10%
+                            </button>
+                            <button
+                              type="button"
+                              title={isKk ? "Өзгерту" : "Редактировать"}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEditModal(t);
+                              }}
+                              className="text-[11px] text-ink/50 hover:text-pine px-1"
+                            >
+                              ✎
+                            </button>
+                          </div>
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })
@@ -561,7 +603,7 @@ export function InteractiveGantt({ locale, projectId, schedule, email, onReload 
         {/* Right Side: Interactive SVG Timeline */}
         <div
           ref={timelineContainerRef}
-          className="lg:col-span-7 xl:col-span-8 overflow-x-auto relative bg-[#FCFCFD] select-none"
+          className="min-w-0 lg:col-span-7 xl:col-span-8 overflow-x-auto relative bg-[#FCFCFD] select-none"
           style={{ minHeight: "260px" }}
         >
           <svg
@@ -792,7 +834,7 @@ export function InteractiveGantt({ locale, projectId, schedule, email, onReload 
                   className="cursor-pointer group"
                   onMouseEnter={() => setHoveredTaskId(t.id)}
                   onMouseLeave={() => setHoveredTaskId(null)}
-                  onClick={() => openEditModal(t)}
+                  onClick={() => (canEdit ? openEditModal(t) : setSelectedTaskId(t.id))}
                 >
                   {(isHovered || isSelected) && (
                     <rect
@@ -897,11 +939,13 @@ export function InteractiveGantt({ locale, projectId, schedule, email, onReload 
           </div>
         </div>
 
-        <p className="text-[11px] text-ink/40">
-          {isKk
-            ? "💡 Жұмысты басып өңдеңіз немесе +10% батырмасын басыңыз"
-            : "💡 Нажмите на полосу задачи для редактирования или +10% для быстрого прогресса"}
-        </p>
+        {canEdit ? (
+          <p className="text-[11px] text-ink/40">
+            {isKk
+              ? "💡 Жұмысты басып өңдеңіз немесе +10% батырмасын басыңыз"
+              : "💡 Нажмите на полосу задачи для редактирования или +10% для быстрого прогресса"}
+          </p>
+        ) : null}
       </div>
 
       {/* Modal Dialog: Add / Edit Task */}

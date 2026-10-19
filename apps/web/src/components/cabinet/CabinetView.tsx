@@ -15,6 +15,7 @@ import {
 import { MAT_ORDER, ORDER_ST, money } from "@/lib/format";
 import type { Locale, Material, MaterialOrder, ServiceOrder } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { PILOT_MODE } from "@/lib/pilot";
 import {
   Building2,
   CheckCircle2,
@@ -124,6 +125,22 @@ export function CabinetView({ locale }: { locale: Locale }) {
   }
 
   if (!user) {
+    if (PILOT_MODE) {
+      return (
+        <div className="max-w-2xl mx-auto py-12 text-center">
+          <div className="glass-strong rounded-3xl p-8 sm:p-10 shadow-luxury border border-slate-200">
+            <div className="grid h-14 w-14 place-items-center rounded-2xl bg-pine text-white mx-auto mb-4 font-bold">AQ</div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">{m.cabinetGuestTitle}</h1>
+            <p className="mt-2 text-sm text-slate-500 max-w-md mx-auto">{m.cabinetGuestLead}</p>
+            <div className="mt-6">
+              <Link href={`/${locale}/login`} className="btn-ice font-semibold">
+                {m.navLogin}
+              </Link>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="max-w-2xl mx-auto py-12 text-center">
         <div className="glass-strong rounded-3xl p-8 sm:p-10 shadow-luxury border border-slate-200">
@@ -163,7 +180,7 @@ export function CabinetView({ locale }: { locale: Locale }) {
                 <span className="pill text-[10px] text-slate-700 bg-slate-50 border-slate-200 font-bold">
                   {roleLabel(user.role)}
                 </span>
-                {user.pilot === "engicon" ? (
+                {!PILOT_MODE && user.pilot === "engicon" ? (
                   <span className="pill text-[10px] text-white bg-[#2F5B8A] border-[#2F5B8A] font-bold">Пилот Engicon</span>
                 ) : null}
               </div>
@@ -177,20 +194,24 @@ export function CabinetView({ locale }: { locale: Locale }) {
           </div>
 
           <div className="flex items-center gap-2">
-            <Link
-              href={`/${locale}/crm`}
-              className="btn-ice text-xs font-semibold !py-2 !px-4 shadow-navy flex items-center gap-1.5"
-            >
-              <Briefcase className="h-3.5 w-3.5 text-amber-300" />
-              <span>Открыть CRM</span>
-            </Link>
-            <Link
-              href={`/${locale}/chat`}
-              className="btn-ghost text-xs font-semibold !py-2 !px-4 flex items-center gap-1.5"
-            >
-              <MessageSquare className="h-3.5 w-3.5 text-pine" />
-              <span>Сообщения</span>
-            </Link>
+            {!PILOT_MODE || user.role === "owner" || user.role === "admin" ? (
+              <Link
+                href={`/${locale}/crm`}
+                className="btn-ice text-xs font-semibold !py-2 !px-4 shadow-navy flex items-center gap-1.5"
+              >
+                <Briefcase className="h-3.5 w-3.5 text-amber-300" />
+                <span>Открыть CRM</span>
+              </Link>
+            ) : null}
+            {PILOT_MODE ? null : (
+              <Link
+                href={`/${locale}/chat`}
+                className="btn-ghost text-xs font-semibold !py-2 !px-4 flex items-center gap-1.5"
+              >
+                <MessageSquare className="h-3.5 w-3.5 text-pine" />
+                <span>Сообщения</span>
+              </Link>
+            )}
           </div>
         </div>
 
@@ -205,9 +226,11 @@ export function CabinetView({ locale }: { locale: Locale }) {
             <h2 className="text-xl font-bold text-slate-900">{m.myOrders}</h2>
             <p className="text-xs text-slate-500 mt-0.5">Договоры подряда, изысканий и технического надзора</p>
           </div>
-          <Link href={`/${locale}/specialists`} className="text-xs font-bold text-pine hover:underline">
-            + Новый заказ услуги
-          </Link>
+          {PILOT_MODE ? null : (
+            <Link href={`/${locale}/specialists`} className="text-xs font-bold text-pine hover:underline">
+              + Новый заказ услуги
+            </Link>
+          )}
         </div>
 
         <div className="grid gap-3">
@@ -238,7 +261,7 @@ export function CabinetView({ locale }: { locale: Locale }) {
               ) : null}
 
               <div className="flex flex-wrap items-center gap-3 mt-4 pt-3 border-t border-slate-100 text-xs font-semibold">
-                {o.thread_id ? (
+                {!PILOT_MODE && o.thread_id ? (
                   <Link
                     href={`/${locale}/chat/${o.thread_id}`}
                     className="text-pine hover:underline flex items-center gap-1"
@@ -433,9 +456,11 @@ export function CabinetView({ locale }: { locale: Locale }) {
             <h2 className="text-xl font-bold text-slate-900">{m.matOrders}</h2>
             <p className="text-xs text-slate-500 mt-0.5">Поставки бетона, кирпича, арматуры и смесей</p>
           </div>
-          <Link href={`/${locale}/materials`} className="text-xs font-bold text-pine hover:underline">
-            + Каталог материалов
-          </Link>
+          {PILOT_MODE ? null : (
+            <Link href={`/${locale}/materials`} className="text-xs font-bold text-pine hover:underline">
+              + Каталог материалов
+            </Link>
+          )}
         </div>
 
         <div className="grid gap-3">

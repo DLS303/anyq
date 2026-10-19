@@ -3,6 +3,7 @@ import { fetchMaterials, fetchSpecialists } from "@/lib/api";
 import { MATERIAL_CAT, CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import { t } from "@/i18n/messages";
 import type { Locale } from "@/lib/types";
+import { PILOT_MODE } from "@/lib/pilot";
 import { HomeStage } from "@/components/home/HomeStage";
 import { HomeRise } from "@/components/home/HomeRise";
 import {
@@ -17,8 +18,8 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   const { locale: raw } = await params;
   const locale = (raw === "kk" ? "kk" : "ru") as Locale;
   const m = t(locale);
-  const specialists = await fetchSpecialists().catch(() => []);
-  const materials = await fetchMaterials().catch(() => []);
+  const specialists = PILOT_MODE ? [] : await fetchSpecialists().catch(() => []);
+  const materials = PILOT_MODE ? [] : await fetchMaterials().catch(() => []);
 
   return (
     <div className="grid grid-cols-1">
@@ -36,6 +37,8 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
             aria-hidden
           />
           <div className="grid gap-12 pt-6 sm:gap-16 sm:pt-10">
+      {PILOT_MODE ? null : (
+      <>
       {/* Materials Showcase with Quick Action Buttons */}
       <section className="home-rise">
         <div className="flex items-end justify-between mb-5">
@@ -156,6 +159,8 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
           ))}
         </div>
       </section>
+      </>
+      )}
 
       {/* Enterprise Standards & Trust Banner */}
       <section className="home-rise bg-gradient-to-br from-slate-900 to-pine text-white rounded-3xl p-8 sm:p-10 shadow-2xl">

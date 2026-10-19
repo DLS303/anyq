@@ -5,6 +5,7 @@ import Link from "next/link";
 import { fetchProjects } from "@/lib/api";
 import { money } from "@/lib/format";
 import { t } from "@/i18n/messages";
+import { PILOT_MODE } from "@/lib/pilot";
 import type { Locale } from "@/lib/types";
 import { useParams } from "next/navigation";
 
@@ -30,10 +31,11 @@ export default function SiteListPage() {
 
   return (
     <div>
-      <p className="text-[11px] uppercase tracking-wider text-sand">Procore playbook · field to office</p>
-      <h1 className="text-2xl sm:text-4xl font-medium tracking-tight mt-2 mb-2">{m.navSite}</h1>
+      <h1 className="text-2xl sm:text-4xl font-medium tracking-tight mt-2 mb-2">{PILOT_MODE ? m.navObjects : m.navSite}</h1>
       <p className="text-ink/60 mb-6 max-w-2xl">
-        Журнал, RFI, согласования, дефекты, инспекции, ТБ, актуальный комплект чертежей, график, бюджет и табель — один проект, одна правда.
+        {PILOT_MODE
+          ? m.siteLead
+          : "Журнал, RFI, согласования, дефекты, инспекции, ТБ, актуальный комплект чертежей, график, бюджет и табель — один проект, одна правда."}
       </p>
       <div className="grid gap-3">
         {items.map((s) => (
@@ -43,7 +45,9 @@ export default function SiteListPage() {
                 <h2 className="font-serif text-2xl">{s.project.title}</h2>
                 <p className="text-sm text-ink/55 mt-1">{s.project.address}</p>
               </div>
-              <p className="text-xs uppercase tracking-wider">{s.health}</p>
+              <p className="text-xs uppercase tracking-wider">
+                {PILOT_MODE ? (s.health === "green" ? m.healthOk : s.health === "red" ? m.healthBad : m.healthWarn) : s.health}
+              </p>
             </div>
             <p className="text-sm mt-3">
               {money(s.budget_kzt, locale)} · RFI {s.open_rfi} · punch {s.open_punch}

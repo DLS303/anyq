@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const LOCALES = ["ru", "kk"];
 const LAND = ["/catalog", "/plots", "/publish", "/compare", "/moderation"];
+const PILOT = process.env.NEXT_PUBLIC_PILOT_MODE === "1";
+const PILOT_HIDDEN = ["/specialists", "/control", "/chat", ...LAND];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -23,7 +25,8 @@ export function middleware(request: NextRequest) {
   }
   const locale = pathname.startsWith("/kk") ? "kk" : "ru";
   const rest = pathname.replace(/^\/(ru|kk)/, "") || "/";
-  if (LAND.some((p) => rest === p || rest.startsWith(`${p}/`))) {
+  const hidden = PILOT ? PILOT_HIDDEN : LAND;
+  if (hidden.some((p) => rest === p || rest.startsWith(`${p}/`))) {
     const url = request.nextUrl.clone();
     url.pathname = `/${locale}`;
     return NextResponse.redirect(url);
