@@ -317,7 +317,7 @@ def get_project(pid: str, user: User = Depends(require_user)):
 
 @router.get("/projects/{pid}/bundle")
 def bundle(pid: str, user: User = Depends(require_user)):
-    p = _guard_pid(user, pid)
+    p = _member_or_404(user, pid)
     company_id = project_company_id(p)
     flags = flag_map(company_id)
     data = {
