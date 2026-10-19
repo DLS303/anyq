@@ -268,15 +268,14 @@ def test_ready_503_when_database_is_down(monkeypatch):
 
 
 def test_probe_uses_private_engine_with_two_second_timeout(monkeypatch):
-    from sqlalchemy.engine import make_url
-
     engine = health_router._probe_engine
     assert engine.pool.__class__ is health_router.NullPool
     params = inspect.getclosurevars(engine.pool._creator).nonlocals["cparams"]
-    expected = health_router._probe_connect_args(store._sql.url)
-    for key, value in expected.items():
-        assert params[key] == value
-    assert engine.url == make_url(store._sql.url)
+    if store._sql.url.startswith("sqlite"):
+        assert params["timeout"] == 2
+    else:
+        assert params["connect_timeout"] == 2
+    assert engine.url.render_as_string(hide_password=False) == store._sql.url
 
     def fail_create(*_args, **_kwargs):
         raise AssertionError("probe engine is created per request")
