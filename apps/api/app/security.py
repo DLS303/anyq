@@ -42,9 +42,14 @@ class PublicRobotsMiddleware:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers") or [])
                 path = str(scope.get("path", ""))
-                if path.startswith("/v1/public/rfi/") or path == "/v1/public/rfi":
+                material = path.startswith("/v1/public/material/") or path == "/v1/public/material"
+                token_page = material or path.startswith("/v1/public/rfi/") or path == "/v1/public/rfi"
+                if token_page:
                     headers = [(name, value) for name, value in headers if name.lower() != b"referrer-policy"]
                     headers.append((b"referrer-policy", b"no-referrer"))
+                if material:
+                    headers = [(name, value) for name, value in headers if name.lower() != b"cache-control"]
+                    headers.append((b"cache-control", b"no-store"))
                 existing = {name.lower() for name, _value in headers}
                 extra = (
                     (b"x-robots-tag", b"noindex, nofollow"),

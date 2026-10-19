@@ -188,11 +188,44 @@ def upgrade() -> None:
         "material_approval_steps",
         ["approval_id", "step_order"],
     )
-    op.create_index("ix_access_tokens_entity_id", "access_tokens", ["entity_id"])
+    op.create_table(
+        "material_approval_links",
+        sa.Column("id", sa.String(length=36), primary_key=True),
+        sa.Column("company_id", sa.String(length=180), nullable=False),
+        sa.Column("project_id", sa.String(length=80), nullable=False),
+        sa.Column("purpose", sa.String(length=32), nullable=False),
+        sa.Column("token_sha256", sa.String(length=64), nullable=False),
+        sa.Column("entity_id", sa.String(length=36), nullable=False),
+        sa.ForeignKeyConstraint(["entity_id"], ["material_approvals.id"], name="fk_material_approval_links_entity"),
+        sa.Column("expires_at", sa.String(length=40), nullable=False),
+        sa.Column("used_at", sa.String(length=40), nullable=True),
+        sa.Column("revoked_at", sa.String(length=40), nullable=True),
+        sa.Column("created_by", sa.String(length=80), nullable=False),
+        sa.Column("updated_by", sa.String(length=80), nullable=False),
+        sa.Column("created_at", sa.String(length=40), nullable=False),
+        sa.Column("updated_at", sa.String(length=40), nullable=False),
+        sa.Column("row_version", sa.Integer(), nullable=False),
+        sa.Column("deleted_at", sa.String(length=40), nullable=True),
+    )
+    op.create_index(
+        "ix_material_approval_links_token_sha256",
+        "material_approval_links",
+        ["token_sha256"],
+        unique=True,
+    )
+    op.create_index("ix_material_approval_links_entity_id", "material_approval_links", ["entity_id"])
+    op.create_index(
+        "ix_material_approval_links_company_updated",
+        "material_approval_links",
+        ["company_id", "updated_at"],
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_access_tokens_entity_id", table_name="access_tokens")
+    op.drop_index("ix_material_approval_links_company_updated", table_name="material_approval_links")
+    op.drop_index("ix_material_approval_links_entity_id", table_name="material_approval_links")
+    op.drop_index("ix_material_approval_links_token_sha256", table_name="material_approval_links")
+    op.drop_table("material_approval_links")
     op.drop_index("ix_material_approval_steps_approval_order", table_name="material_approval_steps")
     op.drop_index("ix_material_approval_steps_company_updated", table_name="material_approval_steps")
     op.drop_table("material_approval_steps")

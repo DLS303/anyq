@@ -5,7 +5,18 @@ Kept off the store metadata. Revision 0009 creates them with op.create_table.
 
 from __future__ import annotations
 
-from sqlalchemy import Column, Float, Index, Integer, MetaData, String, Table, Text, text
+from sqlalchemy import (
+    Column,
+    Float,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    text,
+)
 
 metadata = MetaData()
 
@@ -152,4 +163,28 @@ material_approval_steps = Table(
     Column("deleted_at", String(40)),
     Index("ix_material_approval_steps_company_updated", "company_id", "updated_at"),
     Index("ix_material_approval_steps_approval_order", "approval_id", "step_order"),
+)
+
+material_approval_links = Table(
+    "material_approval_links",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("company_id", String(180), nullable=False),
+    Column("project_id", String(80), nullable=False),
+    Column("purpose", String(32), nullable=False),
+    Column("token_sha256", String(64), nullable=False),
+    Column("entity_id", String(36), nullable=False),
+    ForeignKeyConstraint(["entity_id"], ["material_approvals.id"], name="fk_material_approval_links_entity"),
+    Column("expires_at", String(40), nullable=False),
+    Column("used_at", String(40)),
+    Column("revoked_at", String(40)),
+    Column("created_by", String(80), nullable=False),
+    Column("updated_by", String(80), nullable=False),
+    Column("created_at", String(40), nullable=False),
+    Column("updated_at", String(40), nullable=False),
+    Column("row_version", Integer, nullable=False),
+    Column("deleted_at", String(40)),
+    Index("ix_material_approval_links_token_sha256", "token_sha256", unique=True),
+    Index("ix_material_approval_links_entity_id", "entity_id"),
+    Index("ix_material_approval_links_company_updated", "company_id", "updated_at"),
 )

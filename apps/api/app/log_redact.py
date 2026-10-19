@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
-_TOKEN_PATH = re.compile(r"((?:/v1/public/rfi/|/[a-z]{2}/r/rfi/))[^/?\s\"']+")
+_TOKEN_PATH = re.compile(r"((?:/v1/public/(?:rfi|material)/|/[a-z]{2}/r/(?:rfi|material)/))[^/?\s\"']+")
 _INSTALLED = False
 
 

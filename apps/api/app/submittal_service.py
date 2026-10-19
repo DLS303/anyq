@@ -21,15 +21,20 @@ from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from app import audit
 from app.company_features import feature_open_for_company, project_company_id
 from app.media import strip_image, strip_pdf_author
-from app.paths import discard_temp, publish_exclusive, resolve_stored_file, write_exclusive_temp
-from app.procurement_calc import clean_note, strip_contacts
-from app.rfi_service import PUSH_BODY, add_business_days, push_payload
-from app.rfi_tables import access_tokens
+from app.paths import (
+    discard_temp,
+    publish_exclusive,
+    resolve_stored_file,
+    write_exclusive_temp,
+)
+from app.procurement_calc import strip_contacts
+from app.rfi_service import add_business_days, push_payload
 from app.shares import hashes_match, new_share_token, parse_expiry, token_hash
 from app.store import store
 from app.submittal_tables import (
     material_approval_analogs,
     material_approval_files,
+    material_approval_links,
     material_approval_specs,
     material_approval_steps,
     material_approval_suppliers,
@@ -82,6 +87,21 @@ def _text(value: str, limit: int, *, required: bool = False) -> str:
 
 def _conflict() -> None:
     raise HTTPException(status_code=409, detail="Изменено другим")
+
+
+def _deny() -> None:
+    raise HTTPException(status_code=403, detail="Недостаточно прав")
+
+
+def _owner_id(project_id: str) -> str:
+    project = store.get_project(project_id)
+    if project is None:
+        return ""
+    return project.owner_id or ""
+
+
+def _is_owner(user, project_id: str) -> bool:
+    return user is not None and user.id == _owner_id(project_id)
 
 
 def _member(project, user_id: str) -> bool:
@@ -160,17 +180,19 @@ def _cas(session, approval_id: str, version: int, values: dict, *, updated_by: s
 
 def _revoke_links(session, entity_id: str, stamp: str, actor: str) -> None:
     session.execute(
-        update(access_tokens)
+        update(material_approval_links)
         .where(
-            access_tokens.c.entity_id == entity_id,
-            access_tokens.c.purpose == PURPOSE,
-            access_tokens.c.deleted_at.is_(None),
+            material_approval_links.c.entity_id == entity_id,
+            material_approval_links.c.purpose == PURPOSE,
+            material_approval_links.c.deleted_at.is_(None),
+            material_approval_links.c.revoked_at.is_(None),
         )
         .values(
             deleted_at=stamp,
+            revoked_at=stamp,
             updated_at=stamp,
             updated_by=actor or "",
-            row_version=access_tokens.c.row_version + 1,
+            row_version=material_approval_links.c.row_version + 1,
         )
     )
 
@@ -563,9 +585,12 @@ def set_status(
             _require_ready(session, row)
             values["status"] = "in_review"
         elif status == "withdrawn":
-            if previous not in {"draft", "in_review"} or (user is not None and row.author_id != user.id):
+            if previous not in {"draft", "in_review"}:
                 session.rollback()
                 raise HTTPException(status_code=409, detail="Этот переход статуса недоступен")
+            if user is None or (row.author_id != user.id and not _is_owner(user, row.project_id)):
+                session.rollback()
+                _deny()
             values["status"] = "withdrawn"
             _revoke_links(session, approval_id, stamp, actor)
         elif status in DECISIONS:
@@ -577,9 +602,13 @@ def set_status(
             if pending is None:
                 session.rollback()
                 raise HTTPException(status_code=409, detail="Этот переход статуса недоступен")
-            if user is not None and pending.approver_user_id != user.id:
+            if user is None:
+                if token_id is None:
+                    session.rollback()
+                    _deny()
+            elif pending.approver_user_id != user.id:
                 session.rollback()
-                raise HTTPException(status_code=409, detail="Этот переход статуса недоступен")
+                _deny()
             if status in NOTE_REQUIRED and not note:
                 session.rollback()
                 raise HTTPException(status_code=409, detail="Этот переход статуса недоступен")
@@ -609,12 +638,16 @@ def set_status(
                 values["comment"] = note
             if token_id is not None:
                 used = session.execute(
-                    update(access_tokens)
+                    update(material_approval_links)
                     .where(
-                        access_tokens.c.id == token_id,
-                        access_tokens.c.used_at.is_(None),
-                        access_tokens.c.deleted_at.is_(None),
-                        access_tokens.c.row_version == int(token_version or 0),
+                        material_approval_links.c.id == token_id,
+                        material_approval_links.c.entity_id == approval_id,
+                        material_approval_links.c.purpose == PURPOSE,
+                        material_approval_links.c.used_at.is_(None),
+                        material_approval_links.c.expires_at > stamp,
+                        material_approval_links.c.deleted_at.is_(None),
+                        material_approval_links.c.revoked_at.is_(None),
+                        material_approval_links.c.row_version == int(token_version or 0),
                     )
                     .values(
                         used_at=stamp,
@@ -624,7 +657,12 @@ def set_status(
                     )
                 )
                 if used.rowcount != 1:
+                    fresh = session.execute(
+                        select(material_approval_links).where(material_approval_links.c.id == token_id)
+                    ).mappings().first()
                     session.rollback()
+                    if fresh is None or fresh.deleted_at or fresh.revoked_at or fresh.entity_id != approval_id:
+                        raise HTTPException(status_code=404, detail="Ссылка не найдена")
                     raise HTTPException(status_code=410, detail="Срок ссылки истёк")
             if final in TERMINAL:
                 _revoke_links(session, approval_id, stamp, actor)
@@ -654,6 +692,9 @@ def tombstone(user, approval_id: str, row_version: int) -> dict:
         row = _load(session, approval_id)
         if row is None or row.deleted_at:
             raise HTTPException(status_code=404, detail="Не найдено")
+        if not _is_owner(user, row.project_id):
+            session.rollback()
+            _deny()
         if int(row.row_version) != int(row_version):
             session.rollback()
             _conflict()
@@ -1012,7 +1053,7 @@ def create_link(user, access: dict, approval_id: str, body: dict) -> dict:
         if row.status != "in_review":
             raise HTTPException(status_code=409, detail="Этот переход статуса недоступен")
         session.execute(
-            access_tokens.insert().values(
+            material_approval_links.insert().values(
                 id=link_id,
                 company_id=access["company_id"],
                 project_id=access["project_id"],
@@ -1021,6 +1062,7 @@ def create_link(user, access: dict, approval_id: str, body: dict) -> dict:
                 entity_id=approval_id,
                 expires_at=expires.isoformat(timespec="seconds"),
                 used_at=None,
+                revoked_at=None,
                 created_by=user.id,
                 updated_by=user.id,
                 created_at=stamp,
@@ -1052,7 +1094,9 @@ def revoke_link(user, access: dict, approval_id: str, link_id: str) -> dict:
     session = store._sql.factory()
     try:
         row = _load(session, approval_id)
-        link = session.execute(select(access_tokens).where(access_tokens.c.id == link_id)).mappings().first()
+        link = session.execute(
+            select(material_approval_links).where(material_approval_links.c.id == link_id)
+        ).mappings().first()
         if (
             row is None
             or row.deleted_at
@@ -1061,17 +1105,24 @@ def revoke_link(user, access: dict, approval_id: str, link_id: str) -> dict:
             or link.purpose != PURPOSE
             or link.company_id != access["company_id"]
             or link.deleted_at
+            or link.revoked_at
         ):
             raise HTTPException(status_code=404, detail="Не найдено")
+        if user.id != link.created_by and not _is_owner(user, row.project_id):
+            session.rollback()
+            _deny()
         spent = session.execute(
-            update(access_tokens)
+            update(material_approval_links)
             .where(
-                access_tokens.c.id == link_id,
-                access_tokens.c.row_version == int(link.row_version),
-                access_tokens.c.deleted_at.is_(None),
+                material_approval_links.c.id == link_id,
+                material_approval_links.c.entity_id == approval_id,
+                material_approval_links.c.row_version == int(link.row_version),
+                material_approval_links.c.deleted_at.is_(None),
+                material_approval_links.c.revoked_at.is_(None),
             )
             .values(
                 deleted_at=stamp,
+                revoked_at=stamp,
                 updated_at=stamp,
                 updated_by=user.id,
                 row_version=int(link.row_version) + 1,
@@ -1101,13 +1152,13 @@ def _token_row(token: str):
     digest = token_hash(token)
     with store._sql.factory() as session:
         rows = session.execute(
-            select(access_tokens).where(
-                access_tokens.c.token_sha256 == digest,
-                access_tokens.c.purpose == PURPOSE,
+            select(material_approval_links).where(
+                material_approval_links.c.token_sha256 == digest,
+                material_approval_links.c.purpose == PURPOSE,
             )
         ).mappings().all()
     match = next((row for row in rows if hashes_match(row.token_sha256, digest)), None)
-    if match is None or match.deleted_at:
+    if match is None or match.deleted_at or match.revoked_at:
         return None, 404
     expires = parse_expiry(match.expires_at)
     if expires is None or expires <= datetime.now(UTC):
@@ -1196,9 +1247,7 @@ def approval_still_valid(approval_id: str | None, project_id: str, brand: str = 
             row = _load(session, approval_id)
             if row is None or row.deleted_at or row.project_id != project_id or row.status not in APPROVED:
                 return False
-            if brand and _brand_key(brand) not in _allowed_brands(session, row):
-                return False
-            return True
+            return not brand or _brand_key(brand) in _allowed_brands(session, row)
     except (OperationalError, ProgrammingError):
         return False
 

@@ -13,6 +13,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import select
+
 from app.company_features import company_id_of
 from app.main import app
 from app.paths import publish_exclusive, uploads_dir, write_exclusive_temp
@@ -340,6 +341,7 @@ def test_foreign_company_status_and_files(monkeypatch):
     public = client.get(f"/v1/public/material/{token}")
     assert public.status_code == 200, public.text
     assert public.headers["referrer-policy"] == "no-referrer"
+    assert public.headers["cache-control"] == "no-store"
     assert public.headers["x-robots-tag"] == "noindex, nofollow"
     assert "+7700" not in public.text
     decided = client.post(f"/v1/public/material/{token}", json={"decision": "approved"})
@@ -570,5 +572,346 @@ def test_alembic_material_revision_is_one_head(tmp_path):
     assert "ix_material_approval_files_company_sha256" in indexes
     assert "ix_material_approval_files_file_id" in indexes
     assert "ix_access_tokens_entity_id" in indexes
+    assert "material_approval_links" in tables
+    assert "ix_material_approval_links_entity_id" in indexes
+    assert "ix_material_approval_links_token_sha256" in indexes
+    link_columns = {row[1] for row in connection.execute("PRAGMA table_info(material_approval_links)")}
+    assert {"token_sha256", "expires_at", "revoked_at", "used_at", "deleted_at", "entity_id"} <= link_columns
     connection.close()
-    assert "data/db.json" not in Path(__file__).read_text(encoding="utf-8")
+    assert "data/" + "db.json" not in Path(__file__).read_text(encoding="utf-8")
+
+
+def _person(email: str, bin_no: str, role: str) -> tuple[str, User]:
+    _register(email, bin_no, "buyer")
+    _promote(email, role)
+    login = client.post(
+        "/v1/auth/login",
+        json={"email": email, "password": "secret12", "consent_offer_pd": True},
+        headers={"User-Agent": "anyq-test"},
+    )
+    assert login.status_code == 200, login.text
+    user = store.get_user_by_email(email)
+    assert user is not None
+    return login.json()["data"]["token"], user
+
+
+def _join(owner_token: str, pid: str, email: str, role: str) -> None:
+    added = client.post(
+        f"/v1/site/projects/{pid}/members",
+        json={"email": email, "role": role},
+        headers=_auth(owner_token),
+    )
+    assert added.status_code == 200, added.text
+
+
+def _review(token: str, pid: str, item: dict) -> dict:
+    stored = _upload(token, pid, item, "cert_demo.pdf", "cert")
+    sent = client.post(
+        f"/v1/site/material-approvals/{item['id']}/status",
+        json={"status": "in_review", "row_version": stored["row_version"]},
+        headers=_auth(token),
+    )
+    assert sent.status_code == 200, sent.text
+    return sent.json()["data"]
+
+
+def test_roles_limit_decision_withdraw_and_delete(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    bin_no = "000000000094"
+    owner_token, _owner_user = _owner("role-owner@example.com", bin_no)
+    foreman_token, foreman = _person("role-foreman@example.com", bin_no, "foreman")
+    approver_token, approver = _person("role-approver@example.com", bin_no, "supervisor")
+    buyer_token, buyer = _person("role-buyer@example.com", bin_no, "procurement")
+    pid = _project(owner_token, "Role yard")
+    _flag(owner_token, True, 0)
+    _join(owner_token, pid, foreman.email, "foreman")
+    _join(owner_token, pid, approver.email, "supervisor")
+    _join(owner_token, pid, buyer.email, "procurement")
+
+    created = _create(foreman_token, pid, approver.id)
+    assert created["author_id"] == foreman.id
+    reviewing = _review(foreman_token, pid, created)
+    for token in (buyer_token, owner_token, foreman_token):
+        denied = client.post(
+            f"/v1/site/material-approvals/{created['id']}/status",
+            json={"status": "approved", "row_version": reviewing["row_version"]},
+            headers=_auth(token),
+        )
+        assert denied.status_code == 403, denied.text
+    approved = client.post(
+        f"/v1/site/material-approvals/{created['id']}/status",
+        json={"status": "approved", "row_version": reviewing["row_version"]},
+        headers=_auth(approver_token),
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["data"]["status"] == "approved"
+
+    draft = _create(foreman_token, pid, approver.id, id=str(uuid4()))
+    for token in (buyer_token, approver_token):
+        blocked = client.post(
+            f"/v1/site/material-approvals/{draft['id']}/status",
+            json={"status": "withdrawn", "row_version": draft["row_version"]},
+            headers=_auth(token),
+        )
+        assert blocked.status_code == 403, blocked.text
+    withdrawn = client.post(
+        f"/v1/site/material-approvals/{draft['id']}/status",
+        json={"status": "withdrawn", "row_version": draft["row_version"]},
+        headers=_auth(foreman_token),
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    owned = _create(foreman_token, pid, approver.id, id=str(uuid4()))
+    by_owner = client.post(
+        f"/v1/site/material-approvals/{owned['id']}/status",
+        json={"status": "withdrawn", "row_version": owned["row_version"]},
+        headers=_auth(owner_token),
+    )
+    assert by_owner.status_code == 200, by_owner.text
+
+    removable = _create(foreman_token, pid, approver.id, id=str(uuid4()))
+    for token in (foreman_token, buyer_token, approver_token):
+        kept = client.post(
+            f"/v1/site/material-approvals/{removable['id']}/delete",
+            json={"row_version": removable["row_version"]},
+            headers=_auth(token),
+        )
+        assert kept.status_code == 403, kept.text
+    removed = client.post(
+        f"/v1/site/material-approvals/{removable['id']}/delete",
+        json={"row_version": removable["row_version"]},
+        headers=_auth(owner_token),
+    )
+    assert removed.status_code == 200, removed.text
+    assert client.get(f"/v1/site/material-approvals/{removable['id']}", headers=_auth(owner_token)).status_code == 404
+
+
+def test_decision_link_is_single_use_and_revocable(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    bin_no = "000000000093"
+    owner_token, owner = _owner("link-owner@example.com", bin_no)
+    author_token, author = _person("link-author@example.com", bin_no, "foreman")
+    approver_token, approver = _person("link-approver@example.com", bin_no, "supervisor")
+    other_token, _other = _person("link-other@example.com", bin_no, "customer")
+    pid = _project(owner_token, "Link yard")
+    _flag(owner_token, True, 0)
+    _join(owner_token, pid, author.email, "foreman")
+    _join(owner_token, pid, approver.email, "supervisor")
+    _join(owner_token, pid, "link-other@example.com", "customer")
+
+    first = _review(author_token, pid, _create(author_token, pid, approver.id))
+    second = _review(author_token, pid, _create(author_token, pid, approver.id, id=str(uuid4())))
+    link = client.post(
+        f"/v1/site/projects/{pid}/material-approvals/{first['id']}/link",
+        json={"id": str(uuid4()), "expires_in_days": 14},
+        headers=_auth(author_token),
+    )
+    assert link.status_code == 200, link.text
+    body = link.json()["data"]
+    token = body["token"]
+    assert len(token) >= 43
+    from app.shares import token_hash
+    from app.submittal_tables import material_approval_links, material_approvals
+
+    with store._sql.factory() as session:
+        stored = session.execute(
+            select(material_approval_links).where(material_approval_links.c.id == body["id"])
+        ).mappings().one()
+    assert stored.token_sha256 == token_hash(token)
+    assert token not in stored.token_sha256
+    assert stored.entity_id == first["id"]
+    assert stored.revoked_at is None
+
+    refused = client.post(
+        f"/v1/site/projects/{pid}/material-approvals/{first['id']}/links/{body['id']}/revoke",
+        headers=_auth(other_token),
+    )
+    assert refused.status_code == 403, refused.text
+    opened = client.get(f"/v1/public/material/{token}")
+    assert opened.status_code == 200, opened.text
+    assert opened.headers["cache-control"] == "no-store"
+    assert opened.headers["referrer-policy"] == "no-referrer"
+    assert approver.id not in opened.text
+    assert "link-author@example.com" not in opened.text
+    assert "+7700" not in opened.text
+    from app.log_redact import redact_text
+
+    assert token not in redact_text(f"GET /v1/public/material/{token} /ru/r/material/{token}")
+
+    from fastapi import HTTPException
+
+    from app import submittal_service as svc
+
+    try:
+        svc.set_status(None, second["id"], "approved", second["row_version"], "", token_id=body["id"], token_version=1)
+        crossed = False
+    except HTTPException as exc:
+        crossed = exc.status_code == 404
+    assert crossed
+    assert client.get(f"/v1/site/material-approvals/{second['id']}", headers=_auth(owner_token)).json()["data"]["status"] == "in_review"
+
+    decided = client.post(f"/v1/public/material/{token}", json={"decision": "approved"})
+    assert decided.status_code == 200, decided.text
+    assert decided.headers["cache-control"] == "no-store"
+    used = client.post(f"/v1/public/material/{token}", json={"decision": "rejected", "comment": "again"})
+    assert used.status_code == 404
+    assert used.headers["referrer-policy"] == "no-referrer"
+    assert client.get(f"/v1/site/material-approvals/{second['id']}", headers=_auth(owner_token)).json()["data"]["status"] == "in_review"
+
+    expiring = client.post(
+        f"/v1/site/projects/{pid}/material-approvals/{second['id']}/link",
+        json={"id": str(uuid4())},
+        headers=_auth(author_token),
+    )
+    assert expiring.status_code == 200, expiring.text
+    expiring_id = expiring.json()["data"]["id"]
+    expiring_token = expiring.json()["data"]["token"]
+    with store._sql.factory() as session:
+        session.execute(
+            material_approval_links.update()
+            .where(material_approval_links.c.id == expiring_id)
+            .values(expires_at="2020-01-01T00:00:00+00:00")
+        )
+        session.commit()
+    expired = client.get(f"/v1/public/material/{expiring_token}")
+    assert expired.status_code == 410
+    assert expired.headers["cache-control"] == "no-store"
+    assert client.post(f"/v1/public/material/{expiring_token}", json={"decision": "approved"}).status_code == 410
+    with store._sql.factory() as session:
+        current = session.execute(
+            select(material_approvals.c.row_version).where(material_approvals.c.id == second["id"])
+        ).scalar()
+    try:
+        svc.set_status(
+            None, second["id"], "approved", int(current), "", token_id=expiring_id, token_version=1
+        )
+        expired_direct = False
+    except HTTPException as exc:
+        expired_direct = exc.status_code == 410
+    assert expired_direct
+
+    spent = client.post(
+        f"/v1/site/projects/{pid}/material-approvals/{second['id']}/link",
+        json={"id": str(uuid4())},
+        headers=_auth(author_token),
+    )
+    spent_id = spent.json()["data"]["id"]
+    spent_token = spent.json()["data"]["token"]
+    with store._sql.factory() as session:
+        current = session.execute(
+            select(material_approvals.c.row_version).where(material_approvals.c.id == second["id"])
+        ).scalar()
+        session.execute(
+            material_approval_links.update()
+            .where(material_approval_links.c.id == spent_id)
+            .values(used_at="2026-10-19T00:00:00+00:00")
+        )
+        session.commit()
+    assert client.get(f"/v1/public/material/{spent_token}").status_code == 200
+    assert client.post(f"/v1/public/material/{spent_token}", json={"decision": "approved"}).status_code == 410
+    try:
+        svc.set_status(None, second["id"], "approved", int(current), "", token_id=spent_id, token_version=1)
+        spent_direct = False
+    except HTTPException as exc:
+        spent_direct = exc.status_code == 410
+    assert spent_direct
+
+    owned = client.post(
+        f"/v1/site/projects/{pid}/material-approvals/{second['id']}/link",
+        json={"id": str(uuid4())},
+        headers=_auth(author_token),
+    )
+    owned_id = owned.json()["data"]["id"]
+    owned_token = owned.json()["data"]["token"]
+    revoked = client.post(
+        f"/v1/site/projects/{pid}/material-approvals/{second['id']}/links/{owned_id}/revoke",
+        headers=_auth(owner_token),
+    )
+    assert revoked.status_code == 200, revoked.text
+    assert client.get(f"/v1/public/material/{owned_token}").status_code == 404
+    assert client.post(f"/v1/public/material/{owned_token}", json={"decision": "approved"}).status_code == 404
+    with store._sql.factory() as session:
+        row = session.execute(
+            select(material_approval_links).where(material_approval_links.c.id == owned_id)
+        ).mappings().one()
+    assert row.revoked_at
+    assert row.deleted_at
+
+    from app.ratelimit import material_link_limiter
+
+    fresh = client.post(
+        f"/v1/site/projects/{pid}/material-approvals/{second['id']}/link",
+        json={"id": str(uuid4())},
+        headers=_auth(author_token),
+    )
+    fresh_token = fresh.json()["data"]["token"]
+    material_link_limiter.limit = 2
+    try:
+        ip = {"X-Forwarded-For": "203.0.113.10"}
+        assert client.get(f"/v1/public/material/{fresh_token}", headers=ip).status_code == 200
+        assert client.get(f"/v1/public/material/{fresh_token}", headers=ip).status_code == 200
+        limited = client.get(f"/v1/public/material/{fresh_token}", headers=ip)
+        assert limited.status_code == 429
+        assert limited.headers["cache-control"] == "no-store"
+        assert limited.headers["referrer-policy"] == "no-referrer"
+        assert (
+            client.get(f"/v1/public/material/{fresh_token}", headers={"X-Forwarded-For": "203.0.113.11"}).status_code
+            == 200
+        )
+    finally:
+        material_link_limiter.limit = 30
+    del approver_token, owner
+
+
+def test_requires_approval_clears_only_through_an_approved_card(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    bin_no = "000000000092"
+    owner_token, _owner_user = _owner("clear-owner@example.com", bin_no)
+    approver_token, approver = _person("clear-approver@example.com", bin_no, "supervisor")
+    pid = _project(owner_token, "Clear yard")
+    _flag(owner_token, True, 0)
+    _join(owner_token, pid, approver.email, "supervisor")
+    waiting = _review(owner_token, pid, _create(owner_token, pid, approver.id))
+    quick = client.post(
+        f"/v1/procurement/projects/{pid}/quick",
+        json={"title": waiting["name"], "unit": waiting["unit"], "qty": 1},
+        headers=_auth(owner_token),
+    )
+    assert quick.status_code == 200, quick.text
+    lid = quick.json()["data"]["line"]["id"]
+    marked = client.patch(
+        f"/v1/procurement/lines/{lid}",
+        json={"requires_approval": True, "approval_id": waiting["id"], "brand": waiting["brand"]},
+        headers=_auth(owner_token),
+    )
+    assert marked.status_code == 200, marked.text
+    assert marked.json()["data"]["requires_approval"] is True
+    direct = client.patch(
+        f"/v1/procurement/lines/{lid}",
+        json={"requires_approval": False},
+        headers=_auth(owner_token),
+    )
+    assert direct.status_code == 409, direct.text
+    assert store.proc_lines[lid].requires_approval is True
+    approved = client.post(
+        f"/v1/site/material-approvals/{waiting['id']}/status",
+        json={"status": "approved", "row_version": waiting["row_version"]},
+        headers=_auth(approver_token),
+    )
+    assert approved.status_code == 200, approved.text
+    still = client.patch(
+        f"/v1/procurement/lines/{lid}",
+        json={"requires_approval": False, "approval_id": waiting["id"]},
+        headers=_auth(owner_token),
+    )
+    assert still.status_code == 409, still.text
+    assert store.proc_lines[lid].requires_approval is True
+    cleared = client.patch(
+        f"/v1/procurement/lines/{lid}",
+        json={"approval_id": waiting["id"]},
+        headers=_auth(owner_token),
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["data"]["requires_approval"] is False
+    assert cleared.json()["data"]["approval_id"] == waiting["id"]
+    paths = app.openapi()["paths"]
+    assert not any("clear" in path and "approval" in path for path in paths)

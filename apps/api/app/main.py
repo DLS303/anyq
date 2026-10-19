@@ -26,8 +26,8 @@ from app.routers import (
     public,
     rfi,
     site,
-    submittals,
     specialists,
+    submittals,
 )
 from app.security import PublicRobotsMiddleware, SecurityHeadersMiddleware
 from app.sql_backend import ChangedByOther

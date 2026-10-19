@@ -67,3 +67,33 @@ class LoginRateLimiter:
 
 
 login_limiter = LoginRateLimiter()
+
+
+class PublicRateLimited(Exception):
+    def __init__(self) -> None:
+        super().__init__("Слишком много запросов")
+
+
+class IpRateLimiter:
+    """Per-IP window for a public link. Not tied to an account."""
+
+    def __init__(self, limit: int = 30, window_s: int = 60) -> None:
+        self.limit = limit
+        self.window_s = window_s
+        self._hits: dict[str, list[float]] = {}
+
+    def reset(self) -> None:
+        self._hits.clear()
+
+    def check(self, ip: str) -> None:
+        now = time.monotonic()
+        key = ip or ""
+        fresh = [stamp for stamp in self._hits.get(key, []) if now - stamp < self.window_s]
+        if len(fresh) >= self.limit:
+            self._hits[key] = fresh
+            raise PublicRateLimited()
+        fresh.append(now)
+        self._hits[key] = fresh
+
+
+material_link_limiter = IpRateLimiter()

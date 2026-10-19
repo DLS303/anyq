@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from app.company_features import require_feature
 from app.idempotency import IdempotencyConflict, run_idempotent
+from app.ratelimit import PublicRateLimited, material_link_limiter
 from app.schemas import User
 from app.store_procurement import request_from_approval
 from app.submittal_service import (
@@ -122,6 +132,20 @@ def _access(request: Request) -> dict:
 
 def _public_body(data: dict, status_code: int = 200) -> JSONResponse:
     return JSONResponse({"ok": True, "data": data}, status_code=status_code, headers=_PUBLIC_HEADERS)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
+def _limit_public(request: Request) -> None:
+    try:
+        material_link_limiter.check(_client_ip(request))
+    except PublicRateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
 
 
 @router.get("/projects/{pid}/material-approvals")
@@ -313,10 +337,12 @@ def get_pdf(pid: str, sid: str, request: Request, user: User = Depends(require_f
 
 
 @public.get("/material/{token}")
-def read_public_material(token: str):
+def read_public_material(token: str, request: Request):
+    _limit_public(request)
     return _public_body(public_read(token))
 
 
 @public.post("/material/{token}")
-def decide_public_material(token: str, body: PublicDecisionIn):
+def decide_public_material(token: str, body: PublicDecisionIn, request: Request):
+    _limit_public(request)
     return _public_body(public_decide(token, body.decision, body.comment))

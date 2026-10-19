@@ -631,6 +631,17 @@ def delete_offer(store, offer: ProcOffer) -> dict:
 
 def patch_line(store, line: ProcLine, payload: dict) -> dict:
     with store._lock:
+        if payload.get("requires_approval") is False:
+            project = store.get_project(_request_of_line(store, line).project_id)
+            from app.company_features import (
+                feature_open_for_company,
+                project_company_id,
+            )
+
+            if project is not None and feature_open_for_company(project_company_id(project), "submittals"):
+                from app.submittal_service import StatusConflict
+
+                raise StatusConflict("Этот переход статуса недоступен")
         if "qty" in payload:
             qty = float(payload["qty"])
             if qty <= 0:
@@ -651,21 +662,28 @@ def patch_line(store, line: ProcLine, payload: dict) -> dict:
             line.reference_source = clean_note(payload["reference_source"] or "", 200)
         if any(key in payload for key in ("requires_approval", "approval_id", "brand")):
             project = store.get_project(_request_of_line(store, line).project_id)
-            from app.company_features import feature_open_for_company, project_company_id
+            from app.company_features import (
+                feature_open_for_company,
+                project_company_id,
+            )
 
             if project is not None and feature_open_for_company(project_company_id(project), "submittals"):
-                if "requires_approval" in payload:
-                    line.requires_approval = bool(payload["requires_approval"])
+                from app.submittal_service import (
+                    approval_on_project,
+                    approval_still_valid,
+                )
+
+                if payload.get("requires_approval"):
+                    line.requires_approval = True
                 if "brand" in payload and payload["brand"] is not None:
                     line.brand = clean_note(payload["brand"] or "", 200)
                 if "approval_id" in payload:
                     approval_id = payload["approval_id"] or None
-                    if approval_id:
-                        from app.submittal_service import approval_on_project
-
-                        if not approval_on_project(approval_id, project.id):
-                            raise LookupError("Не найдено")
+                    if approval_id and not approval_on_project(approval_id, project.id):
+                        raise LookupError("Не найдено")
                     line.approval_id = approval_id
+                    if approval_id and approval_still_valid(approval_id, project.id, line.brand or ""):
+                        line.requires_approval = False
         _refresh(_request_of_line(store, line), _lines(store, line.request_id))
         store._save_unlocked()
         return line.model_dump()
