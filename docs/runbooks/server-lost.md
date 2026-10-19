@@ -8,9 +8,13 @@
 Алерты приходят в любое время. Шаги человека выполняют в рабочие часы
 (Asia/Almaty, UTC+5). Срок уровня считают в рабочих часах.
 
-`deploy/restore.sh` — будет добавлено. `pgbackrest` — будет добавлено.
-Пока вторая копия — это архивы `deploy/backup.sh`:
-`anyq-postgres-<штамп>.sql.gz` и `anyq-data-<штамп>.tar.gz`.
+Цель плана, не гарантия для клиента: RPO не больше 15 минут,
+RTO — `<цель-RTO>`. В письмо клиенту эти цифры не ставят.
+
+Базу поднимают только в образе `postgis/postgis:16-3.4`, из
+репозитория pgBackRest `--repo=2` (вторая точка в Казахстане).
+`deploy/restore.sh` — будет добавлено. Образ Alpine для базы
+не используют.
 
 ## Признаки
 
@@ -36,13 +40,11 @@
 
 ## Восстановление
 
-Источник — вторая копия в Казахстане. Каталог `/var/backups/anyq`
-на потерянном сервере недоступен, его не ждут.
-
-Плановая выгрузка архива во вторую точку скриптом — будет добавлено.
-Пока IT/MLOps в рабочие часы копирует архивы `deploy/backup.sh`
-на диск или сервер в Казахстане. На новом сервере берут уже
-лежащую там копию.
+Источник базы — репозиторий pgBackRest `--repo=2` в Казахстане.
+Каталог на потерянном сервере недоступен, его не ждут.
+Репозиторий за пределами Казахстана не используют.
+Пароль шифрования берут только из офлайн-хранилища
+`<офлайн-хранилище>`. В команду, карточку и git его не вставляют.
 
 ### Новый сервер
 
@@ -90,95 +92,70 @@ git checkout <ветка>
 проверка ждёт имя домена, а при неудаче скрипт пытается вернуть
 прежние образы. На новой машине прежнего выпуска нет.
 
-### Вторая копия
+### Репозиторий 2
 
-На новом сервере:
+На новом сервере PostgreSQL ещё не запущен. API не запускают,
+пока restore не закончен. Шаг migrate — отдельно и только если
+ревизия в `alembic_version` старше ожидаемой. `alembic downgrade`
+в бою запрещён.
 
-```bash
-mkdir -p /var/backups/anyq
-rsync -a \
-  "<вторая-копия-в-казахстане>/" \
-  /var/backups/anyq/
-ls -lh /var/backups/anyq
-gzip -t /var/backups/anyq/anyq-postgres-<штамп>.sql.gz
-tar -tzf /var/backups/anyq/anyq-data-<штамп>.tar.gz >/dev/null
-```
-
-Штамп выбирает координатор вместе с SQL-разработчиком и пишет его
-в карточку. Если `rsync` идёт с другой машины в Казахстане, в источнике
-стоит метка `<пользователь>@<вторая-копия-в-казахстане>:` и каталог
-архивов. Имя узла в репозиторий не подставляют.
-
-Когда появится `pgbackrest`, вместо архива `pg_dump` смотрят
-репозиторий второй точки (команды сейчас не запускают):
-
-```bash
-# будет добавлено
-# pgbackrest --stanza=anyq info
-# pgbackrest --stanza=anyq restore
-```
-
-Когда появится скрипт, ручную загрузку заменит:
-
-```bash
-# будет добавлено
-./deploy/restore.sh
-```
-
-### Загрузка на пустой контур
-
-Сначала поднимают только PostgreSQL, без API. Образ создаёт пустую
-базу `anyq`. Пока API не стартовал, миграции пустую базу не заполняют,
-и дамп `pg_dump` ложится в неё без `DROP DATABASE`.
+Образ базы:
 
 ```bash
 cd /opt/anyq
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml up -d postgres
-docker inspect -f '{{.State.Health.Status}}' anyq-postgres
-gunzip -c /var/backups/anyq/anyq-postgres-<штамп>.sql.gz \
-  | docker compose --env-file deploy/.env \
-    -f deploy/docker-compose.prod.yml exec -T postgres \
-    psql --username anyq --dbname anyq -v ON_ERROR_STOP=1
+cat > /tmp/anyq-postgres-image.yml <<'EOF'
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+EOF
 ```
 
-Если API уже успели запустить и в пустой базе появились объекты
-приложения, остановите API и загружайте дамп только в заново
-созданную пустую базу. Это стирает то, что успели записать уже
-на новом сервере, не архив:
+Файл в git не кладут. Метку `<timestamp>` пишут в карточку.
+Пароль шифрования в команду не подставляют: pgBackRest читает его
+из офлайн-хранилища.
+
+```bash
+pgbackrest info
+pgbackrest restore --delta --type=time \
+  --target='<timestamp>' --target-action=promote --repo=2
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml \
+  -f /tmp/anyq-postgres-image.yml up -d postgres
+pgbackrest check
+pgbackrest backup --type=full
+```
+
+`deploy/restore.sh` — будет добавлено.
+
+Если вместо репозитория 2 остался только логический дамп
+(`pg_dump --no-owner --no-privileges`), его грузят в пустую базу
+на этом же образе, как в [`docs/runbooks/db-down.md`](db-down.md):
+роль `anyq` без прав суперпользователя, затем
+
+```sql
+CREATE DATABASE anyq OWNER anyq
+  TEMPLATE template0
+  ENCODING 'UTF8'
+  LOCALE_PROVIDER icu
+  ICU_LOCALE 'ru-KZ';
+```
+
+и заново GRANT/REVOKE из `<скрипт-прав>`. Дамп владельцев и прав
+не содержит.
+
+Файлы тома `anyq-data` — не база. Перед любым tar PostgreSQL
+останавливают. Каталог внутри тома очищают по записи координатора.
+Образ Alpine не используют.
 
 ```bash
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml stop api
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml exec -T postgres \
-  psql --username anyq --dbname postgres -v ON_ERROR_STOP=1 \
-  -c 'DROP DATABASE IF EXISTS anyq WITH (FORCE);'
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml exec -T postgres \
-  psql --username anyq --dbname postgres -v ON_ERROR_STOP=1 \
-  -c 'CREATE DATABASE anyq OWNER anyq;'
-```
-
-После `CREATE DATABASE` повторите `gunzip` и `psql` из блока выше.
-
-Файлы тома `anyq-data` (команда очищает каталог внутри тома
-перед распаковкой):
-
-```bash
-docker run --rm \
+  -f deploy/docker-compose.prod.yml stop postgres api
+docker run --rm --entrypoint sh \
   -v anyq-data:/data \
   -v /var/backups/anyq:/backup:ro \
-  alpine:3.20 \
-  sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  postgis/postgis:16-3.4 \
+  -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 tar -C /data -xzf /backup/anyq-data-<штамп>.tar.gz'
-```
-
-Затем весь стек, всё ещё без публичного смоука `deploy.sh`:
-
-```bash
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml up -d
 ```
 
 Сайт пользователям не объявляют, пока не пройдена проверка
@@ -194,27 +171,51 @@ docker compose --env-file deploy/.env \
 
 Если прежняя машина позже снова появится в панели, в строй её
 не возвращают, пока собственник не запишет отдельное решение.
-Трафик на неё не переключают.
+Трафик на неё не переключают. До любого запуска на ней меняют
+stanza или отключают `archive_command`, чтобы она не складывала
+WAL в тот же репозиторий. Имя новой stanza — `<stanza-карантин>`,
+в git его не пишут.
 
 ## Проверка
 
-На новом сервере, до смены DNS:
+Те же сверки, что в [`docs/runbooks/db-down.md`](db-down.md).
+Ревизия `alembic_version` равна `<ревизия>`. Числа строк по
+коллекциям сходятся со `<счётчики>`. `max(created_at)` не позже
+`<timestamp>`. Строки людей не печатают.
 
 ```bash
-docker inspect -f '{{.State.Health.Status}}' anyq-postgres
-docker inspect -f '{{.State.Health.Status}}' anyq-api
-docker inspect -f '{{.State.Health.Status}}' anyq-web
-docker inspect -f '{{.State.Health.Status}}' anyq-caddy
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T postgres \
-  psql --username anyq --dbname anyq -c 'SELECT count(*) FROM records;'
+  psql --username anyq --dbname anyq -c \
+  'SELECT version_num FROM alembic_version;'
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname anyq -c \
+  "SELECT collection, count(*) AS rows
+   FROM records GROUP BY collection ORDER BY collection;"
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname anyq -c \
+  'SELECT max(created_at) AS newest FROM records;'
+pgbackrest verify
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  pg_amcheck --username anyq --dbname anyq --all
 ```
 
-Ожидание: контейнеры `healthy` (Caddy до выпуска сертификата может
-ещё подниматься — тогда повторите осмотр после смены DNS), запрос
-возвращает одно число. Строки таблиц не печатают.
+Готовность API — внутри контейнера, на `127.0.0.1`:
 
-После смены A-записи, с любой машины, где уже виден новый адрес:
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml \
+  -f /tmp/anyq-postgres-image.yml up -d
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T api \
+  python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/v1/health/ready', timeout=3).read()"
+```
+
+Caddy до выпуска сертификата может ещё подниматься. Повторите
+осмотр после смены DNS. Снаружи:
 
 ```bash
 dig +short <домен> A
@@ -223,18 +224,11 @@ curl -fsS "https://<домен>/health"
 curl -fsS -o /dev/null -w '%{http_code}\n' "https://<домен>/ru"
 ```
 
-Ожидание: в ответе DNS адрес нового сервера, в двух первых ответах
-есть `"ok":true`, у страницы код `200`, сертификат выдан на это имя.
-Флаг `-k` для боевого домена не используют.
-
-Поставьте расписание копий, как в [`docs/DEPLOY.md`](../DEPLOY.md),
-и снимите первую копию уже на новом сервере:
-
-```bash
-./deploy/backup.sh
-```
-
-Эту копию также уносят на вторую точку в Казахстане.
+Ожидание: в ответе DNS адрес нового сервера, в `/health` и
+`/healthz` есть `"ok":true`, у страницы код `200`, сертификат
+выдан на это имя. Флаг `-k` для боевого домена не используют.
+Полная копия `pgbackrest backup --type=full` уже снята выше
+и остаётся в Казахстане, включая репозиторий 2.
 
 ## Коммуникации
 

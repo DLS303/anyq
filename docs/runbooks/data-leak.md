@@ -56,10 +56,10 @@
 в том числе вечером или в выходной. Оценку категорий, полную смену
 секретов и решение собственника оставляют на рабочие часы, кроме срока,
 который подтвердит юрист (pending legal review). Загрузка архива
-поверх текущей базы на этом шаге следы уничтожает. `deploy/restore.sh`
-— будет добавлено, `pgbackrest` — будет добавлено. Их не запускают,
-пока координатор отдельно не запишет, что следы больше не нужны
-и что это уже восстановление порчи, а не утечки. Откат выпуска,
+поверх текущей базы на этом шаге следы уничтожает. `pgbackrest restore`
+и `deploy/restore.sh` (будет добавлено) не запускают, пока координатор
+отдельно не запишет, что следы больше не нужны и что это уже
+восстановление порчи, а не утечки. Откат выпуска,
 если признак совпал с выпуском, — [`docs/runbooks/bad-deploy.md`](bad-deploy.md)
 (`deploy/rollback.sh` — будет добавлено) и только после копирования журналов.
 
@@ -139,8 +139,10 @@ docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T postgres \
   psql --username anyq --dbname anyq -c \
   "SELECT count(*) AS photo_jobs FROM photo_jobs;"
-docker run --rm -v anyq-data:/data:ro alpine:3.20 \
-  sh -c 'find /data/uploads /data/private -type f | wc -l'
+docker run --rm --entrypoint sh \
+  -v anyq-data:/data:ro \
+  postgis/postgis:16-3.4 \
+  -c 'find /data/uploads /data/private -type f | wc -l'
 ```
 
 В карточке отмечают, какие категории вообще хранит контур, и какие

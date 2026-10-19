@@ -45,7 +45,7 @@ SEV3 без вопроса от клиента внешним письмом н�
 
 1. Координатор обновляет черновик, когда статус меняется: всё ещё разбираем, доступ восстановлен, нужен отдельный разбор.
 2. Каждое отправленное письмо копируют в закрытый каталог карточки `<закрытый-каталог-инцидентов>/<номер>`. В git его не кладут.
-3. Технические команды в письмо не переносят. Откат выпуска — `deploy/rollback.sh` (будет добавлено) и [`docs/runbooks/bad-deploy.md`](bad-deploy.md). Данные — `deploy/restore.sh` (будет добавлено), `pgbackrest` (будет добавлено) и `docker compose` в [`docs/runbooks/db-down.md`](db-down.md) и [`docs/runbooks/server-lost.md`](server-lost.md).
+3. Технические команды в письмо не переносят. Откат выпуска — предыдущий образ, `deploy/rollback.sh` (будет добавлено) и [`docs/runbooks/bad-deploy.md`](bad-deploy.md). Данные — `pgbackrest` и `docker compose` в [`docs/runbooks/db-down.md`](db-down.md) и [`docs/runbooks/server-lost.md`](server-lost.md). `deploy/restore.sh` — будет добавлено.
 4. Если шла смена `JWT_SECRET`, в письме о восстановлении достаточно фразы, что нужно войти снова. Имя секрета клиенту не называют.
 
 ## Проверка

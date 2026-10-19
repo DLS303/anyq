@@ -110,8 +110,10 @@ SEV1 — 30 минут рабочего времени от старта. SEV2 �
 `deploy/docker-compose.prod.yml`.
 
 - `deploy/rollback.sh` — будет добавлено. Пока откат делают тегами образов, как в [`docs/DEPLOY.md`](../docs/DEPLOY.md) и в регламенте неудачного выпуска.
-- `deploy/restore.sh` — будет добавлено. Пока данные поднимают из архива `deploy/backup.sh`.
-- `pgbackrest` — будет добавлено. Пока архив базы — файл `anyq-postgres-<штамп>.sql.gz` от `pg_dump`.
+- `deploy/restore.sh` — будет добавлено. Пока базу поднимают командами `pgbackrest` из регламента базы и потерянного сервера.
+- Пароль шифрования репозитория pgBackRest берут только из офлайн-хранилища `<офлайн-хранилище>`.
+
+Цель плана, не гарантия: RPO не больше 15 минут, RTO — `<цель-RTO>`.
 
 Команды `docker compose` запускают из `/opt/anyq` с
 `--env-file deploy/.env` и `-f deploy/docker-compose.prod.yml`.

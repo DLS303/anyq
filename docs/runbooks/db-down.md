@@ -9,7 +9,10 @@
 
 Команды ниже запускает IT/MLOps или SQL-разработчик из `/opt/anyq`
 под пользователем `deploy`. Координатор до этого записывает уровень
-и штамп копии, если дошли до загрузки архива.
+и метку времени восстановления, если дошли до pgBackRest.
+
+Цель плана, не гарантия для клиента: RPO не больше 15 минут,
+RTO — `<цель-RTO>`. В письмо клиенту эти цифры не ставят.
 
 ## Признаки
 
@@ -40,122 +43,139 @@
    df -h
    ```
 
-5. Если диск заполнен, освобождают место, которое не является томом базы и не является `/var/backups/anyq`. Каталог копий не чистят.
+5. Если диск заполнен и база ещё принимает сессию, смотрят архиватор. Файлы в `pg_wal` вручную не удаляют. Место освобождают вне каталога WAL и вне репозитория копий.
+
+   ```sql
+   SELECT archived_count, failed_count, last_archived_time, last_failed_time
+   FROM pg_stat_archiver;
+   ```
 
 ## Восстановление
 
-Сначала возвращают уже существующий том. Загрузка архива — только
-если контейнер с этим томом не становится здоровым или SQL-разработчик
-записал в карточку, что кластер не читается.
+Сначала возвращают уже остановленный кластер, если том на месте
+и читается. Восстановление из копии — если SQL-разработчик записал,
+что кластер не читается, или если нужен момент времени до повреждения.
 
-`deploy/restore.sh` — будет добавлено. `pgbackrest` — будет добавлено.
-Пока действует путь ниже, из шапки `deploy/backup.sh`.
+Базу поднимают только в образе `postgis/postgis:16-3.4`.
+Образ Alpine для базы не используют. `deploy/restore.sh` —
+будет добавлено. Пока команды выполняют напрямую.
 
-Поднять контейнер, если он остановлен, но том на месте:
+Остановка API, чтобы он не писал в базу:
 
 ```bash
 cd /opt/anyq
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml up -d postgres
-docker inspect -f '{{.State.Health.Status}}' anyq-postgres
+  -f deploy/docker-compose.prod.yml stop api
 ```
 
-Проверка готовности:
+Образ базы для этого запуска:
 
 ```bash
+cat > /tmp/anyq-postgres-image.yml <<'EOF'
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+EOF
+```
+
+Файл `/tmp/anyq-postgres-image.yml` в git не кладут.
+
+Если контейнер просто остановлен и том трогать не нужно:
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml \
+  -f /tmp/anyq-postgres-image.yml up -d postgres
+docker inspect -f '{{.State.Health.Status}}' anyq-postgres
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T postgres \
   pg_isready -U anyq -d anyq
 ```
 
-Если база здорова, запустите остальные сервисы и перейдите к разделу
-«Проверка»:
+Если база здорова, переходят к разделу «Проверка» и затем
+поднимают остальные сервисы. Шаг migrate отдельно и только если
+ревизия в `alembic_version` старше ожидаемой. `alembic downgrade`
+в бою запрещён.
 
-```bash
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml up -d
-```
+### Копия тома
 
-Если кластер не отвечает на `pg_isready`, сохраните журнал в закрытый
-каталог в Казахстане и не вставляйте его в канал:
-
-```bash
-docker logs anyq-postgres --tail 200 \
-  > "<закрытый-каталог-инцидентов>/<номер>/postgres.log"
-```
-
-Дальше только с записью координатора в карточке. Выберите штамп
-глазами, не самым новым файлом автоматически:
-
-```bash
-ls -lh /var/backups/anyq
-gzip -t /var/backups/anyq/anyq-postgres-<штамп>.sql.gz
-```
-
-Если локальный архив не проходит `gzip -t`, берут тот же штамп
-из `<вторая-копия-в-казахстане>`. Копию за пределами Казахстана
-не используют. Вторую точку копируют на этот сервер в `/var/backups/anyq`
-и снова выполняют `gzip -t`.
-
-Остановите API, чтобы он не писал в базу во время загрузки:
-
-```bash
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml stop api
-```
-
-Архив `pg_dump` не содержит `DROP`. Его загружают в пустую базу `anyq`.
-Это уничтожает текущее содержимое базы. Делайте это только после
-`gzip -t` и записи штампа в карточку.
-
-Если `pg_isready` проходит, а данные всё равно нужно заменить,
-очистите базу и загрузите архив:
-
-```bash
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml exec -T postgres \
-  psql --username anyq --dbname postgres -v ON_ERROR_STOP=1 \
-  -c 'DROP DATABASE IF EXISTS anyq WITH (FORCE);'
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml exec -T postgres \
-  psql --username anyq --dbname postgres -v ON_ERROR_STOP=1 \
-  -c 'CREATE DATABASE anyq OWNER anyq;'
-gunzip -c /var/backups/anyq/anyq-postgres-<штамп>.sql.gz \
-  | docker compose --env-file deploy/.env \
-    -f deploy/docker-compose.prod.yml exec -T postgres \
-    psql --username anyq --dbname anyq -v ON_ERROR_STOP=1
-```
-
-Если контейнер так и не становится здоровым, `psql` недоступен
-и команды выше не выполняют. Сначала, если на диске есть место,
-снимите том в каталог копий в Казахстане. Пока такого файла нет,
-том не удаляют:
-
-```bash
-docker run --rm \
-  -v anyq-postgres:/from:ro \
-  -v /var/backups/anyq:/backup \
-  alpine:3.20 \
-  tar -C /from -czf /backup/anyq-pgvolume-<штамп>.tar.gz .
-tar -tzf /var/backups/anyq/anyq-pgvolume-<штамп>.tar.gz >/dev/null
-```
-
-После успешной проверки и этого архива, и `gzip -t` дампа
-координатор разрешает заменить том пустым. Удаляют только том
-базы, не `anyq-data`:
+Любое копирование тома или каталога данных через tar делают только
+после остановки PostgreSQL. Файлы в `pg_wal` вручную не удаляют.
 
 ```bash
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml stop postgres
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml rm -f postgres
-docker volume rm anyq-postgres
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml up -d postgres
+docker run --rm --entrypoint tar \
+  -v anyq-postgres:/from:ro \
+  -v /var/backups/anyq:/backup \
+  postgis/postgis:16-3.4 \
+  -C /from -czf /backup/anyq-pgvolume-<штамп>.tar.gz .
 ```
 
-Дождитесь `healthy`, затем загрузите дамп в пустую базу
-без `DROP DATABASE`:
+Эта копия — слепок тома в Казахстане, не замена pgBackRest.
+Пока архив не проверен `tar -tzf`, том не удаляют.
+
+### pgBackRest
+
+Пароль шифрования репозитория берут только из офлайн-хранилища
+`<офлайн-хранилище>`. В команду, карточку, чат и git его не вставляют.
+Метку `<timestamp>` выбирает SQL-разработчик и пишет в карточку.
+Для повреждённого шага migrate это момент непосредственно до шага.
+
+PostgreSQL на время restore остановлен. Репозиторий за пределами
+Казахстана не используют.
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml stop postgres
+pgbackrest info
+pgbackrest restore --delta --type=time \
+  --target='<timestamp>' --target-action=promote
+```
+
+Затем снова контейнер `postgis/postgis:16-3.4` и проверка копии:
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml \
+  -f /tmp/anyq-postgres-image.yml up -d postgres
+pgbackrest check
+pgbackrest backup --type=full
+```
+
+### Логический дамп
+
+Логический дамп (`pg_dump --no-owner --no-privileges`) не подменяет
+pgBackRest. Его грузят только если координатор записал, что
+репозиторий pgBackRest для этой метки недоступен, а дамп проверен
+`gzip -t`. Дамп не восстанавливает владельцев и права.
+
+Роль приложения — `anyq`. Она не суперпользователь. Роль
+администрирования кластера отдельная, приложению её не выдают.
+Пароль роли берут из офлайн-хранилища, в SQL его не пишут
+(`\password anyq` в сессии `psql`). Сначала роль, затем база:
+
+```sql
+CREATE ROLE anyq WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+```
+
+Если роль уже есть, вместо `CREATE ROLE`:
+
+```sql
+ALTER ROLE anyq WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+```
+
+Базу создают так и только так:
+
+```sql
+CREATE DATABASE anyq OWNER anyq
+  TEMPLATE template0
+  ENCODING 'UTF8'
+  LOCALE_PROVIDER icu
+  ICU_LOCALE 'ru-KZ';
+```
+
+Дамп загружают в эту пустую базу:
 
 ```bash
 gunzip -c /var/backups/anyq/anyq-postgres-<штамп>.sql.gz \
@@ -164,52 +184,65 @@ gunzip -c /var/backups/anyq/anyq-postgres-<штамп>.sql.gz \
     psql --username anyq --dbname anyq -v ON_ERROR_STOP=1
 ```
 
-Том загрузок `anyq-data` этой командой не трогают. Его распаковывают
-только если пропали и файлы, отдельной командой из
-[`docs/runbooks/server-lost.md`](server-lost.md), и только тем же штампом.
+После загрузки заново применяют права. Список GRANT/REVOKE
+берут из файла рядом с дампом, `<скрипт-прав>`, а не составляют
+по памяти. Если этого файла нет, минимум такой:
 
-Когда появится `pgbackrest`, справка и восстановление будут такими
-(сейчас эти команды не запускают):
-
-```bash
-# будет добавлено
-# pgbackrest --stanza=anyq info
-# pgbackrest --stanza=anyq restore
+```sql
+GRANT CONNECT ON DATABASE anyq TO anyq;
+GRANT USAGE ON SCHEMA public TO anyq;
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON ALL TABLES IN SCHEMA public TO anyq;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anyq;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ```
 
-Когда появится скрипт, вместо ручной загрузки SQL:
-
-```bash
-# будет добавлено
-./deploy/restore.sh
-```
-
-Затем снова поднимите стек:
-
-```bash
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml up -d
-```
+Том загрузок `anyq-data` этими командами не трогают.
 
 ## Проверка
 
+Сверяют ревизию с ожидаемой `<ревизия>` из карточки выпуска.
+Числа строк — с прошлыми известными счётчиками `<счётчики>`,
+не с выгрузкой людей. `max(created_at)` не позже метки `<timestamp>`.
+Сами строки, почту и `payload` не выводят.
+
 ```bash
-docker inspect -f '{{.State.Health.Status}}' anyq-postgres
-docker inspect -f '{{.State.Health.Status}}' anyq-api
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T postgres \
-  psql --username anyq --dbname anyq -c 'SELECT count(*) FROM records;'
-curl -fsS "https://<домен>/health"
-curl -fsS "https://<домен>/healthz"
-curl -fsS -o /dev/null -w '%{http_code}\n' "https://<домен>/ru"
+  psql --username anyq --dbname anyq -c \
+  'SELECT version_num FROM alembic_version;'
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname anyq -c \
+  "SELECT collection, count(*) AS rows
+   FROM records GROUP BY collection ORDER BY collection;"
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname anyq -c \
+  'SELECT max(created_at) AS newest FROM records;'
+pgbackrest verify
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  pg_amcheck --username anyq --dbname anyq --all
 ```
 
-Ожидание: оба контейнера `healthy`, запрос возвращает одно число,
-в `/health` и `/healthz` есть `"ok":true`, у страницы код `200`.
-Число строк сравните с ожиданием SQL-разработчика. Сами строки,
-почту и содержимое `payload` не выводите.
+После этого поднимают API и смотрят готовность внутри контейнера,
+на `127.0.0.1`, порт процесса API:
 
-Для боевого домена флаг `-k` не используют.
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml \
+  -f /tmp/anyq-postgres-image.yml up -d
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T api \
+  python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/v1/health/ready', timeout=3).read()"
+```
+
+Ожидание: `pg_amcheck` без ошибок, `pgbackrest verify` без ошибок,
+ревизия совпала, числа строк сходятся со `<счётчики>`,
+`newest` не позже `<timestamp>`, ответ ready без ошибки.
+Снаружи, когда вход уже открыт: `/health` и `/healthz` содержат
+`"ok":true`. Для боевого домена флаг `-k` не используют.
 
 ## Коммуникации
 
@@ -223,11 +256,6 @@ curl -fsS -o /dev/null -w '%{http_code}\n' "https://<домен>/ru"
 ## После инцидента
 
 1. Допишите хронологию в закрытой карточке.
-2. Если загружали архив, снимите новую копию и оставьте её в Казахстане:
-
-   ```bash
-   ./deploy/backup.sh
-   ```
-
+2. Если было восстановление, полная копия уже снята командой `pgbackrest backup --type=full`. Её вторая точка — в Казахстане. Логический дамп `deploy/backup.sh` эту копию не заменяет.
 3. Для SEV1 и SEV2 назначьте разбор по [`docs/incidents/POSTMORTEM.md`](../incidents/POSTMORTEM.md) в рабочие часы.
 4. Образы и тома, которые не стирали, не удаляйте до конца разбора.
