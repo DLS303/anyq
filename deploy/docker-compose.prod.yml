@@ -1,0 +1,176 @@
+# Production stack for one VPS. Run from the repository:
+#   docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml up -d
+# The API and web ports stay on the internal network. Caddy publishes 80 and 443.
+
+name: anyq
+
+services:
+  api:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    image: anyq-api:current
+    container_name: anyq-api
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      ANYQ_ENV: production
+      ANYQ_DB_PATH: /data/db.json
+      ANYQ_UPLOADS_DIR: /data/uploads
+      ANYQ_DATA_DIR: /data
+      LEGAL_DIR: /app/legal
+      PORT: "8010"
+      DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
+    volumes:
+      - anyq-data:/data
+      - ../apps/web/content/legal:/app/legal:ro
+    expose:
+      - "8010"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 40s
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    logging: &json_logs
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1536M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    networks:
+      - anyq
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_PILOT_MODE: ${NEXT_PUBLIC_PILOT_MODE:-1}
+        INTERNAL_API_URL: http://api:8010
+    image: anyq-web:current
+    container_name: anyq-web
+    environment:
+      NODE_ENV: production
+      INTERNAL_API_URL: http://api:8010
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    expose:
+      - "3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *json_logs
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 768M
+        reservations:
+          cpus: "0.10"
+          memory: 128M
+    networks:
+      - anyq
+
+  caddy:
+    image: caddy:2.10-alpine
+    container_name: anyq-caddy
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in deploy/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *json_logs
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+        reservations:
+          cpus: "0.05"
+          memory: 32M
+    networks:
+      - anyq
+
+  # Future database. The API still stores data in the JSON file on anyq-data.
+  # Leave this commented until that store is replaced. Then set POSTGRES_PASSWORD,
+  # point DATABASE_URL at postgres://anyq:<password>@postgres:5432/anyq, and
+  # uncomment the anyq-postgres volume below. Do not publish port 5432.
+  #
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: anyq-postgres
+  #   environment:
+  #     POSTGRES_USER: anyq
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  #     POSTGRES_DB: anyq
+  #   volumes:
+  #     - anyq-postgres:/var/lib/postgresql/data
+  #   expose:
+  #     - "5432"
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U anyq -d anyq"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 10
+  #   logging: *json_logs
+  #   networks:
+  #     - anyq
+
+networks:
+  anyq:
+    driver: bridge
+
+volumes:
+  anyq-data:
+    name: anyq-data
+  caddy-data:
+    name: anyq-caddy-data
+  caddy-config:
+    name: anyq-caddy-config
+  # anyq-postgres:
+  #   name: anyq-postgres

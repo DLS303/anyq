@@ -43,6 +43,13 @@ def _demo(user_id: str, email: str, password: str) -> str:
     return res.json()["data"]["token"]
 
 
+def test_healthz_is_liveness_only():
+    res = client.get("/healthz")
+    assert res.status_code == 200
+    body = res.json()
+    assert body == {"ok": True}
+
+
 def test_security_headers_on_api():
     res = client.get("/health")
     assert res.status_code == 200

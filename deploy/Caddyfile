@@ -1,0 +1,68 @@
+# Public site. DOMAIN is a bare hostname (example.kz). Caddy obtains a
+# certificate automatically. localhost uses Caddy's local certificate.
+{
+	email {$ACME_EMAIL}
+}
+
+# Local process check. Not published on the host.
+http://127.0.0.1:8080 {
+	respond "ok" 200
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	request_body {
+		max_size 12MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=86400"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	handle /v1/* {
+		reverse_proxy api:8010 {
+			transport http {
+				response_header_timeout 120s
+				read_timeout 130s
+				write_timeout 130s
+			}
+		}
+	}
+
+	handle /uploads/* {
+		reverse_proxy api:8010
+	}
+
+	handle /health {
+		reverse_proxy api:8010
+	}
+
+	handle /docs {
+		reverse_proxy api:8010
+	}
+
+	handle /docs/* {
+		reverse_proxy api:8010
+	}
+
+	handle /redoc {
+		reverse_proxy api:8010
+	}
+
+	handle /openapi.json {
+		reverse_proxy api:8010
+	}
+
+	handle {
+		reverse_proxy web:3000 {
+			transport http {
+				response_header_timeout 60s
+			}
+		}
+	}
+}

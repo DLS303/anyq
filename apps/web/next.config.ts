@@ -29,7 +29,10 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   compress: true,
   poweredByHeader: false,
-  outputFileTracingRoot: path.join(__dirname),
+  output: "standalone",
+  // Workspace packages are installed at the repository root. Standalone
+  // tracing has to start there so the production image contains them.
+  outputFileTracingRoot: path.join(__dirname, "../.."),
   async headers() {
     return [
       { source: "/:path*", headers: SECURITY_HEADERS },
