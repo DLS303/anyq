@@ -14,7 +14,8 @@ from PIL import Image
 from sqlalchemy import text
 
 from app.audit import write as audit_write
-from app.company_features import project_company_id
+from app.company_features import project_company_id, resolve_path_company
+from app.tenant import company_key
 from app.main import app
 from app.punch_photos import PUSH_TEXT, legacy_punch_id, migrate_status
 from app.site_models import PunchItem
@@ -249,7 +250,11 @@ def test_status_rules_version_and_audit(monkeypatch):
     )
     assert added_s.status_code == 200, added_s.text
     item = _create(owner["token"], pid, assignee_id=foreman["user"]["id"], due_date="2020-01-02")
+    owner_user = store.get_user(owner["user"]["id"])
+    stored = company_key(owner_user)
+    assert item["company_id"] == stored
     assert item["company_id"] == project_company_id(store.get_project(pid))
+    assert resolve_path_company("projects", pid, owner_user) == stored
     assert item["company_id"].startswith("bin:")
     assert item["row_version"] == 1
     assert item["created_at"].endswith("+00:00")

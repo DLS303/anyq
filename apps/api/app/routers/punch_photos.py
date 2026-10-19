@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Uploa
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 
-from app.company_features import project_company_id, require_feature
+from app.company_features import require_feature, resolve_path_company
 from app.idempotency import IdempotencyConflict, run_idempotent
 from app.punch_photos import (
     PunchConflict,
@@ -19,7 +19,6 @@ from app.punch_photos import (
     soft_delete,
 )
 from app.schemas import User
-from app.store import store
 
 router = APIRouter(prefix="/v1/site", tags=["punch-photos"])
 
@@ -58,12 +57,9 @@ def _http(exc: Exception) -> HTTPException:
     raise exc
 
 
-def _company(pid: str) -> str:
-    """Company id from the project owner key. The path gate already checked access."""
-    project = store.get_project(pid)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Не найдено")
-    company_id = project_company_id(project)
+def _company(pid: str, user: User) -> str:
+    """Owner company key from the same path query the feature gate uses."""
+    company_id = resolve_path_company("projects", pid, user)
     if not company_id:
         raise HTTPException(status_code=404, detail="Не найдено")
     return company_id
@@ -78,7 +74,7 @@ def list_punches(
     mine: str | None = None,
     user: User = Depends(require_feature("punch_photos")),
 ):
-    company_id = _company(pid)
+    company_id = _company(pid, user)
     try:
         data = list_items(
             user,
@@ -101,7 +97,7 @@ def create_punch(
     user: User = Depends(require_feature("punch_photos")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    company_id = _company(pid)
+    company_id = _company(pid, user)
 
     def create():
         return create_item(user, pid, company_id, body.model_dump())
@@ -115,7 +111,7 @@ def create_punch(
 
 @router.get("/projects/{pid}/punch-items.pdf")
 def punch_pdf(pid: str, user: User = Depends(require_feature("punch_photos"))):
-    company_id = _company(pid)
+    company_id = _company(pid, user)
     try:
         payload = build_pdf(user, pid, company_id)
     except (PunchConflict, PunchForbidden, LookupError, ValueError) as exc:
@@ -125,7 +121,7 @@ def punch_pdf(pid: str, user: User = Depends(require_feature("punch_photos"))):
 
 @router.get("/projects/{pid}/punch-items/{punch_id}")
 def read_punch(pid: str, punch_id: str, user: User = Depends(require_feature("punch_photos"))):
-    company_id = _company(pid)
+    company_id = _company(pid, user)
     try:
         return {"ok": True, "data": get_item(user, punch_id, company_id, pid)}
     except (PunchConflict, PunchForbidden, LookupError, ValueError) as exc:
@@ -139,7 +135,7 @@ def punch_status(
     body: StatusBody,
     user: User = Depends(require_feature("punch_photos")),
 ):
-    company_id = _company(pid)
+    company_id = _company(pid, user)
     try:
         data = set_status(user, punch_id, company_id, pid, body.status, body.row_version)
     except (PunchConflict, PunchForbidden, LookupError, ValueError) as exc:
@@ -158,7 +154,7 @@ async def punch_photo(
     file_id: str = Form(...),
     file: UploadFile = File(...),
 ):
-    company_id = _company(pid)
+    company_id = _company(pid, user)
     raw = await file.read()
     try:
         data = add_photo(
@@ -184,8 +180,7 @@ def punch_file(
     file_id: str,
     user: User = Depends(require_feature("punch_photos")),
 ):
-    _ = user
-    company_id = _company(pid)
+    company_id = _company(pid, user)
     try:
         path, mime = file_for_punch(punch_id, company_id, file_id, pid)
     except LookupError as exc:
@@ -195,7 +190,7 @@ def punch_file(
 
 @router.get("/projects/{pid}/punch-items/{punch_id}/link")
 def punch_link(pid: str, punch_id: str, user: User = Depends(require_feature("punch_photos"))):
-    company_id = _company(pid)
+    company_id = _company(pid, user)
     try:
         get_item(user, punch_id, company_id, pid)
     except LookupError as exc:
@@ -210,7 +205,7 @@ def delete_punch(
     body: DeleteBody,
     user: User = Depends(require_feature("punch_photos")),
 ):
-    company_id = _company(pid)
+    company_id = _company(pid, user)
     try:
         data = soft_delete(user, punch_id, company_id, pid, body.row_version)
     except (PunchConflict, PunchForbidden, LookupError, ValueError) as exc:
