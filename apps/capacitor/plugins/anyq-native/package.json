@@ -1,0 +1,15 @@
+{
+  "name": "anyq-native",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Microphone permission, file download, and the system browser for the Anyq shell.",
+  "license": "UNLICENSED",
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}

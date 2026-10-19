@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Анык</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #2f5b8a; }
+    </style>
+  </head>
+  <body>
+    <script src="config.js"></script>
+    <script>
+      (function () {
+        var next = window.ANYQ_APP_URL;
+        if (next) window.location.replace(next);
+        else window.location.replace("offline.html");
+      })();
+    </script>
+  </body>
+</html>
