@@ -26,6 +26,11 @@ from app.store import store
 from app.tenant import company_key
 
 PHOTO_KIND = "markup_photo"
+_DOWNLOAD_NAMES = {
+    "image/jpeg": "photo.jpg",
+    "image/png": "photo.png",
+    "image/webp": "photo.webp",
+}
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 _TOOLS = frozenset({"arrow", "cloud", "text", "photo"})
 _READ_ONLY = frozenset({"customer"})
@@ -289,24 +294,14 @@ def _changes(revision_id: str, visibility: str, shapes: list[dict], file_id: str
     return body
 
 
-def _prepare_photo(session, access: MarkupAccess, file_id: str | None, raw: bytes | None, stamp: str):
+def _stage_photo(access: MarkupAccess, file_id: str | None, raw: bytes | None, stamp: str):
+    """Strip and stage before a database session is opened. The key comes from stage_upload."""
     if file_id is None:
         if raw:
             raise HTTPException(status_code=400, detail="Некорректные данные")
         return None, None
-    existing = session.get(StoredFile, file_id)
-    if existing is not None:
-        if (
-            existing.deleted_at
-            or existing.project_id != access.project_id
-            or existing.company_id != access.company_id
-            or existing.kind != PHOTO_KIND
-            or not existing.meta_stripped
-        ):
-            raise HTTPException(status_code=404, detail="Не найдено")
-        return None, None
     if not raw:
-        raise HTTPException(status_code=400, detail="Пустой файл")
+        return None, None
     if len(raw) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Файл больше лимита")
     try:
@@ -332,6 +327,17 @@ def _prepare_photo(session, access: MarkupAccess, file_id: str | None, raw: byte
         deleted_at=None,
     )
     return staged, row
+
+
+def _owned_file(existing: StoredFile, access: MarkupAccess) -> None:
+    if (
+        existing.deleted_at
+        or existing.project_id != access.project_id
+        or existing.company_id != access.company_id
+        or existing.kind != PHOTO_KIND
+        or not existing.meta_stripped
+    ):
+        raise HTTPException(status_code=404, detail="Не найдено")
 
 
 def list_for(access: MarkupAccess) -> dict:
@@ -360,19 +366,26 @@ def save_markup(access: MarkupAccess, payload: dict, raw: bytes | None) -> dict:
     visibility = _visibility(payload.get("visibility"))
     row_version = _version(payload.get("row_version"))
     stamp = _now()
-    staged: Path | None = None
-    storage_key: str | None = None
+    staged, file_row = _stage_photo(access, photo_id, raw, stamp)
+    storage_key = file_row.storage_key if file_row is not None else None
     committed = False
     body: dict = {}
     try:
         with store._sql.factory() as session:
-            staged, file_row = _prepare_photo(session, access, photo_id, raw, stamp)
-            if file_row is not None:
-                storage_key = file_row.storage_key
-                session.add(file_row)
-                session.flush()
-            current = session.get(MarkupRow, markup_id)
             try:
+                if photo_id is not None:
+                    existing = session.get(StoredFile, photo_id)
+                    if existing is not None:
+                        discard_upload(staged)
+                        staged = None
+                        storage_key = None
+                        _owned_file(existing, access)
+                    elif file_row is None:
+                        raise HTTPException(status_code=400, detail="Пустой файл")
+                    else:
+                        session.add(file_row)
+                        session.flush()
+                current = session.get(MarkupRow, markup_id)
                 if current is None:
                     if row_version not in (0, None):
                         raise MarkupConflict()
@@ -454,31 +467,79 @@ def save_markup(access: MarkupAccess, payload: dict, raw: bytes | None) -> dict:
     return body
 
 
-def open_file(access: MarkupAccess, file_id: str) -> tuple[Path, str]:
+def delete_markup(access: MarkupAccess, markup_id: str, row_version: int) -> dict:
+    if not access.can_write:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    token = parse_uuid(markup_id)
+    assert token is not None
+    stamp = _now()
+    with store._sql.factory() as session:
+        current = session.get(MarkupRow, token)
+        if (
+            current is None
+            or current.revision_id != access.revision_id
+            or current.project_id != access.project_id
+            or current.company_id != access.company_id
+        ):
+            raise HTTPException(status_code=404, detail="Не найдено")
+        if current.visibility == "me" and current.author_id != access.user_id:
+            raise HTTPException(status_code=404, detail="Не найдено")
+        if current.author_id != access.user_id:
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+        removed = session.execute(
+            update(MarkupRow)
+            .where(
+                MarkupRow.id == token,
+                MarkupRow.row_version == row_version,
+                MarkupRow.deleted_at.is_(None),
+            )
+            .values(deleted_at=stamp, updated_at=stamp, updated_by=access.user_id)
+        )
+        if removed.rowcount != 1:
+            session.rollback()
+            raise MarkupConflict()
+        audit_write(
+            "markup.delete",
+            "markup",
+            token,
+            access.project_id,
+            {"revision_id": access.revision_id},
+            session=session,
+            company_id=access.company_id,
+            actor_user_id=access.user_id,
+        )
+        session.commit()
+    return {"id": token, "deleted_at": stamp, "row_version": row_version}
+
+
+def open_file(access: MarkupAccess, file_id: str) -> tuple[Path, str, str]:
     token = parse_uuid(file_id)
     with store._sql.factory() as session:
-        rows = session.scalars(
-            select(MarkupRow).where(
+        found = session.execute(
+            select(StoredFile.storage_key, StoredFile.mime, StoredFile.kind)
+            .join(MarkupRow, MarkupRow.file_id == StoredFile.id)
+            .where(
+                StoredFile.id == token,
+                StoredFile.company_id == access.company_id,
+                StoredFile.project_id == access.project_id,
+                StoredFile.kind == PHOTO_KIND,
+                StoredFile.deleted_at.is_(None),
                 MarkupRow.revision_id == access.revision_id,
+                MarkupRow.company_id == access.company_id,
+                MarkupRow.project_id == access.project_id,
                 MarkupRow.deleted_at.is_(None),
                 _visible(access.user_id),
             )
-        ).all()
-        linked = False
-        for row in rows:
-            shapes = _shape_list(row.shapes)
-            if row.file_id == token or any(
-                isinstance(item, dict) and item.get("type") == "photo" and item.get("file_id") == token for item in shapes
-            ):
-                linked = True
-                break
-        stored = session.get(StoredFile, token) if linked else None
-    if stored is None or stored.deleted_at or stored.project_id != access.project_id or stored.kind != PHOTO_KIND:
+            .limit(1)
+        ).first()
+    if found is None:
         raise HTTPException(status_code=404, detail="Не найдено")
+    storage_key, mime, kind = found
     try:
-        path = resolve_stored_file(stored.kind, stored.storage_key)
+        path = resolve_stored_file(kind, storage_key)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Не найдено") from exc
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Не найдено")
-    return path, stored.mime or "image/jpeg"
+    safe_mime = mime or "image/jpeg"
+    return path, safe_mime, _DOWNLOAD_NAMES.get(safe_mime, "photo.jpg")

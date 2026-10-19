@@ -8,6 +8,7 @@ import sys
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 from pypdf import PdfWriter
@@ -372,6 +373,7 @@ def test_photo_strips_exif_and_file_link_stays_on_the_revision():
     link = f"/v1/site/revisions/{revision_id}/markups/files/{file_id}"
     own = client.get(f"{link}?pid={other_pid}", headers=_auth(owner["token"]))
     assert own.status_code == 200, own.text
+    assert 'filename="photo.jpg"' in own.headers["content-disposition"]
     assert b"SYNTH-MARK-77" not in own.content
     assert len(Image.open(io.BytesIO(own.content)).getexif()) == 0
     foreign = client.get(f"{link}?pid={pid}", headers=_auth(other["token"]))
@@ -381,6 +383,164 @@ def test_photo_strips_exif_and_file_link_stays_on_the_revision():
         headers=_auth(owner["token"]),
     )
     assert missing.status_code == 404, missing.text
+
+
+def _image(fmt: str) -> bytes:
+    image = Image.new("RGB", (12, 8), (8, 16, 24))
+    buffer = io.BytesIO()
+    image.save(buffer, format=fmt)
+    return buffer.getvalue()
+
+
+def _photo_post(token: str, revision_id: str, file_id: str, raw: bytes, name: str, mime: str, **extra):
+    import json
+
+    payload = {
+        "id": extra.pop("id", str(uuid4())),
+        "row_version": extra.pop("row_version", 0),
+        "visibility": "project",
+        "shapes": [{"type": "photo", "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2, "file_id": file_id}],
+    }
+    return client.post(
+        f"/v1/site/revisions/{revision_id}/markups",
+        headers=_auth(token),
+        data={"payload": json.dumps(payload)},
+        files={"file": (name, raw, mime)},
+    )
+
+
+def test_delete_tombstone_repeat_and_other_company():
+    owner = _register("markup-del@example.com", "520000000007")
+    _promote("markup-del@example.com", "owner")
+    other = _register("markup-del-other@example.com", "520000000008")
+    _promote("markup-del-other@example.com", "owner")
+    pid = _project(owner["token"], "Delete yard")
+    _project(other["token"], "Elsewhere")
+    _enable(owner["token"])
+    _enable(other["token"])
+    sheet = _sheet(owner["token"], pid)
+    revision_id = sheet["revisions"][0]["id"]
+    markup_id = str(uuid4())
+    created = _post(owner["token"], revision_id, [_arrow()], id=markup_id)
+    assert created.status_code == 200, created.text
+    version = created.json()["data"]["row_version"]
+    path = f"/v1/site/revisions/{revision_id}/markups/{markup_id}"
+    foreign = client.delete(f"{path}?row_version={version}&pid={pid}", headers=_auth(other["token"]))
+    assert foreign.status_code == 404, foreign.text
+    removed = client.delete(f"{path}?row_version={version}", headers=_auth(owner["token"]))
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["data"]["deleted_at"].endswith("+00:00")
+    again = client.delete(f"{path}?row_version={version}", headers=_auth(owner["token"]))
+    assert again.status_code == 409, again.text
+    listed = client.get(f"/v1/site/revisions/{revision_id}/markups", headers=_auth(owner["token"]))
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"]["markups"] == []
+    with store._sql.factory() as session:
+        audit = session.execute(
+            text("SELECT action, changes FROM audit_log WHERE entity_id = :id AND action = 'markup.delete'"),
+            {"id": markup_id},
+        ).all()
+    assert len(audit) == 1
+    assert "storage_key" not in str(audit[0].changes)
+
+
+def test_other_company_file_and_download_names():
+    owner = _register("markup-kind@example.com", "520000000009")
+    _promote("markup-kind@example.com", "owner")
+    other = _register("markup-kind-other@example.com", "520000000010")
+    _promote("markup-kind-other@example.com", "owner")
+    pid = _project(owner["token"], "Kind yard")
+    other_pid = _project(other["token"], "Other kind")
+    _enable(owner["token"])
+    _enable(other["token"])
+    sheet = _sheet(owner["token"], pid)
+    other_sheet = _sheet(other["token"], other_pid)
+    revision_id = sheet["revisions"][0]["id"]
+    other_revision = other_sheet["revisions"][0]["id"]
+    file_id = str(uuid4())
+    saved = _photo_post(owner["token"], revision_id, file_id, _jpeg(), "shot.jpg", "image/jpeg")
+    assert saved.status_code == 200, saved.text
+    with store._sql.factory() as session:
+        stored = session.get(StoredFile, file_id)
+        assert stored is not None
+        kept = resolve_stored_file(stored.kind, stored.storage_key).read_bytes()
+        key = stored.storage_key
+    stolen = _photo_post(other["token"], other_revision, file_id, _jpeg(), "shot.jpg", "image/jpeg")
+    assert stolen.status_code == 404, stolen.text
+    assert resolve_stored_file("markup_photo", key).read_bytes() == kept
+    for fmt, name, mime, filename in (
+        ("PNG", "shot.png", "image/png", "photo.png"),
+        ("WEBP", "shot.webp", "image/webp", "photo.webp"),
+    ):
+        photo_id = str(uuid4())
+        created = _photo_post(owner["token"], revision_id, photo_id, _image(fmt), name, mime)
+        assert created.status_code == 200, created.text
+        fetched = client.get(
+            f"/v1/site/revisions/{revision_id}/markups/files/{photo_id}",
+            headers=_auth(owner["token"]),
+        )
+        assert fetched.status_code == 200, fetched.text
+        assert f'filename="{filename}"' in fetched.headers["content-disposition"]
+        assert Image.open(io.BytesIO(fetched.content)).format == fmt
+
+
+def test_duplicate_file_insert_is_a_conflict(monkeypatch):
+    from sqlalchemy.orm import Session
+
+    owner = _register("markup-dup@example.com", "520000000011")
+    _promote("markup-dup@example.com", "owner")
+    pid = _project(owner["token"], "Dup yard")
+    _enable(owner["token"])
+    sheet = _sheet(owner["token"], pid)
+    revision_id = sheet["revisions"][0]["id"]
+    file_id = str(uuid4())
+    first = _photo_post(owner["token"], revision_id, file_id, _jpeg(), "shot.jpg", "image/jpeg")
+    assert first.status_code == 200, first.text
+    original = Session.get
+
+    def hide_existing(self, entity, ident, **kwargs):
+        if entity is StoredFile and str(ident) == file_id:
+            return None
+        return original(self, entity, ident, **kwargs)
+
+    monkeypatch.setattr(Session, "get", hide_existing)
+    second = _photo_post(owner["token"], revision_id, file_id, _jpeg(), "shot.jpg", "image/jpeg")
+    assert second.status_code == 409, second.text
+
+
+def test_upload_limit_stops_before_the_rest_of_the_body(monkeypatch):
+    import asyncio
+
+    from starlette.datastructures import Headers
+
+    from app.routers.markups import _form_parts
+
+    monkeypatch.setattr("app.routers.markups.MAX_UPLOAD_BYTES", 32)
+    boundary = "limitbound"
+    head = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="payload"\r\n\r\n'
+        '{"id":"x"}\r\n'
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="big.jpg"\r\n'
+        "Content-Type: image/jpeg\r\n\r\n"
+    ).encode()
+    body = head + (b"x" * 8000) + f"\r\n--{boundary}--\r\n".encode()
+    chunks = [body[index : index + 64] for index in range(0, len(body), 64)]
+    pulled = {"n": 0}
+
+    async def stream():
+        for chunk in chunks:
+            pulled["n"] += len(chunk)
+            yield chunk
+
+    async def run():
+        with pytest.raises(HTTPException) as caught:
+            await _form_parts(Headers({"content-type": f"multipart/form-data; boundary={boundary}"}), stream())
+        assert caught.value.status_code == 413
+
+    asyncio.run(run())
+    assert pulled["n"] < len(body)
 
 
 def test_alembic_markup_revision_is_the_only_head(tmp_path):
