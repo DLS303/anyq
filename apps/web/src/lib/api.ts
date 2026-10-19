@@ -102,10 +102,6 @@ export function fetchModules() {
   return request<ModuleInfo[]>("/v1/modules");
 }
 
-export function fetchDemoUsers() {
-  return request<User[]>("/v1/auth/users");
-}
-
 export function fetchMyPlots(email: string) {
   return request<Plot[]>("/v1/cabinet/plots", { email });
 }

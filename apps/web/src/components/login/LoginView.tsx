@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth";
 import { MATERIAL_CAT } from "@/lib/format";
 import type { Locale, MaterialCat } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { PILOT_MODE } from "@/lib/pilot";
 import { Building2, Lock, Mail, Truck } from "lucide-react";
 
 type RegRole = "buyer" | "contractor" | "supplier";
@@ -44,7 +45,7 @@ export function LoginView({
   const [pdConsent, setPdConsent] = useState(false);
 
   useEffect(() => {
-    setMode(initialMode);
+    setMode(PILOT_MODE ? "login" : initialMode);
     setPdConsent(false);
   }, [initialMode]);
 
@@ -151,39 +152,41 @@ export function LoginView({
     <div className="max-w-4xl mx-auto py-6 sm:py-10">
       <div className="grid md:grid-cols-[1.15fr_0.85fr] gap-8 items-start">
         <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
-          <div className="flex items-center gap-2 mb-6 p-1 bg-slate-100 rounded-2xl w-fit border border-slate-200">
-            <button
-              type="button"
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                mode === "register" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-900"
-              }`}
-              onClick={() => {
-                setMode("register");
-                setPdConsent(false);
-              }}
-            >
-              {m.register}
-            </button>
-            <button
-              type="button"
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                mode === "login" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-900"
-              }`}
-              onClick={() => {
-                setMode("login");
-                setPdConsent(false);
-              }}
-            >
-              {m.navLogin}
-            </button>
-          </div>
+          {PILOT_MODE ? null : (
+            <div className="flex items-center gap-2 mb-6 p-1 bg-slate-100 rounded-2xl w-fit border border-slate-200">
+              <button
+                type="button"
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  mode === "register" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-900"
+                }`}
+                onClick={() => {
+                  setMode("register");
+                  setPdConsent(false);
+                }}
+              >
+                {m.register}
+              </button>
+              <button
+                type="button"
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  mode === "login" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-900"
+                }`}
+                onClick={() => {
+                  setMode("login");
+                  setPdConsent(false);
+                }}
+              >
+                {m.navLogin}
+              </button>
+            </div>
+          )}
 
           <h1 className="text-2xl font-bold text-slate-900 mb-1">
-            {mode === "login" ? "Вход в ANYQ" : "Регистрация компании"}
+            {PILOT_MODE || mode === "login" ? (PILOT_MODE ? m.pilotLoginTitle : "Вход в ANYQ") : "Регистрация компании"}
           </h1>
-          <p className="text-xs text-slate-500 mb-6">{m.loginLead}</p>
+          <p className="text-xs text-slate-500 mb-6">{PILOT_MODE ? m.pilotLoginLead : m.loginLead}</p>
 
-          {mode === "login" ? (
+          {PILOT_MODE || mode === "login" ? (
             <form onSubmit={onLogin} className="grid gap-3.5">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
@@ -429,24 +432,30 @@ export function LoginView({
         <aside className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
           <div className="flex items-center gap-2 mb-3">
             <Building2 className="h-5 w-5 text-pine" />
-            <h2 className="text-lg font-bold text-slate-900">Пилот с Engicon</h2>
+            <h2 className="text-lg font-bold text-slate-900">{PILOT_MODE ? m.pilotLoginTitle : "Пилот с Engicon"}</h2>
           </div>
           <p className="text-sm text-slate-600 leading-relaxed">
-            Компания входит по своим реквизитам. Поставщик указывает первую позицию, и она сразу появляется в каталоге материалов.
+            {PILOT_MODE
+              ? m.pilotLoginAside
+              : "Компания входит по своим реквизитам. Поставщик указывает первую позицию, и она сразу появляется в каталоге материалов."}
           </p>
-          <ul className="mt-5 grid gap-3 text-sm text-slate-700">
-            <li className="flex gap-2">
-              <Truck className="h-4 w-4 mt-0.5 text-pine shrink-0" />
-              <span>Поставщик: БИН, город, цена и остаток. Модератор не нужен.</span>
-            </li>
-            <li className="flex gap-2">
-              <Building2 className="h-4 w-4 mt-0.5 text-pine shrink-0" />
-              <span>Заказчик Engicon и подрядчик попадают в кабинет и видят каталог.</span>
-            </li>
-          </ul>
-          <p className="mt-5 text-xs text-slate-500 leading-relaxed">
-            Оплата в этом пилоте не подключена. Заказ поставки фиксируется как заявка.
-          </p>
+          {PILOT_MODE ? null : (
+            <>
+              <ul className="mt-5 grid gap-3 text-sm text-slate-700">
+                <li className="flex gap-2">
+                  <Truck className="h-4 w-4 mt-0.5 text-pine shrink-0" />
+                  <span>Поставщик: БИН, город, цена и остаток. Модератор не нужен.</span>
+                </li>
+                <li className="flex gap-2">
+                  <Building2 className="h-4 w-4 mt-0.5 text-pine shrink-0" />
+                  <span>Заказчик Engicon и подрядчик попадают в кабинет и видят каталог.</span>
+                </li>
+              </ul>
+              <p className="mt-5 text-xs text-slate-500 leading-relaxed">
+                Оплата в этом пилоте не подключена. Заказ поставки фиксируется как заявка.
+              </p>
+            </>
+          )}
         </aside>
       </div>
     </div>

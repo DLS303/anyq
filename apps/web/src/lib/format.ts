@@ -99,7 +99,7 @@ export const STAGE: Record<string, { ru: string; kk: string; color?: string }> =
   audit: { ru: "Аудит АИС ГЗК", kk: "АИС ГЗК аудиті", color: "border-cyan-500 bg-cyan-50/70 text-cyan-900" },
   viewing: { ru: "Осмотр / Выезд", kk: "Қарау / Шығу", color: "border-indigo-500 bg-indigo-50/70 text-indigo-900" },
   negotiation: { ru: "Переговоры", kk: "Келіссөз", color: "border-amber-500 bg-amber-50/70 text-amber-900" },
-  deposit: { ru: "Задаток / Эскроу", kk: "Кепіл / Эскроу", color: "border-purple-500 bg-purple-50/70 text-purple-900" },
+  deposit: { ru: "Задаток", kk: "Кепіл", color: "border-purple-500 bg-purple-50/70 text-purple-900" },
   won: { ru: "Успешная сделка", kk: "Сәтті мәміле", color: "border-emerald-500 bg-emerald-50/70 text-emerald-900" },
   lost: { ru: "Срыв / Отказ", kk: "Бас тарту", color: "border-rose-500 bg-rose-50/70 text-rose-900" },
 
@@ -159,7 +159,7 @@ export const CONTACT_TYPE: Record<string, { ru: string; kk: string }> = {
 export const INVOICE_STATUS: Record<string, { ru: string; kk: string; color: string }> = {
   draft: { ru: "Черновик", kk: "Жоба", color: "bg-gray-100 text-gray-700" },
   sent: { ru: "Выставлен", kk: "Берілген", color: "bg-amber-100 text-amber-800" },
-  paid: { ru: "Оплачен (Эскроу)", kk: "Төленген (Эскроу)", color: "bg-emerald-100 text-emerald-800" },
+  paid: { ru: "Оплачен вручную", kk: "Қолмен төленген", color: "bg-emerald-100 text-emerald-800" },
   overdue: { ru: "Просрочен", kk: "Мерзімі өткен", color: "bg-rose-100 text-rose-800" },
   cancelled: { ru: "Отменён", kk: "Болдырылмады", color: "bg-gray-100 text-gray-500" },
 };
