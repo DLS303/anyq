@@ -11,7 +11,9 @@ import {
 import { money } from "@/lib/format";
 import { ErrorRetry, LoadingSkeleton, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { t } from "@/i18n/messages";
+import { budgetCategoryLabel } from "@/lib/budgetView";
 import type { BudgetCategory, Locale, ObjectBudgetView } from "@/lib/types";
+import { BudgetArticles } from "./BudgetArticles";
 
 const field = "w-full min-h-12 border border-ink/15 bg-white px-3 text-sm";
 const primary =
@@ -52,13 +54,6 @@ function signalClass(signal: ObjectBudgetView["signal"]) {
   if (signal === "red") return "border-clay bg-rose-50";
   if (signal === "yellow") return "border-amber-500 bg-amber-50";
   return "border-pine bg-emerald-50";
-}
-
-function categoryLabel(category: BudgetCategory, m: ReturnType<typeof t>) {
-  if (category === "works") return m.budgetCatWorks;
-  if (category === "equipment") return m.budgetCatEquipment;
-  if (category === "other") return m.budgetCatOther;
-  return m.budgetCatMaterials;
 }
 
 function ForecastLine({
@@ -219,6 +214,7 @@ export function ObjectBudgetCard({ locale, projectId }: { locale: Locale; projec
               {m.budgetUsed} {used} · {signalText(data.signal, m)}
             </p>
             <ForecastLine data={data} locale={locale} m={m} />
+            <BudgetArticles locale={locale} plan={data.plan} factBy={data.fact_by_category} />
           </>
         ) : (
           <p className="text-sm">{m.budgetUnset}</p>
@@ -286,7 +282,7 @@ export function ObjectBudgetCard({ locale, projectId }: { locale: Locale; projec
                 className={`min-h-12 rounded-full border px-3 text-sm ${category === item ? "border-pine bg-pine text-paper" : "border-ink/15 bg-white"}`}
                 onClick={() => setCategory(item)}
               >
-                {categoryLabel(item, m)}
+                {budgetCategoryLabel(item, m)}
               </button>
             ))}
           </div>
@@ -306,7 +302,7 @@ export function ObjectBudgetCard({ locale, projectId }: { locale: Locale; projec
               ) : null}
               {CATEGORIES.map((item) => (
                 <label key={item} className="grid gap-1 text-sm">
-                  {categoryLabel(item, m)}
+                  {budgetCategoryLabel(item, m)}
                   <input
                     value={cats[item]}
                     onChange={(event) => setCats((prev) => ({ ...prev, [item]: event.target.value }))}
@@ -337,13 +333,13 @@ export function ObjectBudgetCard({ locale, projectId }: { locale: Locale; projec
               </p>
               {CATEGORIES.map((item) => (
                 <p key={item} className="text-sm text-ink/70">
-                  {categoryLabel(item, m)}: {money(data.fact_by_category[item] || 0, locale)}
+                  {budgetCategoryLabel(item, m)}: {money(data.fact_by_category[item] || 0, locale)}
                 </p>
               ))}
               {data.expenses.map((item) => (
                 <article key={item.id} className="grid gap-1 text-sm">
                   <p>
-                    {money(item.amount_kzt, locale)} · {categoryLabel(item.category, m)}
+                    {money(item.amount_kzt, locale)} · {budgetCategoryLabel(item.category, m)}
                     {item.note ? ` · ${item.note}` : ""}
                   </p>
                   {item.has_photo ? (

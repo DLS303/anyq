@@ -106,6 +106,18 @@ export function roleLabel(role: string, m: Msg) {
   }
 }
 
+export function dailyAuthorLabel(
+  entry: { author_name?: string; author_role?: string },
+  m: Msg,
+  audience: "staff" | "public",
+) {
+  if (audience === "staff") {
+    const name = entry.author_name?.trim();
+    if (name) return name;
+  }
+  return siteRoleLabel(entry.author_role || "", m);
+}
+
 export function shareText(m: Msg, day: string, url: string) {
   return m.reportShareText.replace("{date}", day).replace("{url}", url);
 }

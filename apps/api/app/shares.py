@@ -65,7 +65,20 @@ def share_problem(log: DailyLog | None, digest: str, now: datetime | None = None
     return None
 
 
-def member_daily(log: DailyLog) -> dict:
+def _author_name(log: DailyLog, lookup) -> str:
+    if lookup is None or not log.author_id:
+        return ""
+    user = lookup(log.author_id)
+    if user is None:
+        return ""
+    return (getattr(user, "full_name", "") or "").strip()
+
+
+def member_daily(log: DailyLog, lookup=None) -> dict:
+    if lookup is None:
+        from app.store import store
+
+        lookup = store.get_user
     photos = [
         {
             "original_url": f"/v1/files/{photo.original_id}",
@@ -87,6 +100,7 @@ def member_daily(log: DailyLog) -> dict:
         "delay_hours": log.delay_hours,
         "author_id": log.author_id,
         "author_role": log.author_role,
+        "author_name": _author_name(log, lookup),
         "photos": photos,
         "voice_notes": [
             {

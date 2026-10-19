@@ -6,7 +6,7 @@ import { AuthImage } from "@/components/media/AuthImage";
 import { t } from "@/i18n/messages";
 import { deleteSite, postSite, uploadDailyPhotos, uploadDailyVoice } from "@/lib/api";
 import { preparePhoto } from "@/lib/photos";
-import { roleLabel, shareText, todayAlmaty, weatherLabel } from "@/lib/report";
+import { dailyAuthorLabel, shareText, todayAlmaty, weatherLabel } from "@/lib/report";
 import { toast } from "@/lib/toast";
 import type { Locale } from "@/lib/types";
 
@@ -26,6 +26,7 @@ export type DailyEntry = {
   delays: string;
   delay_hours?: number;
   author_role?: string;
+  author_name?: string;
   photos?: Photo[];
   voice_notes?: Voice[];
   share_active?: boolean;
@@ -456,6 +457,7 @@ export function DailyReport({
         {logs.map((log) => {
           const link = links[log.id];
           const message = link ? shareText(m, log.day, link) : "";
+          const author = dailyAuthorLabel(log, m, "staff");
           return (
             <article key={log.id} className="min-w-0 border border-ink/10 bg-white/40 p-3 text-sm">
               <p>
@@ -470,9 +472,9 @@ export function DailyReport({
                   {log.delay_hours ? ` · ${log.delay_hours} ${m.hubHours}` : ""}
                 </p>
               ) : null}
-              {log.author_role ? (
-                <p className="mt-1 text-ink/50">
-                  {m.reportAuthor}: {roleLabel(log.author_role, m)}
+              {author ? (
+                <p className="mt-1 text-ink/50" data-report-author>
+                  {m.reportAuthor}: {author}
                 </p>
               ) : null}
               {log.photos?.length ? (
