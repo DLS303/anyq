@@ -22,7 +22,7 @@ def media_root() -> Path:
 
 
 def kind_root(kind: str) -> Path:
-    if kind in ("original", "voice", "drawing_pdf"):
+    if kind in ("original", "voice", "drawing_pdf", "markup_photo"):
         path = media_root() / "private"
     elif kind == "public":
         path = media_root() / "public"

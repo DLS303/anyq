@@ -14,7 +14,7 @@ import {
   type DrawingSheet,
 } from "@/lib/drawings";
 import type { Locale } from "@/lib/types";
-import { PdfDrawingViewer } from "./PdfDrawingViewer";
+import { SheetMarkup } from "./SheetMarkup";
 
 type ListPayload = { can_upload: boolean; sheets: DrawingSheet[] };
 
@@ -161,7 +161,14 @@ export function DrawingSheets({ locale, projectId }: { locale: Locale; projectId
               {m.drawNewer}
             </button>
           ) : null}
-          {selected && rev ? <PdfDrawingViewer locale={locale} fileKey={`${selected.id}:${rev}`} loadFile={loadFile} /> : null}
+          {selected && rev ? (
+            <SheetMarkup
+              locale={locale}
+              revisionId={selected.revisions.find((item) => item.rev === rev)?.id || ""}
+              fileKey={`${selected.id}:${rev}`}
+              loadFile={loadFile}
+            />
+          ) : null}
           {selected ? (
             <div className="grid gap-2">
               <div className="flex flex-wrap items-center justify-between gap-2">

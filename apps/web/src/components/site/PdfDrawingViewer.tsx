@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import type { Locale } from "@/lib/types";
 import { t } from "@/i18n/messages";
@@ -9,9 +9,10 @@ type Props = {
   locale: Locale;
   fileKey: string;
   loadFile: () => Promise<ArrayBuffer>;
+  overlay?: ReactNode;
 };
 
-export function PdfDrawingViewer({ locale, fileKey, loadFile }: Props) {
+export function PdfDrawingViewer({ locale, fileKey, loadFile, overlay }: Props) {
   const m = t(locale);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -135,7 +136,10 @@ export function PdfDrawingViewer({ locale, fileKey, loadFile }: Props) {
       <div ref={boxRef} className="relative min-h-64 overflow-auto p-3" style={{ touchAction: "none" }}>
         {loading ? <p className="text-xs text-paper/70">{m.drawLoading}</p> : null}
         {failed ? <p className="text-xs text-clay">{m.drawError}</p> : null}
-        <canvas ref={canvasRef} className="mx-auto block max-w-none bg-white" />
+        <div className="relative mx-auto inline-block max-w-none">
+          <canvas ref={canvasRef} className="block max-w-none bg-white" />
+          {overlay ? <div className="pointer-events-none absolute inset-0">{overlay}</div> : null}
+        </div>
       </div>
     </div>
   );
