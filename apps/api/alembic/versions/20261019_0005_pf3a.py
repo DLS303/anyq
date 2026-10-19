@@ -88,7 +88,9 @@ def upgrade() -> None:
         sa.Column("purpose", sa.String(length=32), nullable=False),
         sa.Column("token_sha256", sa.String(length=64), nullable=False),
         sa.Column("entity_id", sa.String(length=36), nullable=False),
-        sa.ForeignKeyConstraint(["entity_id"], ["rfis.id"], name="fk_access_tokens_entity"),
+        sa.ForeignKeyConstraint(
+            ["entity_id"], ["rfis.id"], name="fk_access_tokens_entity"
+        ),
         sa.Column("expires_at", sa.String(length=40), nullable=False),
         sa.Column("used_at", sa.String(length=40), nullable=True),
         sa.Column("created_by", sa.String(length=80), nullable=False),
@@ -98,8 +100,14 @@ def upgrade() -> None:
         sa.Column("row_version", sa.Integer(), nullable=False),
         sa.Column("deleted_at", sa.String(length=40), nullable=True),
     )
-    op.create_index("ix_access_tokens_token_sha256", "access_tokens", ["token_sha256"], unique=True)
-    op.create_index("ix_access_tokens_company_updated", "access_tokens", ["company_id", "updated_at"])
+    op.create_index(
+        "ix_access_tokens_token_sha256", "access_tokens", ["token_sha256"], unique=True
+    )
+    op.create_index(
+        "ix_access_tokens_company_updated",
+        "access_tokens",
+        ["company_id", "updated_at"],
+    )
     op.create_index("ix_access_tokens_entity_id", "access_tokens", ["entity_id"])
     op.create_table(
         "rfi_files",
@@ -128,7 +136,18 @@ def upgrade() -> None:
         sqlite_where=sa.text("deleted_at IS NULL"),
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
-    op.create_index("ix_rfi_files_company_updated", "rfi_files", ["company_id", "updated_at"])
+    op.create_index(
+        "ix_rfi_files_company_updated", "rfi_files", ["company_id", "updated_at"]
+    )
+    # Retention scans idempotency_keys.created_at. Revision 0001 creates the same
+    # index; if_not_exists keeps upgrade working when that revision already ran.
+    # Downgrade leaves the index in place because 0001 still owns it.
+    op.create_index(
+        "ix_idempotency_keys_created_at",
+        "idempotency_keys",
+        ["created_at"],
+        if_not_exists=True,
+    )
 
 
 def downgrade() -> None:
@@ -142,5 +161,7 @@ def downgrade() -> None:
     op.drop_index("ix_rfis_project_status_due", table_name="rfis")
     op.drop_index("ix_rfis_company_updated", table_name="rfis")
     op.drop_table("rfis")
-    op.drop_index("ix_external_contacts_company_updated", table_name="external_contacts")
+    op.drop_index(
+        "ix_external_contacts_company_updated", table_name="external_contacts"
+    )
     op.drop_table("external_contacts")

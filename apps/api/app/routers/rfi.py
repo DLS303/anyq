@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -17,6 +19,8 @@ from pydantic import BaseModel
 
 from app.company_features import require_feature
 from app.idempotency import IdempotencyConflict, run_idempotent
+from app.media import MAX_UPLOAD_BYTES
+from app.ratelimit import PublicRateLimited, public_rfi_limiter
 from app.rfi_service import (
     answer_rfi,
     attach_file,
@@ -81,6 +85,45 @@ class PublicAnswerIn(BaseModel):
     answer: str
 
 
+_CHUNK = 64 * 1024
+
+
+def _limit_public(request: Request) -> None:
+    host = request.client.host if request.client else ""
+    try:
+        public_rfi_limiter.check(host)
+    except PublicRateLimited as exc:
+        raise HTTPException(status_code=429, detail="Слишком много запросов") from exc
+
+
+async def _read_capped(upload: UploadFile) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        block = await upload.read(_CHUNK)
+        if not block:
+            break
+        total += len(block)
+        if total > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Файл больше 10 МБ")
+        chunks.append(block)
+    return b"".join(chunks)
+
+
+def _file_response(path: str, media_type: str) -> FileResponse:
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=Path(path).name,
+        content_disposition_type="attachment",
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
+
+
+def _without_contact(data: dict) -> dict:
+    return {key: value for key, value in data.items() if key != "contact"}
+
+
 def _access(request: Request) -> dict:
     company_id = str(getattr(request.state, "feature_company_id", "") or "")
     pid = str(request.path_params.get("pid") or "")
@@ -121,9 +164,17 @@ def add_rfi(
         return create_rfi(user, access, body.model_dump())
 
     try:
-        data = run_idempotent(user.id, idempotency_key, body.model_dump_json(), create)
+        data = run_idempotent(
+            user.id,
+            idempotency_key,
+            body.model_dump_json(),
+            create,
+            persist=_without_contact,
+        )
     except IdempotencyConflict as exc:
-        raise HTTPException(status_code=409, detail="Этот запрос уже отправлен с другими данными") from exc
+        raise HTTPException(
+            status_code=409, detail="Этот запрос уже отправлен с другими данными"
+        ) from exc
     return {"ok": True, "data": data}
 
 
@@ -136,7 +187,12 @@ def read_rfi(rid: str, request: Request, user: User = Depends(require_feature("r
 
 
 @router.post("/rfis/{rid}/answer")
-def post_answer(rid: str, body: AnswerIn, request: Request, user: User = Depends(require_feature("rfi"))):
+def post_answer(
+    rid: str,
+    body: AnswerIn,
+    request: Request,
+    user: User = Depends(require_feature("rfi")),
+):
     access = _access(request)
     if access["entity_id"] != rid:
         raise HTTPException(status_code=404, detail="Не найдено")
@@ -144,7 +200,12 @@ def post_answer(rid: str, body: AnswerIn, request: Request, user: User = Depends
 
 
 @router.post("/rfis/{rid}/status")
-def post_status(rid: str, body: StatusIn, request: Request, user: User = Depends(require_feature("rfi"))):
+def post_status(
+    rid: str,
+    body: StatusIn,
+    request: Request,
+    user: User = Depends(require_feature("rfi")),
+):
     access = _access(request)
     if access["entity_id"] != rid:
         raise HTTPException(status_code=404, detail="Не найдено")
@@ -152,7 +213,12 @@ def post_status(rid: str, body: StatusIn, request: Request, user: User = Depends
 
 
 @router.post("/rfis/{rid}/delete")
-def post_delete(rid: str, body: DeleteIn, request: Request, user: User = Depends(require_feature("rfi"))):
+def post_delete(
+    rid: str,
+    body: DeleteIn,
+    request: Request,
+    user: User = Depends(require_feature("rfi")),
+):
     access = _access(request)
     if access["entity_id"] != rid:
         raise HTTPException(status_code=404, detail="Не найдено")
@@ -172,9 +238,11 @@ async def post_file(
     access = _access(request)
     if access["project_id"] != pid or access["entity_id"] != rid:
         raise HTTPException(status_code=404, detail="Не найдено")
-    raw = await file.read()
+    raw = await _read_capped(file)
     try:
-        data = attach_file(user, access, rid, file_id, raw, file.content_type, row_version)
+        data = attach_file(
+            user, access, rid, file_id, raw, file.content_type, row_version
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "data": data}
@@ -193,7 +261,7 @@ def get_file(
     if access["project_id"] != pid or access["entity_id"] != rid:
         raise HTTPException(status_code=404, detail="Не найдено")
     path, media_type = read_file(pid, rid, file_id)
-    return FileResponse(path, media_type=media_type)
+    return _file_response(path, media_type)
 
 
 @router.post("/projects/{pid}/rfis/{rid}/link")
@@ -225,7 +293,9 @@ def post_revoke(
 
 
 @router.get("/projects/{pid}/rfis/{rid}/pdf")
-def get_pdf(pid: str, rid: str, request: Request, user: User = Depends(require_feature("rfi"))):
+def get_pdf(
+    pid: str, rid: str, request: Request, user: User = Depends(require_feature("rfi"))
+):
     access = _access(request)
     if access["project_id"] != pid or access["entity_id"] != rid:
         raise HTTPException(status_code=404, detail="Не найдено")
@@ -234,16 +304,20 @@ def get_pdf(pid: str, rid: str, request: Request, user: User = Depends(require_f
 
 
 @public.get("/rfi/{token}")
-def read_public_rfi(token: str):
+def read_public_rfi(token: str, _limited: None = Depends(_limit_public)):
     return {"ok": True, "data": public_read(token)}
 
 
 @public.post("/rfi/{token}")
-def answer_public_rfi(token: str, body: PublicAnswerIn):
+def answer_public_rfi(
+    token: str, body: PublicAnswerIn, _limited: None = Depends(_limit_public)
+):
     return {"ok": True, "data": public_answer(token, body.answer)}
 
 
 @public.get("/rfi/{token}/files/{file_id}")
-def read_public_rfi_file(token: str, file_id: str):
+def read_public_rfi_file(
+    token: str, file_id: str, _limited: None = Depends(_limit_public)
+):
     path, media_type = public_file(token, file_id)
-    return FileResponse(path, media_type=media_type)
+    return _file_response(path, media_type)

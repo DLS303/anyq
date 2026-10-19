@@ -8,7 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -20,14 +20,24 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.audit import _mask
 from app.company_features import company_id_of
+from app.idempotency import main as purge_idempotency_main
+from app.idempotency import purge_idempotency_keys
 from app.log_redact import TokenRedactingFilter, redact_text
 from app.main import app
+from app.media import MAX_UPLOAD_BYTES, strip_image
 from app.paths import publish_exclusive, uploads_dir, write_exclusive_temp
 from app.pf0_tables import AuditLog
-from app.rfi_service import add_business_days, count_open_by_project, create_rfi
+from app.ratelimit import public_rfi_limiter
+from app.rfi_service import (
+    add_business_days,
+    answer_rfi,
+    count_open_by_project,
+    create_rfi,
+)
 from app.rfi_tables import access_tokens, rfi_files
 from app.schemas import User
 from app.site_models import RFI
+from app.sql_backend import IdempotencyKey
 from app.store import store
 
 client = TestClient(app)
@@ -118,7 +128,13 @@ def test_business_days_skip_the_weekend():
 
 
 def test_audit_mask_hides_phone_and_name():
-    masked = _mask({"status": ["open", "answered"], "phone": "+15551230000", "full_name": "Ada North"})
+    masked = _mask(
+        {
+            "status": ["open", "answered"],
+            "phone": "+15551230000",
+            "full_name": "Ada North",
+        }
+    )
     blob = json.dumps(masked)
     assert masked["status"] == ["open", "answered"]
     assert masked["phone"] == "***"
@@ -144,7 +160,11 @@ def test_foreign_company_is_404_on_read_write_files_and_links(monkeypatch):
     )
     supervisor = client.post(
         "/v1/auth/login",
-        json={"email": supervisor_email, "password": "secret12", "consent_offer_pd": True},
+        json={
+            "email": supervisor_email,
+            "password": "secret12",
+            "consent_offer_pd": True,
+        },
         headers={"User-Agent": "anyq-test"},
     )
     assert foreman.status_code == 200, foreman.text
@@ -212,8 +232,18 @@ def test_foreign_company_is_404_on_read_write_files_and_links(monkeypatch):
     assert "+1555" not in json.dumps(body["push"])
 
     for token in (foreign_token,):
-        assert client.get(f"/v1/site/projects/{pid}/rfis", headers=_auth(token)).status_code == 404
-        assert client.get(f"/v1/site/rfis/{record_id}?pid={other}", headers=_auth(token)).status_code == 404
+        assert (
+            client.get(
+                f"/v1/site/projects/{pid}/rfis", headers=_auth(token)
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get(
+                f"/v1/site/rfis/{record_id}?pid={other}", headers=_auth(token)
+            ).status_code
+            == 404
+        )
         assert (
             client.post(
                 f"/v1/site/projects/{pid}/rfis",
@@ -246,8 +276,12 @@ def test_foreign_company_is_404_on_read_write_files_and_links(monkeypatch):
             == 404
         )
 
-    foreman_list = client.get(f"/v1/site/projects/{pid}/rfis", headers=_auth(foreman_token))
-    supervisor_list = client.get(f"/v1/site/projects/{pid}/rfis", headers=_auth(supervisor_token))
+    foreman_list = client.get(
+        f"/v1/site/projects/{pid}/rfis", headers=_auth(foreman_token)
+    )
+    supervisor_list = client.get(
+        f"/v1/site/projects/{pid}/rfis", headers=_auth(supervisor_token)
+    )
     assert foreman_list.status_code == 200, foreman_list.text
     assert supervisor_list.status_code == 200, supervisor_list.text
     assert foreman_list.json()["data"][0]["overdue"] is True
@@ -309,7 +343,9 @@ def test_foreign_company_is_404_on_read_write_files_and_links(monkeypatch):
     )
     assert b"AUTHORSECRET99" not in stored_pdf.content
 
-    exported = client.get(f"/v1/site/projects/{pid}/rfis/{record_id}/pdf", headers=_auth(owner_token))
+    exported = client.get(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/pdf", headers=_auth(owner_token)
+    )
     assert exported.status_code == 200, exported.text
     assert exported.headers["content-type"].startswith("application/pdf")
     assert b"Ada North" not in exported.content
@@ -336,9 +372,12 @@ def test_foreign_company_is_404_on_read_write_files_and_links(monkeypatch):
     assert public.status_code == 200, public.text
     assert public.headers["x-robots-tag"] == "noindex, nofollow"
     assert public.headers["referrer-policy"] == "no-referrer"
+    assert public.headers["cache-control"] == "no-store"
     assert "+15551230000" not in public.text
     assert "Ada North" not in public.text
-    replied = client.post(f"/v1/public/rfi/{token}", json={"answer": "Land it on grid C"})
+    replied = client.post(
+        f"/v1/public/rfi/{token}", json={"answer": "Land it on grid C"}
+    )
     assert replied.status_code == 200, replied.text
     again = client.post(f"/v1/public/rfi/{token}", json={"answer": "second"})
     assert again.status_code == 410
@@ -363,7 +402,9 @@ def test_foreign_company_is_404_on_read_write_files_and_links(monkeypatch):
     assert reclose.status_code == 409
 
     with store._sql.factory() as session:
-        events = session.scalars(select(AuditLog).where(AuditLog.entity_id == record_id)).all()
+        events = session.scalars(
+            select(AuditLog).where(AuditLog.entity_id == record_id)
+        ).all()
     actions = [row.action for row in events]
     assert "rfi.create" in actions
     assert "rfi.answer" in actions
@@ -373,7 +414,9 @@ def test_foreign_company_is_404_on_read_write_files_and_links(monkeypatch):
     assert "Ada North" not in blob
 
     _flag(owner_token, False, 1)
-    gated = client.get(f"/v1/site/rfis/{record_id}?pid={other}", headers=_auth(owner_token))
+    gated = client.get(
+        f"/v1/site/rfis/{record_id}?pid={other}", headers=_auth(owner_token)
+    )
     assert gated.status_code == 404
     public_off = client.get(f"/v1/public/rfi/{token}")
     assert public_off.status_code == 404
@@ -452,7 +495,11 @@ def test_reused_file_id_does_not_replace_bytes(monkeypatch):
     assert saved.status_code == 200, saved.text
     original_bytes = saved.content
     with store._sql.factory() as session:
-        stored = session.execute(select(rfi_files).where(rfi_files.c.file_id == shared_id)).mappings().one()
+        stored = (
+            session.execute(select(rfi_files).where(rfi_files.c.file_id == shared_id))
+            .mappings()
+            .one()
+        )
     assert shared_id not in stored.storage_key
     assert "/" not in stored.storage_key
     on_disk = uploads_dir() / stored.storage_key
@@ -517,9 +564,15 @@ def test_reused_file_id_does_not_replace_bytes(monkeypatch):
     assert after == before
     assert list(uploads_dir().glob(".tmp-*")) == []
     with store._sql.factory() as session:
-        rows = session.execute(
-            select(rfi_files).where(rfi_files.c.rfi_id == first_id, rfi_files.c.file_id == shared_id)
-        ).mappings().all()
+        rows = (
+            session.execute(
+                select(rfi_files).where(
+                    rfi_files.c.rfi_id == first_id, rfi_files.c.file_id == shared_id
+                )
+            )
+            .mappings()
+            .all()
+        )
     assert len(rows) == 1
 
 
@@ -530,27 +583,58 @@ def test_alembic_rfi_revision_roundtrip(tmp_path):
     env["ANYQ_ENV"] = "development"
     env["JWT_SECRET"] = "test-only-secret-value-with-32-characters"
     api = os.path.join(os.path.dirname(__file__), "..")
-    subprocess.check_call([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=api, env=env)
-    subprocess.check_call([sys.executable, "-m", "alembic", "downgrade", "-1"], cwd=api, env=env)
-    subprocess.check_call([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=api, env=env)
+    subprocess.check_call(
+        [sys.executable, "-m", "alembic", "upgrade", "head"], cwd=api, env=env
+    )
+    subprocess.check_call(
+        [sys.executable, "-m", "alembic", "downgrade", "-1"], cwd=api, env=env
+    )
+    subprocess.check_call(
+        [sys.executable, "-m", "alembic", "upgrade", "head"], cwd=api, env=env
+    )
     subprocess.check_call([sys.executable, "-m", "alembic", "check"], cwd=api, env=env)
     connection = sqlite3.connect(db)
-    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"rfis", "external_contacts", "access_tokens", "rfi_files", "audit_log"} <= tables
-    indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    assert {
+        "rfis",
+        "external_contacts",
+        "access_tokens",
+        "rfi_files",
+        "audit_log",
+    } <= tables
+    indexes = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        )
+    }
     assert "ix_rfis_project_status_due" in indexes
     assert "ix_rfis_company_updated" in indexes
     assert "uq_rfi_files_rfi_file" in indexes
     assert "ix_access_tokens_entity_id" in indexes
-    rfi_sql = connection.execute("SELECT sql FROM sqlite_master WHERE name = 'rfis'").fetchone()[0]
+    assert "ix_idempotency_keys_created_at" in indexes
+    rfi_sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'rfis'"
+    ).fetchone()[0]
     assert "uq_rfis_project_number" in rfi_sql
-    file_fks = {row[2] for row in connection.execute("PRAGMA foreign_key_list(rfi_files)")}
-    token_fks = {row[2] for row in connection.execute("PRAGMA foreign_key_list(access_tokens)")}
+    file_fks = {
+        row[2] for row in connection.execute("PRAGMA foreign_key_list(rfi_files)")
+    }
+    token_fks = {
+        row[2] for row in connection.execute("PRAGMA foreign_key_list(access_tokens)")
+    }
     rfi_fks = {row[2] for row in connection.execute("PRAGMA foreign_key_list(rfis)")}
     assert "rfis" in file_fks
     assert "rfis" in token_fks
     assert "external_contacts" in rfi_fks
-    file_columns = {row[1] for row in connection.execute("PRAGMA table_info(rfi_files)")}
+    file_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(rfi_files)")
+    }
     assert {"file_id", "storage_key", "created_by", "updated_by"} <= file_columns
     columns = {row[1] for row in connection.execute("PRAGMA table_info(audit_log)")}
     assert {"entity_type", "entity_id", "project_id", "changes"} <= columns
@@ -571,7 +655,9 @@ def test_parallel_creates_use_distinct_numbers(monkeypatch):
     def once(index: int) -> None:
         barrier.wait()
         try:
-            data = create_rfi(user, access, {"id": str(uuid4()), "question": f"Race {index}"})
+            data = create_rfi(
+                user, access, {"id": str(uuid4()), "question": f"Race {index}"}
+            )
         except (HTTPException, IntegrityError, OperationalError) as exc:
             with lock:
                 errors.append(exc)
@@ -654,7 +740,9 @@ def test_revoke_and_close_invalidate_the_reply_link(monkeypatch):
         headers=_auth(token),
     )
     assert removed.status_code == 200, removed.text
-    assert client.get(f"/v1/public/rfi/{third.json()['data']['token']}").status_code == 404
+    assert (
+        client.get(f"/v1/public/rfi/{third.json()['data']['token']}").status_code == 404
+    )
 
 
 def test_demo_bundle_omits_questions_when_the_flag_is_off(monkeypatch):
@@ -669,7 +757,13 @@ def test_demo_bundle_omits_questions_when_the_flag_is_off(monkeypatch):
     )
     assert created.status_code == 200, created.text
     record_id = created.json()["data"]["id"]
-    legacy = RFI(id="legacy-hidden", project_id=pid, number="RFI-OLD", title="Old", question="Old")
+    legacy = RFI(
+        id="legacy-hidden",
+        project_id=pid,
+        number="RFI-OLD",
+        title="Old",
+        question="Old",
+    )
     store.rfis[legacy.id] = legacy
     try:
         _flag(token, False, 1)
@@ -698,7 +792,7 @@ def test_publish_exclusive_leaves_the_existing_file(tmp_path, monkeypatch):
 
 def test_reply_token_is_redacted_in_logs():
     secret = "a" * 43
-    message = f'GET /v1/public/rfi/{secret} HTTP/1.1 referer /ru/r/rfi/{secret}'
+    message = f"GET /v1/public/rfi/{secret} HTTP/1.1 referer /ru/r/rfi/{secret}"
     assert secret not in redact_text(message)
     assert "/v1/public/rfi/[redacted]" in redact_text(message)
     logger = logging.getLogger("test.rfi.redact")
@@ -718,3 +812,427 @@ def test_reply_token_is_redacted_in_logs():
         logger.removeHandler(handler)
     assert captured
     assert secret not in captured[0]
+
+
+def _login(email: str) -> str:
+    res = client.post(
+        "/v1/auth/login",
+        json={"email": email, "password": "secret12", "consent_offer_pd": True},
+        headers={"User-Agent": "anyq-test"},
+    )
+    assert res.status_code == 200, res.text
+    return res.json()["data"]["token"]
+
+
+def _member(owner_token: str, pid: str, email: str, bin_no: str, role: str) -> str:
+    _register(email, bin_no)
+    _promote(email, role)
+    added = client.post(
+        f"/v1/site/projects/{pid}/members",
+        json={"email": email, "role": role},
+        headers=_auth(owner_token),
+    )
+    assert added.status_code == 200, added.text
+    return _login(email)
+
+
+def test_close_delete_and_revoke_follow_author_and_owner(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    owner_token, _owner_user = _owner("rfi-role-owner@example.com", "404040404040")
+    pid = _project(owner_token, "Role Yard")
+    _flag(owner_token, True, 0)
+    foreman_token = _member(
+        owner_token, pid, "rfi-role-foreman@example.com", "404040404040", "foreman"
+    )
+    other_token = _member(
+        owner_token, pid, "rfi-role-other@example.com", "404040404040", "supervisor"
+    )
+
+    created = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": str(uuid4()), "question": "Who may close this?"},
+        headers=_auth(foreman_token),
+    )
+    assert created.status_code == 200, created.text
+    record_id = created.json()["data"]["id"]
+    denied = client.post(
+        f"/v1/site/rfis/{record_id}/status",
+        json={"status": "closed", "row_version": 1},
+        headers=_auth(other_token),
+    )
+    assert denied.status_code == 403
+    assert (
+        client.post(
+            f"/v1/site/rfis/{record_id}/delete",
+            json={"row_version": 1},
+            headers=_auth(other_token),
+        ).status_code
+        == 403
+    )
+
+    link_id = str(uuid4())
+    link = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link",
+        json={"id": link_id, "expires_in_days": 14},
+        headers=_auth(foreman_token),
+    )
+    assert link.status_code == 200, link.text
+    share = link.json()["data"]["token"]
+    forbidden = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link/revoke",
+        json={"id": link_id},
+        headers=_auth(other_token),
+    )
+    assert forbidden.status_code == 403
+    assert client.get(f"/v1/public/rfi/{share}").status_code == 200
+    own = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link/revoke",
+        json={"id": link_id},
+        headers=_auth(foreman_token),
+    )
+    assert own.status_code == 200, own.text
+    assert client.get(f"/v1/public/rfi/{share}").status_code == 404
+
+    second_id = str(uuid4())
+    second = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link",
+        json={"id": second_id, "expires_in_days": 14},
+        headers=_auth(foreman_token),
+    )
+    assert second.status_code == 200, second.text
+    owner_revoke = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link/revoke",
+        json={"id": second_id},
+        headers=_auth(owner_token),
+    )
+    assert owner_revoke.status_code == 200, owner_revoke.text
+
+    closed = client.post(
+        f"/v1/site/rfis/{record_id}/status",
+        json={"status": "closed", "row_version": 1},
+        headers=_auth(foreman_token),
+    )
+    assert closed.status_code == 200, closed.text
+
+    owned = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={
+            "id": str(uuid4()),
+            "question": "Owner may close a question they did not write",
+        },
+        headers=_auth(foreman_token),
+    )
+    assert owned.status_code == 200, owned.text
+    owned_id = owned.json()["data"]["id"]
+    owner_close = client.post(
+        f"/v1/site/rfis/{owned_id}/status",
+        json={"status": "closed", "row_version": 1},
+        headers=_auth(owner_token),
+    )
+    assert owner_close.status_code == 200, owner_close.text
+
+    removable = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": str(uuid4()), "question": "Only the project owner may delete"},
+        headers=_auth(foreman_token),
+    )
+    assert removable.status_code == 200, removable.text
+    removable_id = removable.json()["data"]["id"]
+    author_delete = client.post(
+        f"/v1/site/rfis/{removable_id}/delete",
+        json={"row_version": 1},
+        headers=_auth(foreman_token),
+    )
+    assert author_delete.status_code == 403
+    removed = client.post(
+        f"/v1/site/rfis/{removable_id}/delete",
+        json={"row_version": 1},
+        headers=_auth(owner_token),
+    )
+    assert removed.status_code == 200, removed.text
+
+
+def test_expired_or_revoked_link_cannot_answer(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    token, _user = _owner("rfi-expire@example.com", "414141414141")
+    pid = _project(token, "Expiry Yard")
+    _flag(token, True, 0)
+    created = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": str(uuid4()), "question": "Does an old link still answer?"},
+        headers=_auth(token),
+    )
+    assert created.status_code == 200, created.text
+    record_id = created.json()["data"]["id"]
+    link_id = str(uuid4())
+    link = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link",
+        json={"id": link_id, "expires_in_days": 14},
+        headers=_auth(token),
+    )
+    assert link.status_code == 200, link.text
+    share = link.json()["data"]["token"]
+    with store._sql.factory() as session:
+        session.execute(
+            update(access_tokens)
+            .where(access_tokens.c.id == link_id)
+            .values(expires_at="2020-01-01T00:00:00+00:00")
+        )
+        session.commit()
+    posted = client.post(f"/v1/public/rfi/{share}", json={"answer": "too late"})
+    assert posted.status_code == 410
+    with pytest.raises(HTTPException) as caught:
+        answer_rfi(None, record_id, "too late", 1, token_id=link_id, token_version=1)
+    assert caught.value.status_code == 410
+    still = client.get(f"/v1/site/rfis/{record_id}", headers=_auth(token))
+    assert still.status_code == 200, still.text
+    assert still.json()["data"]["status"] == "open"
+
+    live_id = str(uuid4())
+    live = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link",
+        json={"id": live_id, "expires_in_days": 14},
+        headers=_auth(token),
+    )
+    assert live.status_code == 200, live.text
+    with store._sql.factory() as session:
+        session.execute(
+            update(access_tokens)
+            .where(access_tokens.c.id == live_id)
+            .values(deleted_at="2020-01-01T00:00:00+00:00")
+        )
+        session.commit()
+    with pytest.raises(HTTPException) as revoked:
+        answer_rfi(None, record_id, "still late", 1, token_id=live_id, token_version=1)
+    assert revoked.value.status_code == 410
+    assert (
+        client.get(f"/v1/site/rfis/{record_id}", headers=_auth(token)).json()["data"][
+            "status"
+        ]
+        == "open"
+    )
+
+
+def test_public_file_is_attachment_and_stays_on_its_question(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    token, _user = _owner("rfi-filehdr@example.com", "424242424242")
+    pid = _project(token, "File Yard")
+    _flag(token, True, 0)
+    first_id = str(uuid4())
+    second_id = str(uuid4())
+    file_a = str(uuid4())
+    file_b = str(uuid4())
+    for record_id, question in ((first_id, "Question A"), (second_id, "Question B")):
+        made = client.post(
+            f"/v1/site/projects/{pid}/rfis",
+            json={"id": record_id, "question": question},
+            headers=_auth(token),
+        )
+        assert made.status_code == 200, made.text
+    up_a = client.post(
+        f"/v1/site/projects/{pid}/rfis/{first_id}/files",
+        files={"file": ("a.jpg", _jpeg(), "image/jpeg")},
+        data={"id": file_a, "row_version": "1"},
+        headers=_auth(token),
+    )
+    assert up_a.status_code == 200, up_a.text
+    up_b = client.post(
+        f"/v1/site/projects/{pid}/rfis/{second_id}/files",
+        files={"file": ("b.jpg", _jpeg(), "image/jpeg")},
+        data={"id": file_b, "row_version": "1"},
+        headers=_auth(token),
+    )
+    assert up_b.status_code == 200, up_b.text
+    link = client.post(
+        f"/v1/site/projects/{pid}/rfis/{first_id}/link",
+        json={"id": str(uuid4()), "expires_in_days": 14},
+        headers=_auth(token),
+    )
+    assert link.status_code == 200, link.text
+    share = link.json()["data"]["token"]
+    foreign = client.get(f"/v1/public/rfi/{share}/files/{file_b}")
+    assert foreign.status_code == 404
+    public = client.get(f"/v1/public/rfi/{share}/files/{file_a}")
+    assert public.status_code == 200, public.text
+    assert "attachment" in public.headers["content-disposition"].lower()
+    assert public.headers["x-content-type-options"] == "nosniff"
+    stored = client.get(
+        f"/v1/site/projects/{pid}/rfis/{first_id}/files/{file_a}",
+        headers=_auth(token),
+    )
+    assert stored.status_code == 200, stored.text
+    assert "attachment" in stored.headers["content-disposition"].lower()
+    assert stored.headers["x-content-type-options"] == "nosniff"
+
+
+def test_upload_over_ten_megabytes_is_rejected(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    token, _user = _owner("rfi-big@example.com", "434343434343")
+    pid = _project(token, "Big Yard")
+    _flag(token, True, 0)
+    record_id = str(uuid4())
+    made = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": record_id, "question": "Too large?"},
+        headers=_auth(token),
+    )
+    assert made.status_code == 200, made.text
+    before = {path.name for path in uploads_dir().iterdir() if path.is_file()}
+    huge = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/files",
+        files={"file": ("big.jpg", b"x" * (MAX_UPLOAD_BYTES + 1), "image/jpeg")},
+        data={"id": str(uuid4()), "row_version": "1"},
+        headers=_auth(token),
+    )
+    assert huge.status_code == 413, huge.text
+    after = {path.name for path in uploads_dir().iterdir() if path.is_file()}
+    assert after == before
+    Image.MAX_IMAGE_PIXELS = None
+    with pytest.raises(ValueError):
+        strip_image(b"y" * (MAX_UPLOAD_BYTES + 1))
+    strip_image(_jpeg())
+    assert Image.MAX_IMAGE_PIXELS == 178_956_970
+
+
+def test_closed_question_rejects_another_file(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    token, _user = _owner("rfi-closed-file@example.com", "474747474747")
+    pid = _project(token, "Closed Yard")
+    _flag(token, True, 0)
+    record_id = str(uuid4())
+    made = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": record_id, "question": "Close before the photo"},
+        headers=_auth(token),
+    )
+    assert made.status_code == 200, made.text
+    closed = client.post(
+        f"/v1/site/rfis/{record_id}/status",
+        json={"status": "closed", "row_version": 1},
+        headers=_auth(token),
+    )
+    assert closed.status_code == 200, closed.text
+    before = {path.name for path in uploads_dir().iterdir() if path.is_file()}
+    upload = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/files",
+        files={"file": ("late.jpg", _jpeg(), "image/jpeg")},
+        data={"id": str(uuid4()), "row_version": "2"},
+        headers=_auth(token),
+    )
+    assert upload.status_code == 409, upload.text
+    after = {path.name for path in uploads_dir().iterdir() if path.is_file()}
+    assert after == before
+    assert list(uploads_dir().glob(".tmp-*")) == []
+
+
+def test_public_reply_rate_limit(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    token, _user = _owner("rfi-limit@example.com", "454545454545")
+    pid = _project(token, "Limit Yard")
+    _flag(token, True, 0)
+    record_id = str(uuid4())
+    made = client.post(
+        f"/v1/site/projects/{pid}/rfis",
+        json={"id": record_id, "question": "Slow down"},
+        headers=_auth(token),
+    )
+    assert made.status_code == 200, made.text
+    link = client.post(
+        f"/v1/site/projects/{pid}/rfis/{record_id}/link",
+        json={"id": str(uuid4()), "expires_in_days": 14},
+        headers=_auth(token),
+    )
+    assert link.status_code == 200, link.text
+    share = link.json()["data"]["token"]
+    monkeypatch.setattr(public_rfi_limiter, "limit", 2)
+    public_rfi_limiter.reset()
+    assert client.get(f"/v1/public/rfi/{share}").status_code == 200
+    assert client.get(f"/v1/public/rfi/{share}").status_code == 200
+    blocked = client.get(f"/v1/public/rfi/{share}")
+    assert blocked.status_code == 429
+    assert (
+        client.post(f"/v1/public/rfi/{share}", json={"answer": "no"}).status_code == 429
+    )
+    assert client.get(f"/v1/public/rfi/{share}/files/{uuid4()}").status_code == 429
+
+
+def test_idempotency_replay_omits_contact(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "0")
+    token, user = _owner("rfi-idem@example.com", "464646464646")
+    pid = _project(token, "Idem Yard")
+    _flag(token, True, 0)
+    body = {
+        "id": str(uuid4()),
+        "question": "Remember this without the contact",
+        "contact": {
+            "id": str(uuid4()),
+            "full_name": "Ada North",
+            "phone": "+15557770000",
+            "email": "ada-idem@example.com",
+            "organization": "North Design",
+        },
+    }
+    headers = {**_auth(token), "Idempotency-Key": "rfi-contact-once"}
+    first = client.post(f"/v1/site/projects/{pid}/rfis", json=body, headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["data"]["contact"]["phone"] == "+15557770000"
+    second = client.post(f"/v1/site/projects/{pid}/rfis", json=body, headers=headers)
+    assert second.status_code == 200, second.text
+    assert "contact" not in second.json()["data"]
+    assert "+15557770000" not in second.text
+    with store._sql.factory() as session:
+        row = session.scalar(
+            select(IdempotencyKey).where(
+                IdempotencyKey.user_id == user.id,
+                IdempotencyKey.key == "rfi-contact-once",
+            )
+        )
+    assert row is not None
+    assert row.response_json is not None
+    stored = json.loads(row.response_json)
+    assert "contact" not in stored
+    assert "+15557770000" not in row.response_json
+
+
+def test_purge_idempotency_keys_drops_rows_older_than_a_day(monkeypatch):
+    now = datetime.now(UTC)
+    old = (now - timedelta(hours=25)).isoformat(timespec="seconds")
+    recent = (now - timedelta(hours=23)).isoformat(timespec="seconds")
+    with store._sql.factory() as session:
+        session.add(
+            IdempotencyKey(
+                user_id="purge-old",
+                key="old",
+                fingerprint="a",
+                response_json="{}",
+                created_at=old,
+            )
+        )
+        session.add(
+            IdempotencyKey(
+                user_id="purge-new",
+                key="new",
+                fingerprint="b",
+                response_json="{}",
+                created_at=recent,
+            )
+        )
+        session.commit()
+    removed = purge_idempotency_keys()
+    assert removed >= 1
+    with store._sql.factory() as session:
+        gone = session.scalar(
+            select(IdempotencyKey).where(IdempotencyKey.user_id == "purge-old")
+        )
+        kept = session.scalar(
+            select(IdempotencyKey).where(IdempotencyKey.user_id == "purge-new")
+        )
+    assert gone is None
+    assert kept is not None
+    monkeypatch.setattr(sys, "argv", ["app.idempotency"])
+    purge_idempotency_main()
+    with store._sql.factory() as session:
+        still = session.scalar(
+            select(IdempotencyKey).where(IdempotencyKey.user_id == "purge-new")
+        )
+    assert still is not None

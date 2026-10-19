@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { canTransition, isOverdue, whatsAppHref } from "./rfi";
 
 describe("rfi share link", () => {
-  it("puts only the token in the WhatsApp text", () => {
+  it("puts the public reply page in the WhatsApp text", () => {
     const token = "tok_only_secret_value";
-    const href = whatsAppHref(token);
+    const href = whatsAppHref("https://app.example/", "ru", token);
     const text = new URL(href).searchParams.get("text");
-    expect(text).toBe(token);
+    expect(text).toBe(`https://app.example/ru/r/rfi/${token}`);
     expect(href.startsWith("https://wa.me/?text=")).toBe(true);
     expect(text).not.toContain("+7700");
     expect(text).not.toContain(" ");

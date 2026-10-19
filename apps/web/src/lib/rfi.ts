@@ -12,9 +12,11 @@ export function isOverdue(status: string, dueDate: string | null | undefined, to
   return status === "open" && Boolean(dueDate) && String(dueDate) < today;
 }
 
-/** WhatsApp text is the token alone. The sender attaches nothing else. */
-export function whatsAppHref(token: string): string {
-  return `https://wa.me/?text=${encodeURIComponent(token)}`;
+/** WhatsApp text is the public reply page. The sender attaches nothing else. */
+export function whatsAppHref(origin: string, locale: string, token: string): string {
+  const base = origin.replace(/\/$/, "");
+  const page = `${base}/${locale}/r/rfi/${token}`;
+  return `https://wa.me/?text=${encodeURIComponent(page)}`;
 }
 
 export function newId(): string {

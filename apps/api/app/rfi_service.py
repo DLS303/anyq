@@ -34,7 +34,9 @@ from app.store import store
 PUSH_BODY = "Новое событие по объекту"
 RFI_MIN_DAYS = 14
 RFI_MAX_DAYS = 30
-_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
 _REVISION = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 _FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 _CLOSE_FROM = {"open", "answered"}
@@ -72,7 +74,8 @@ def _member(project, user_id: str) -> bool:
     if project is not None and project.owner_id == user_id:
         return True
     return any(
-        row.project_id == getattr(project, "id", "") and row.user_id == user_id for row in store.directory.values()
+        row.project_id == getattr(project, "id", "") and row.user_id == user_id
+        for row in store.directory.values()
     )
 
 
@@ -155,20 +158,36 @@ def _view(row, viewer_id: str, contact=None) -> dict:
         "row_version": int(row.row_version),
         "deleted_at": row.deleted_at,
         "overdue": _overdue(row.status, row.due_date),
-        "contact": _contact_view(contact, viewer_id) if contact is not None and row.author_id == viewer_id else None,
+        "contact": _contact_view(contact, viewer_id)
+        if contact is not None and row.author_id == viewer_id
+        else None,
     }
 
 
 def project_id_of(rfi_id: str) -> str:
     try:
         with store._sql.factory() as session:
-            found = session.scalar(select(rfis.c.project_id).where(rfis.c.id == rfi_id, rfis.c.deleted_at.is_(None)))
+            found = session.scalar(
+                select(rfis.c.project_id).where(
+                    rfis.c.id == rfi_id, rfis.c.deleted_at.is_(None)
+                )
+            )
     except (OperationalError, ProgrammingError):
         return ""
     return str(found or "")
 
 
-def _audit(session, action, entity_id, project_id, changes, *, company_id, actor_user_id, actor_kind="user") -> None:
+def _audit(
+    session,
+    action,
+    entity_id,
+    project_id,
+    changes,
+    *,
+    company_id,
+    actor_user_id,
+    actor_kind="user",
+) -> None:
     audit.write(
         action,
         "rfi",
@@ -189,7 +208,13 @@ def _load(session, rfi_id: str):
 def _load_contact(session, contact_id: str | None):
     if not contact_id:
         return None
-    return session.execute(select(external_contacts).where(external_contacts.c.id == contact_id)).mappings().first()
+    return (
+        session.execute(
+            select(external_contacts).where(external_contacts.c.id == contact_id)
+        )
+        .mappings()
+        .first()
+    )
 
 
 def count_open(project_id: str) -> int:
@@ -220,19 +245,35 @@ def count_open_by_project(project_ids: list[str]) -> dict[str, int]:
 
 def list_for_user(user, project_id: str) -> list[dict]:
     with store._sql.factory() as session:
-        rows = session.execute(
-            select(rfis)
-            .where(rfis.c.project_id == project_id, rfis.c.deleted_at.is_(None))
-            .order_by(rfis.c.created_at)
-        ).mappings().all()
-        contact_ids = [row.assignee_contact_id for row in rows if row.assignee_contact_id and row.author_id == user.id]
+        rows = (
+            session.execute(
+                select(rfis)
+                .where(rfis.c.project_id == project_id, rfis.c.deleted_at.is_(None))
+                .order_by(rfis.c.created_at)
+            )
+            .mappings()
+            .all()
+        )
+        contact_ids = [
+            row.assignee_contact_id
+            for row in rows
+            if row.assignee_contact_id and row.author_id == user.id
+        ]
         contacts = {}
         if contact_ids:
-            found = session.execute(
-                select(external_contacts).where(external_contacts.c.id.in_(contact_ids))
-            ).mappings().all()
+            found = (
+                session.execute(
+                    select(external_contacts).where(
+                        external_contacts.c.id.in_(contact_ids)
+                    )
+                )
+                .mappings()
+                .all()
+            )
             contacts = {row.id: row for row in found}
-        return [_view(row, user.id, contacts.get(row.assignee_contact_id)) for row in rows]
+        return [
+            _view(row, user.id, contacts.get(row.assignee_contact_id)) for row in rows
+        ]
 
 
 def create_rfi(user, access: dict, body: dict) -> dict:
@@ -277,11 +318,16 @@ def create_rfi(user, access: dict, body: dict) -> dict:
                         company_id=company_id,
                         project_id=project.id,
                         author_id=user.id,
-                        full_name=str(contact_body.get("full_name") or "").strip()[:200] or None,
+                        full_name=str(contact_body.get("full_name") or "").strip()[:200]
+                        or None,
                         phone_e164=phone or None,
                         phone_hash=_phone_hash(phone),
-                        email=str(contact_body.get("email") or "").strip()[:200] or None,
-                        organization=str(contact_body.get("organization") or "").strip()[:200] or None,
+                        email=str(contact_body.get("email") or "").strip()[:200]
+                        or None,
+                        organization=str(
+                            contact_body.get("organization") or ""
+                        ).strip()[:200]
+                        or None,
                         created_by=user.id,
                         updated_by=user.id,
                         created_at=stamp,
@@ -291,7 +337,12 @@ def create_rfi(user, access: dict, body: dict) -> dict:
                     )
                 )
             taken = int(
-                session.scalar(select(func.count()).select_from(rfis).where(rfis.c.project_id == project.id)) or 0
+                session.scalar(
+                    select(func.count())
+                    .select_from(rfis)
+                    .where(rfis.c.project_id == project.id)
+                )
+                or 0
             )
             session.execute(
                 rfis.insert().values(
@@ -324,7 +375,12 @@ def create_rfi(user, access: dict, body: dict) -> dict:
                 "rfi.create",
                 record_id,
                 project.id,
-                {"status": "open", "due_date": due, "drawing_revision_id": revision, "assignee_user_id": assignee},
+                {
+                    "status": "open",
+                    "due_date": due,
+                    "drawing_revision_id": revision,
+                    "assignee_user_id": assignee,
+                },
                 company_id=company_id,
                 actor_user_id=user.id,
             )
@@ -355,14 +411,23 @@ def _conflict():
 
 def _number_conflict(exc: IntegrityError) -> bool:
     text_value = str(getattr(exc, "orig", exc))
-    return "uq_rfis_project_number" in text_value or "rfis.project_id, rfis.number" in text_value
+    return (
+        "uq_rfis_project_number" in text_value
+        or "rfis.project_id, rfis.number" in text_value
+    )
 
 
 def _cas(session, rfi_id: str, version: int, values: dict, *, updated_by: str) -> None:
     result = session.execute(
         update(rfis)
-        .where(rfis.c.id == rfi_id, rfis.c.row_version == version, rfis.c.deleted_at.is_(None))
-        .values(**values, updated_by=updated_by, row_version=version + 1, updated_at=_now())
+        .where(
+            rfis.c.id == rfi_id,
+            rfis.c.row_version == version,
+            rfis.c.deleted_at.is_(None),
+        )
+        .values(
+            **values, updated_by=updated_by, row_version=version + 1, updated_at=_now()
+        )
     )
     if result.rowcount != 1:
         session.rollback()
@@ -391,7 +456,9 @@ def answer_rfi(
             raise HTTPException(status_code=404, detail="Не найдено")
         if row.status != "open":
             session.rollback()
-            raise HTTPException(status_code=409, detail="Этот переход статуса недоступен")
+            raise HTTPException(
+                status_code=409, detail="Этот переход статуса недоступен"
+            )
         if int(row.row_version) != int(row_version):
             session.rollback()
             _conflict()
@@ -414,6 +481,8 @@ def answer_rfi(
                 .where(
                     access_tokens.c.id == token_id,
                     access_tokens.c.used_at.is_(None),
+                    access_tokens.c.deleted_at.is_(None),
+                    access_tokens.c.expires_at > stamp,
                     access_tokens.c.row_version == int(token_version or 0),
                 )
                 .values(
@@ -448,6 +517,13 @@ def answer_rfi(
     return data
 
 
+def _owner_id(project_id: str) -> str:
+    project = store.get_project(project_id)
+    if project is None:
+        return ""
+    return project.owner_id
+
+
 def set_status(user, rfi_id: str, status: str, row_version: int) -> dict:
     if status != "closed":
         raise HTTPException(status_code=409, detail="Этот переход статуса недоступен")
@@ -456,14 +532,20 @@ def set_status(user, rfi_id: str, status: str, row_version: int) -> dict:
         row = _load(session, rfi_id)
         if row is None or row.deleted_at:
             raise HTTPException(status_code=404, detail="Не найдено")
+        if user.id != row.author_id and user.id != _owner_id(row.project_id):
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
         if row.status not in _CLOSE_FROM:
             session.rollback()
-            raise HTTPException(status_code=409, detail="Этот переход статуса недоступен")
+            raise HTTPException(
+                status_code=409, detail="Этот переход статуса недоступен"
+            )
         if int(row.row_version) != int(row_version):
             session.rollback()
             _conflict()
         previous = row.status
-        _cas(session, rfi_id, int(row_version), {"status": "closed"}, updated_by=user.id)
+        _cas(
+            session, rfi_id, int(row_version), {"status": "closed"}, updated_by=user.id
+        )
         _revoke_live_links(session, rfi_id, _now(), user.id)
         _audit(
             session,
@@ -489,11 +571,15 @@ def tombstone(user, rfi_id: str, row_version: int) -> dict:
         row = _load(session, rfi_id)
         if row is None or row.deleted_at:
             raise HTTPException(status_code=404, detail="Не найдено")
+        if user.id != _owner_id(row.project_id):
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
         if int(row.row_version) != int(row_version):
             session.rollback()
             _conflict()
         stamp = _now()
-        _cas(session, rfi_id, int(row_version), {"deleted_at": stamp}, updated_by=user.id)
+        _cas(
+            session, rfi_id, int(row_version), {"deleted_at": stamp}, updated_by=user.id
+        )
         _revoke_live_links(session, rfi_id, stamp, user.id)
         _audit(
             session,
@@ -519,7 +605,15 @@ def read_for_user(user, rfi_id: str) -> dict:
         return _view(row, user.id, contact)
 
 
-def attach_file(user, access: dict, rfi_id: str, file_id: str, raw: bytes, content_type: str | None, row_version: int) -> dict:
+def attach_file(
+    user,
+    access: dict,
+    rfi_id: str,
+    file_id: str,
+    raw: bytes,
+    content_type: str | None,
+    row_version: int,
+) -> dict:
     record_file = _uuid(file_id)
     declared = (content_type or "").split(";", 1)[0].strip().lower()
     if raw.startswith(b"%PDF") or declared == "application/pdf":
@@ -541,6 +635,10 @@ def attach_file(user, access: dict, rfi_id: str, file_id: str, raw: bytes, conte
             or row.company_id != access["company_id"]
         ):
             raise HTTPException(status_code=404, detail="Не найдено")
+        if row.status == "closed":
+            raise HTTPException(
+                status_code=409, detail="Этот переход статуса недоступен"
+            )
         if int(row.row_version) != int(row_version):
             session.rollback()
             _conflict()
@@ -605,22 +703,30 @@ def attach_file(user, access: dict, rfi_id: str, file_id: str, raw: bytes, conte
 
 
 def _stored_file(session, rfi_id: str, company_id: str, file_id: str):
-    return session.execute(
-        select(rfi_files)
-        .where(
-            rfi_files.c.rfi_id == rfi_id,
-            rfi_files.c.company_id == company_id,
-            rfi_files.c.file_id == file_id,
-            rfi_files.c.deleted_at.is_(None),
+    return (
+        session.execute(
+            select(rfi_files)
+            .where(
+                rfi_files.c.rfi_id == rfi_id,
+                rfi_files.c.company_id == company_id,
+                rfi_files.c.file_id == file_id,
+                rfi_files.c.deleted_at.is_(None),
+            )
+            .order_by(rfi_files.c.created_at)
         )
-        .order_by(rfi_files.c.created_at)
-    ).mappings().first()
+        .mappings()
+        .first()
+    )
 
 
 def read_file(project_id: str, rfi_id: str, file_id: str) -> tuple[str, str]:
     with store._sql.factory() as session:
         row = _load(session, rfi_id)
-        stored = None if row is None else _stored_file(session, rfi_id, row.company_id, file_id)
+        stored = (
+            None
+            if row is None
+            else _stored_file(session, rfi_id, row.company_id, file_id)
+        )
     if row is None or row.deleted_at or row.project_id != project_id or stored is None:
         raise HTTPException(status_code=404, detail="Не найдено")
     if file_id in str(stored.storage_key):
@@ -653,7 +759,9 @@ def create_link(user, access: dict, rfi_id: str, body: dict) -> dict:
         ):
             raise HTTPException(status_code=404, detail="Не найдено")
         if row.status != "open":
-            raise HTTPException(status_code=409, detail="Этот переход статуса недоступен")
+            raise HTTPException(
+                status_code=409, detail="Этот переход статуса недоступен"
+            )
         session.execute(
             access_tokens.insert().values(
                 id=link_id,
@@ -687,7 +795,11 @@ def create_link(user, access: dict, rfi_id: str, body: dict) -> dict:
         raise HTTPException(status_code=409, detail="Изменено другим") from exc
     finally:
         session.close()
-    return {"id": link_id, "token": token, "expires_at": expires.isoformat(timespec="seconds")}
+    return {
+        "id": link_id,
+        "token": token,
+        "expires_at": expires.isoformat(timespec="seconds"),
+    }
 
 
 def _revoke_live_links(session, rfi_id: str, stamp: str, updated_by: str) -> None:
@@ -720,6 +832,23 @@ def revoke_link(user, access: dict, rfi_id: str, link_id: str) -> dict:
             or row.company_id != access["company_id"]
         ):
             raise HTTPException(status_code=404, detail="Не найдено")
+        token_row = (
+            session.execute(
+                select(access_tokens).where(
+                    access_tokens.c.id == record_id,
+                    access_tokens.c.entity_id == rfi_id,
+                    access_tokens.c.company_id == access["company_id"],
+                    access_tokens.c.purpose == "rfi_reply",
+                    access_tokens.c.deleted_at.is_(None),
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if token_row is None:
+            raise HTTPException(status_code=404, detail="Не найдено")
+        if token_row.created_by != user.id and _owner_id(row.project_id) != user.id:
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
         spent = session.execute(
             update(access_tokens)
             .where(
@@ -759,13 +888,17 @@ def _token_row(token: str):
         return None, 404
     digest = token_hash(token)
     with store._sql.factory() as session:
-        rows = session.execute(
-            select(access_tokens).where(
-                access_tokens.c.token_sha256 == digest,
-                access_tokens.c.purpose == "rfi_reply",
-                access_tokens.c.deleted_at.is_(None),
+        rows = (
+            session.execute(
+                select(access_tokens).where(
+                    access_tokens.c.token_sha256 == digest,
+                    access_tokens.c.purpose == "rfi_reply",
+                    access_tokens.c.deleted_at.is_(None),
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
     match = next((row for row in rows if hashes_match(row.token_sha256, digest)), None)
     if match is None:
         return None, 404
@@ -833,7 +966,12 @@ def public_file(token: str, file_id: str) -> tuple[str, str]:
     link = _public_or_error(token, writing=False)
     with store._sql.factory() as session:
         row = _load(session, link.entity_id)
-    if row is None or row.deleted_at or row.status == "closed" or file_id not in _attachments(row.attachments):
+    if (
+        row is None
+        or row.deleted_at
+        or row.status == "closed"
+        or file_id not in _attachments(row.attachments)
+    ):
         raise HTTPException(status_code=404, detail="Файл не найден")
     return read_file(row.project_id, row.id, file_id)
 
@@ -890,10 +1028,16 @@ def _pdf_with_jpeg(jpeg: bytes, width: int, height: int) -> bytes:
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
             f"/Contents 4 0 R /Resources << /XObject << /Im 5 0 R >> >> >>"
         ).encode("ascii"),
-        b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream",
+        b"<< /Length "
+        + str(len(content)).encode("ascii")
+        + b" >>\nstream\n"
+        + content
+        + b"\nendstream",
         (
             b"<< /Type /XObject /Subtype /Image /ColorSpace /DeviceRGB /BitsPerComponent 8 "
-            + f"/Width {width} /Height {height} /Filter /DCTDecode /Length {len(jpeg)}".encode("ascii")
+            + f"/Width {width} /Height {height} /Filter /DCTDecode /Length {len(jpeg)}".encode(
+                "ascii"
+            )
             + b" >>\nstream\n"
             + jpeg
             + b"\nendstream"
@@ -913,6 +1057,8 @@ def _pdf_with_jpeg(jpeg: bytes, width: int, height: int) -> bytes:
     for offset in offsets[1:]:
         blob.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
     blob.extend(
-        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R /Info 6 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii")
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R /Info 6 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode(
+            "ascii"
+        )
     )
     return bytes(blob)

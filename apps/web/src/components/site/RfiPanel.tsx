@@ -162,7 +162,7 @@ export function RfiPanel({
         body: JSON.stringify({ id: newId(), expires_in_days: 14 }),
       });
       const data = await readJson<{ token: string }>(res);
-      setLink(whatsAppHref(data.token));
+      setLink(whatsAppHref(window.location.origin, locale, data.token));
     } catch (err) {
       setError(err instanceof Error ? err.message : m.hubSaveError);
     } finally {

@@ -38,7 +38,9 @@ def _prepare_postgres() -> None:
         connection.execute(text(f'DROP DATABASE IF EXISTS "{dbname}"'))
         connection.execute(text(f'CREATE DATABASE "{dbname}"'))
     admin.dispose()
-    os.environ["DATABASE_URL"] = parsed.set(database=dbname).render_as_string(hide_password=False)
+    os.environ["DATABASE_URL"] = parsed.set(database=dbname).render_as_string(
+        hide_password=False
+    )
     cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     command.upgrade(cfg, "head")
 
@@ -57,13 +59,17 @@ if os.environ.get("ANYQ_TEST_POSTGRES") != "1":
 
     from alembic import command
 
-    command.upgrade(Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head")
+    command.upgrade(
+        Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head"
+    )
 
 
 @pytest.fixture(autouse=True)
 def _reset_login_rate_limit():
-    from app.ratelimit import login_limiter
+    from app.ratelimit import login_limiter, public_rfi_limiter
 
     login_limiter.reset()
+    public_rfi_limiter.reset()
     yield
     login_limiter.reset()
+    public_rfi_limiter.reset()
