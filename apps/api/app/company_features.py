@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy import and_, case, func, inspect, or_, select, true, update
+from sqlalchemy import and_, case, inspect, or_, select, true, update
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import aliased
 
@@ -211,10 +211,10 @@ def set_feature(
                 updated_at=stamp,
                 deleted_at=deleted_at,
             )
-            session.add(row)
-            session.flush()
-            _audit(session, company_id, key, enabled, actor, False)
             try:
+                session.add(row)
+                session.flush()
+                _audit(session, company_id, key, enabled, actor, False)
                 session.commit()
             except IntegrityError as exc:
                 session.rollback()
@@ -335,11 +335,10 @@ def ensure_feature(company_id: str, key: str) -> None:
 
 
 def resolve_path_company(collection: str, doc_id: str, user: User) -> str | None:
-    """One query: path entity, its project, and membership. No row means no access."""
+    """One query for path access. The company id is the owner's stored key, as in the bundle."""
     entity = aliased(Record)
     project = aliased(Record)
     member = aliased(Record)
-    owner = aliased(Record)
     project_doc = case((entity.collection == "projects", entity.doc_id), else_=entity.project_id)
     access = or_(
         member.user_id == user.id,
@@ -349,7 +348,7 @@ def resolve_path_company(collection: str, doc_id: str, user: User) -> str | None
     if user.role == "admin":
         access = true()
     stmt = (
-        select(func.coalesce(project.company_key, owner.company_key))
+        select(project.owner_id)
         .select_from(entity)
         .join(project, and_(project.collection == "projects", project.doc_id == project_doc))
         .outerjoin(
@@ -360,7 +359,6 @@ def resolve_path_company(collection: str, doc_id: str, user: User) -> str | None
                 member.user_id == user.id,
             ),
         )
-        .outerjoin(owner, and_(owner.collection == "users", owner.doc_id == project.owner_id))
         .where(entity.collection == collection, entity.doc_id == doc_id, access)
         .limit(1)
     )
@@ -370,16 +368,21 @@ def resolve_path_company(collection: str, doc_id: str, user: User) -> str | None
             found = _sql_rfi_company(session, doc_id, user)
     if found is None:
         return None
-    return str(found[0] or "")
+    owner = store.get_user(str(found[0] or ""))
+    if owner is None:
+        return ""
+    return company_key(owner)
 
 
 def _sql_rfi_company(session, doc_id: str, user: User):
-    """Questions live in their own table. Same membership rule as the records query."""
+    """Questions live in their own table. Same membership rule as the records query.
+
+    Returns the project owner id so the caller reads that user's stored company key.
+    """
     from app.rfi_tables import rfis
 
     project = aliased(Record)
     member = aliased(Record)
-    owner = aliased(Record)
     access = or_(
         member.user_id == user.id,
         project.owner_id == user.id,
@@ -388,7 +391,7 @@ def _sql_rfi_company(session, doc_id: str, user: User):
     if user.role == "admin":
         access = true()
     stmt = (
-        select(func.coalesce(project.company_key, owner.company_key))
+        select(project.owner_id)
         .select_from(rfis)
         .join(project, and_(project.collection == "projects", project.doc_id == rfis.c.project_id))
         .outerjoin(
@@ -399,7 +402,6 @@ def _sql_rfi_company(session, doc_id: str, user: User):
                 member.user_id == user.id,
             ),
         )
-        .outerjoin(owner, and_(owner.collection == "users", owner.doc_id == project.owner_id))
         .where(rfis.c.id == doc_id, rfis.c.deleted_at.is_(None), access)
         .limit(1)
     )

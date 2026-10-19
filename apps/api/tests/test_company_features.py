@@ -1,5 +1,7 @@
 """Company feature flags: company_id, optimistic version, and append-only audit."""
 
+import importlib.util
+import json
 import os
 import sqlite3
 import subprocess
@@ -327,6 +329,22 @@ def test_alembic_upgrade_installs_append_only_triggers(tmp_path):
     assert "checkfirst" not in source
     assert "PARTITION BY RANGE" in source
     assert "BEFORE TRUNCATE" in source
+    spec = importlib.util.spec_from_file_location(
+        "pf0_migration",
+        Path(__file__).resolve().parents[1] / "alembic" / "versions" / "20261019_0002_pf0.py",
+    )
+    migration = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(migration)
+    for name in ("audit_log_2026_10", "audit_log_2026_11", "audit_log_default"):
+        statement = migration.audit_truncate_trigger(name)
+        assert f"BEFORE TRUNCATE ON {name}" in statement
+        assert name in source
+    assert "2026-10-01 00:00:00+00" in source
+    assert "2026-11-01 00:00:00+00" in source
+    assert "2026-12-01 00:00:00+00" in source
+    assert "REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM anyq_app" in source
+    assert "def audit_truncate_trigger" in source
     assert "Do not run downgrade in production" in source
     connection = sqlite3.connect(db)
     triggers = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
@@ -532,3 +550,68 @@ def test_one_row_version_accepts_a_single_writer():
     for thread in threads:
         thread.join()
     assert sorted(codes) == [200, 409]
+
+
+def _worker(args: list[str], dest: Path) -> subprocess.Popen:
+    env = os.environ.copy()
+    env["ANYQ_DEMO_MODE"] = "0"
+    root = Path(__file__).resolve().parents[1]
+    return subprocess.Popen(
+        [sys.executable, str(root / "tests" / "pf0_worker.py"), *args, str(dest)],
+        cwd=root,
+        env=env,
+    )
+
+
+def test_two_workers_claim_one_bin(tmp_path):
+    bin_no = f"{uuid4().int % 10**12:012d}"
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    left = _worker(["register", "race-a@example.com", bin_no], first)
+    right = _worker(["register", "race-b@example.com", bin_no], second)
+    assert left.wait(timeout=60) == 0, left.returncode
+    assert right.wait(timeout=60) == 0, right.returncode
+    rows = [json.loads(first.read_text()), json.loads(second.read_text())]
+    winners = [row for row in rows if row["key"] == f"bin:{bin_no}"]
+    losers = [row for row in rows if row["key"].startswith("user:")]
+    assert len(winners) == 1
+    assert len(losers) == 1
+    assert losers[0]["review"] is True
+    assert losers[0]["key"] == f"user:{losers[0]['id']}"
+
+
+def test_two_workers_first_flag_creation(tmp_path):
+    company_id = f"bin:{uuid4().int % 10**12:012d}"
+    first = tmp_path / "flag-a.json"
+    second = tmp_path / "flag-b.json"
+    left = _worker(["flag", company_id], first)
+    right = _worker(["flag", company_id], second)
+    assert left.wait(timeout=60) == 0, left.returncode
+    assert right.wait(timeout=60) == 0, right.returncode
+    codes = sorted(json.loads(path.read_text())["code"] for path in (first, second))
+    assert codes == [200, 409]
+
+
+def test_first_flag_creation_conflict_returns_409(monkeypatch):
+    from sqlalchemy.orm import Session
+
+    from app.company_features import set_feature
+
+    company_id = f"bin:{uuid4().int % 10**12:012d}"
+    set_feature(company_id, "offline", True, "u-race", row_version=0)
+
+    def hidden(self, statement, *args, **kwargs):
+        return None
+
+    monkeypatch.setattr(Session, "scalar", hidden)
+    with pytest.raises(HTTPException) as caught:
+        set_feature(company_id, "offline", True, "u-race", row_version=0)
+    assert caught.value.status_code == 409
+
+
+def test_upgrade_from_pre_pr_data():
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env.pop("DATABASE_URL", None)
+    env["ANYQ_DEMO_MODE"] = "0"
+    subprocess.check_call([sys.executable, str(root / "tests" / "upgrade_pre_pr.py")], cwd=root, env=env)

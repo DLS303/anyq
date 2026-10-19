@@ -2242,14 +2242,9 @@ class MemoryStore:
             if self.get_user_by_email(email):
                 raise ValueError("Такой email уже зарегистрирован")
             uid = f"u-{uuid4().hex[:8]}"
-            from app.tenant import assign_company_key
+            from app.tenant import claim_company_key
 
-            taken = {
-                item.company_key
-                for item in self.users_by_id.values()
-                if (item.company_key or "").startswith("bin:")
-            }
-            key, review = assign_company_key(uid, bin_no, taken)
+            key, review = claim_company_key(self._sql.engine, uid, bin_no)
             user = User(
                 id=uid,
                 email=email,
