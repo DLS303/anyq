@@ -85,7 +85,7 @@ def test_user_directory_is_not_public():
 def test_project_membership():
     outsider = _token("outsider@example.com")
     denied = client.get("/v1/site/projects/pr-besagash/bundle", headers=_auth(outsider))
-    assert denied.status_code == 403
+    assert denied.status_code == 404
     denied_write = client.post(
         "/v1/site/projects/pr-besagash/daily",
         json={"day": "2026-10-18", "notes": "no"},
