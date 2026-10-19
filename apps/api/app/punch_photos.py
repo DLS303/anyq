@@ -15,9 +15,12 @@ import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageFont
-from sqlalchemy import Boolean, CheckConstraint, Index, Integer, String, Text, func, select, text, update
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, or_, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -33,17 +36,17 @@ _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _PHONE = re.compile(r"\+?\d[\d\s().-]{8,}\d")
 _LEGACY = {"ready": "fixed", "closed": "accepted"}
 _STATUSES = {"open", "fixed", "accepted", "returned"}
-_TRANSITIONS = {
-    ("member", "open", "fixed"),
-    ("member", "returned", "fixed"),
-    ("author", "fixed", "accepted"),
-    ("supervisor", "fixed", "accepted"),
-    ("author", "fixed", "returned"),
-    ("supervisor", "fixed", "returned"),
-}
+_PROJECT_ROLES = {"owner", "foreman", "supervisor", "procurement", "customer", "supplier", "moderator"}
+_FIX_ROLES = {"foreman", "supervisor", "owner"}
+_ACCEPT_ROLES = {"supervisor", "owner"}
 PUSH_TEXT = "Новое событие по объекту"
 _FONT = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 _MAX_PHOTOS = 8
+_ALMATY = ZoneInfo("Asia/Almaty")
+_PAGE_W = 1200
+_PAGE_H = 842
+_LINE_H = 24
+_PAGE_MARGIN = 16
 
 
 class PunchConflict(Exception):
@@ -79,9 +82,11 @@ class PunchItemRow(PunchBase):
     updated_by: Mapped[str | None] = mapped_column(String(80))
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     deleted_at: Mapped[str | None] = mapped_column(String(40))
+    legacy_id: Mapped[str | None] = mapped_column(String(80))
 
     __table_args__ = (
         CheckConstraint("status IN ('open','fixed','accepted','returned')", name="ck_punch_items_status"),
+        UniqueConstraint("company_id", "legacy_id", name="uq_punch_items_company_legacy"),
         Index("ix_punch_items_company_updated", "company_id", "updated_at"),
         Index(
             "ix_punch_items_project_status_due",
@@ -107,9 +112,9 @@ class PunchPhotoRow(PunchBase):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     company_id: Mapped[str] = mapped_column(String(180), nullable=False)
     project_id: Mapped[str] = mapped_column(String(80), nullable=False)
-    punch_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    punch_id: Mapped[str] = mapped_column(String(36), ForeignKey("punch_items.id"), nullable=False)
     phase: Mapped[str] = mapped_column(String(10), nullable=False)
-    file_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    file_id: Mapped[str] = mapped_column(String(36), ForeignKey("files.id"), nullable=False)
     sort_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(80))
@@ -120,6 +125,7 @@ class PunchPhotoRow(PunchBase):
 
     __table_args__ = (
         CheckConstraint("phase IN ('before','after')", name="ck_punch_photos_phase"),
+        UniqueConstraint("punch_id", "file_id", name="uq_punch_photos_punch_file"),
         Index("ix_punch_photos_file_id", "file_id"),
         Index("ix_punch_photos_company_updated", "company_id", "updated_at"),
         Index(
@@ -167,7 +173,7 @@ def _now() -> str:
 
 
 def _today() -> str:
-    return datetime.now(UTC).date().isoformat()
+    return datetime.now(_ALMATY).date().isoformat()
 
 
 def migrate_status(status: str) -> str:
@@ -213,46 +219,73 @@ def _write_temp(data: bytes) -> Path:
     return path
 
 
-def _publish_exclusive(temp: Path, storage_key: str) -> None:
-    """Move a temp file into place. O_EXCL refuses to replace an existing object."""
+def _publish_link(temp: Path, storage_key: str) -> None:
+    """Hard-link the temp file into place. link fails when dest exists and does not overwrite it."""
     dest = resolve_stored_file("upload", storage_key)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(dest, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    os.close(fd)
-    try:
-        os.replace(temp, dest)
-    except Exception:
-        dest.unlink(missing_ok=True)
-        raise
+    os.link(temp, dest)
 
 
-def _actors(user: User, author_id: str, project_id: str) -> set[str]:
-    roles = {"member"}
-    if user.id == author_id:
-        roles.add("author")
-    if user.role == "supervisor" or _directory_supervisor(user.id, project_id):
-        roles.add("supervisor")
+def _compensate_unpublished(file_id: str, photo_id: str) -> None:
+    """Drop rows that would point at a file the disk publish did not keep."""
+    stamp = _now()
+    with _session() as session:
+        session.execute(
+            update(FileRow)
+            .where(FileRow.id == file_id, FileRow.deleted_at.is_(None))
+            .values(deleted_at=stamp, updated_at=stamp, row_version=FileRow.row_version + 1)
+        )
+        session.execute(
+            update(PunchPhotoRow)
+            .where(PunchPhotoRow.id == photo_id, PunchPhotoRow.deleted_at.is_(None))
+            .values(deleted_at=stamp, updated_at=stamp, row_version=PunchPhotoRow.row_version + 1)
+        )
+        session.commit()
+
+
+def _membership_roles(user_id: str, project_id: str) -> set[str]:
+    """Project owner and directory role_on_site. The account role is not consulted."""
+    roles: set[str] = set()
+    project = store.get_project(project_id)
+    if project is not None and project.owner_id == user_id:
+        roles.add("owner")
+    for row in store.directory.values():
+        if row.project_id != project_id or row.user_id != user_id:
+            continue
+        role = str(row.role_on_site or "").strip().lower()
+        if role in _PROJECT_ROLES:
+            roles.add(role)
     return roles
 
 
-def _directory_supervisor(user_id: str, project_id: str) -> bool:
-    for row in store.directory.values():
-        if row.project_id == project_id and row.user_id == user_id and row.role_on_site == "supervisor":
-            return True
-    return False
+def _can_fix(user: User, item: PunchItemRow) -> bool:
+    if item.assignee_id and user.id == item.assignee_id:
+        return True
+    return bool(_membership_roles(user.id, item.project_id) & _FIX_ROLES)
+
+
+def _can_accept(user: User, item: PunchItemRow) -> bool:
+    if user.id == item.author_id:
+        return True
+    return bool(_membership_roles(user.id, item.project_id) & _ACCEPT_ROLES)
+
+
+def _can_delete(user: User, item: PunchItemRow) -> bool:
+    return "owner" in _membership_roles(user.id, item.project_id)
 
 
 def _check_transition(user: User, item: PunchItemRow, target: str) -> None:
     if target not in _STATUSES:
         raise PunchConflict()
     current = item.status
-    roles = _actors(user, item.author_id, item.project_id)
-    allowed = any((role, current, target) in _TRANSITIONS for role in roles)
-    exists = any(src == current and dst == target for _role, src, dst in _TRANSITIONS)
-    if not allowed and exists:
-        raise PunchForbidden()
-    if not allowed:
+    legal_fix = current in {"open", "returned"} and target == "fixed"
+    legal_close = current == "fixed" and target in {"accepted", "returned"}
+    if not legal_fix and not legal_close:
         raise PunchConflict()
+    if legal_fix and not _can_fix(user, item):
+        raise PunchForbidden()
+    if legal_close and not _can_accept(user, item):
+        raise PunchForbidden()
 
 
 def _photos(session: Session, punch_ids: list[str]) -> dict[str, dict[str, list[str]]]:
@@ -271,10 +304,17 @@ def _photos(session: Session, punch_ids: list[str]) -> dict[str, dict[str, list[
     return grouped
 
 
-def _history_for_project(session: Session, project_id: str) -> dict[str, list[dict]]:
+def _history_for_project(session: Session, project_id: str, company_id: str, entity_ids: list[str]) -> dict[str, list[dict]]:
+    if not entity_ids:
+        return {}
     rows = session.scalars(
         select(AuditLog)
-        .where(AuditLog.action == "punch.status_change", AuditLog.project_id == project_id)
+        .where(
+            AuditLog.action == "punch.status_change",
+            AuditLog.project_id == project_id,
+            AuditLog.company_id == company_id,
+            AuditLog.entity_id.in_(entity_ids),
+        )
         .order_by(AuditLog.id)
     ).all()
     found: dict[str, list[dict]] = {}
@@ -330,8 +370,8 @@ def _public(
         "deleted_at": item.deleted_at,
         "overdue": _overdue(item, today),
         "history": history,
-        "can_fix": item.status in {"open", "returned"},
-        "can_accept": item.status == "fixed" and bool(_actors(user, item.author_id, item.project_id) & {"author", "supervisor"}),
+        "can_fix": item.status in {"open", "returned"} and _can_fix(user, item),
+        "can_accept": item.status == "fixed" and _can_accept(user, item),
     }
 
 
@@ -348,42 +388,89 @@ def _has_after(session: Session, punch_id: str) -> bool:
     return bool(count)
 
 
-def _import_legacy(session: Session, project_id: str, company_id: str) -> None:
-    project = store.get_project(project_id)
-    if project is None:
+def import_legacy_for_company(session: Session, company_id: str) -> None:
+    """Copy pilot punches for one company. Same statement can run again and keeps the latest legacy fields."""
+    from app.sql_backend import Record
+
+    projects = session.execute(
+        select(Record.doc_id, Record.owner_id).where(Record.collection == "projects", Record.company_key == company_id)
+    ).all()
+    if not projects:
         return
+    owners = {str(row.doc_id): str(row.owner_id or "") for row in projects}
+    punches = session.scalars(
+        select(Record).where(Record.collection == "punches", Record.project_id.in_(list(owners)))
+    ).all()
+    if not punches:
+        return
+    dialect = session.get_bind().dialect.name
+    insert = pg_insert if dialect == "postgresql" else sqlite_insert
     stamp = _now()
-    for item in list(store.punches.values()):
-        if getattr(item, "project_id", "") != project_id:
+    for row in punches:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        if isinstance(row.payload, str):
+            try:
+                payload = json.loads(row.payload or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+        if not isinstance(payload, dict) or payload.get("deleted_at"):
             continue
-        if getattr(item, "deleted_at", None):
+        legacy = str(row.doc_id or "").strip()
+        project_id = str(row.project_id or payload.get("project_id") or "").strip()
+        if not legacy or not project_id or project_id not in owners:
             continue
-        new_id = legacy_punch_id(project_id, item.id)
-        if session.get(PunchItemRow, new_id) is not None:
-            continue
-        session.add(
-            PunchItemRow(
-                id=new_id,
-                company_id=company_id,
-                project_id=project_id,
-                title=str(item.title or "").strip() or "item",
-                location=str(getattr(item, "location", "") or ""),
-                trade=str(getattr(item, "trade", "") or ""),
-                status=migrate_status(str(item.status or "open")),
-                assignee_id=getattr(item, "assignee_id", None) or None,
-                due_date=None,
-                author_id=project.owner_id or "",
-                closed_by=None,
-                closed_at=None,
-                created_at=getattr(item, "created_at", "") or stamp,
-                created_by=project.owner_id or None,
-                updated_at=stamp,
-                updated_by=project.owner_id or None,
-                row_version=1,
-                deleted_at=None,
-            )
+        owner_id = owners.get(project_id) or ""
+        assignee = payload.get("assignee_id")
+        assignee_id = str(assignee).strip() if assignee else None
+        if assignee_id and (len(assignee_id) > 80 or any(ch.isspace() for ch in assignee_id)):
+            assignee_id = None
+        values = {
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "project_id": project_id,
+            "title": str(payload.get("title") or "").strip()[:200] or "item",
+            "location": str(payload.get("location") or "")[:200],
+            "trade": str(payload.get("trade") or "")[:200],
+            "status": migrate_status(str(payload.get("status") or "open")),
+            "assignee_id": assignee_id,
+            "due_date": None,
+            "author_id": owner_id,
+            "closed_by": None,
+            "closed_at": None,
+            "created_at": str(payload.get("created_at") or row.created_at or stamp),
+            "created_by": owner_id or None,
+            "updated_at": stamp,
+            "updated_by": owner_id or None,
+            "row_version": 1,
+            "deleted_at": None,
+            "legacy_id": legacy,
+        }
+        stmt = insert(PunchItemRow).values(**values)
+        excluded = stmt.excluded
+        changed = or_(
+            PunchItemRow.title.is_distinct_from(excluded.title),
+            PunchItemRow.location.is_distinct_from(excluded.location),
+            PunchItemRow.trade.is_distinct_from(excluded.trade),
+            PunchItemRow.status.is_distinct_from(excluded.status),
+            PunchItemRow.assignee_id.is_distinct_from(excluded.assignee_id),
+            PunchItemRow.project_id.is_distinct_from(excluded.project_id),
         )
-    session.commit()
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["company_id", "legacy_id"],
+            set_={
+                "title": excluded.title,
+                "location": excluded.location,
+                "trade": excluded.trade,
+                "status": excluded.status,
+                "assignee_id": excluded.assignee_id,
+                "project_id": excluded.project_id,
+                "updated_at": excluded.updated_at,
+                "updated_by": excluded.updated_by,
+                "row_version": PunchItemRow.row_version + 1,
+            },
+            where=changed,
+        )
+        session.execute(stmt)
 
 
 def _load(session: Session, punch_id: str, company_id: str, project_id: str) -> PunchItemRow:
@@ -481,7 +568,6 @@ def list_items(
     mine: bool,
 ) -> list[dict]:
     with _session() as session:
-        _import_legacy(session, project_id, company_id)
         stmt = select(PunchItemRow).where(
             PunchItemRow.project_id == project_id,
             PunchItemRow.company_id == company_id,
@@ -498,7 +584,7 @@ def list_items(
             rows = [row for row in rows if _overdue(row, today)]
         ids = [row.id for row in rows]
         photos = _photos(session, ids)
-        history = _history_for_project(session, project_id)
+        history = _history_for_project(session, project_id, company_id, ids)
         return [_public(row, photos.get(row.id, {}), history.get(row.id, []), user, today) for row in rows]
 
 
@@ -506,7 +592,7 @@ def get_item(user: User, punch_id: str, company_id: str, project_id: str) -> dic
     with _session() as session:
         item = _load(session, punch_id, company_id, project_id)
         photos = _photos(session, [item.id]).get(item.id, {})
-        history = _history_for_project(session, item.project_id).get(item.id, [])
+        history = _history_for_project(session, item.project_id, company_id, [item.id]).get(item.id, [])
         return _public(item, photos, history, user, _today())
 
 
@@ -554,8 +640,21 @@ def set_status(user: User, punch_id: str, company_id: str, project_id: str, targ
         fresh = session.get(PunchItemRow, punch_id)
         assert fresh is not None
         photos = _photos(session, [punch_id]).get(punch_id, {})
-        history = _history_for_project(session, fresh.project_id).get(punch_id, [])
+        history = _history_for_project(session, fresh.project_id, company_id, [punch_id]).get(punch_id, [])
         return _public(fresh, photos, history, user, _today())
+
+
+def _photo_count(session: Session, punch_id: str, phase: str) -> int:
+    existing = session.scalar(
+        select(func.count())
+        .select_from(PunchPhotoRow)
+        .where(
+            PunchPhotoRow.punch_id == punch_id,
+            PunchPhotoRow.phase == phase,
+            PunchPhotoRow.deleted_at.is_(None),
+        )
+    )
+    return int(existing or 0)
 
 
 def add_photo(
@@ -565,7 +664,7 @@ def add_photo(
     project_id: str,
     *,
     photo_id: str,
-    file_id: str,
+    client_file_id: str = "",
     phase: str,
     row_version: int,
     raw: bytes,
@@ -573,13 +672,24 @@ def add_photo(
     if phase not in {"before", "after"}:
         raise ValueError("Некорректная фаза")
     photo_id = require_uuid(photo_id)
-    file_id = require_uuid(file_id)
+    hint = (client_file_id or "").strip().lower()
+    if hint:
+        hint = require_uuid(hint)
+    with _session() as session:
+        item = _load(session, punch_id, company_id, project_id)
+        if int(item.row_version) != int(row_version):
+            raise PunchConflict()
+        if _photo_count(session, punch_id, phase) >= _MAX_PHOTOS:
+            raise ValueError("Слишком много фото")
     clean, mime, suffix = strip_image(raw)
     digest = hashlib.sha256(clean).hexdigest()
     with Image.open(io.BytesIO(clean)) as img:
         width, height = img.size
     stamp = _now()
+    file_id = str(uuid.uuid4())
     storage_key = _storage_key(suffix)
+    if hint and hint in storage_key:
+        raise ValueError("Некорректный файл")
     if file_id in storage_key:
         raise ValueError("Некорректный файл")
     temp = _write_temp(clean)
@@ -588,18 +698,16 @@ def add_photo(
             item = _load(session, punch_id, company_id, project_id)
             if int(item.row_version) != int(row_version):
                 raise PunchConflict()
-            existing = session.scalar(
-                select(func.count())
-                .select_from(PunchPhotoRow)
-                .where(
-                    PunchPhotoRow.punch_id == punch_id,
-                    PunchPhotoRow.phase == phase,
-                    PunchPhotoRow.deleted_at.is_(None),
+            sort_no = _photo_count(session, punch_id, phase)
+            if sort_no >= _MAX_PHOTOS:
+                raise ValueError("Слишком много фото")
+            duplicate = session.scalar(
+                select(FileRow.id).where(
+                    FileRow.company_id == company_id,
+                    FileRow.sha256 == digest,
+                    FileRow.deleted_at.is_(None),
                 )
             )
-            if int(existing or 0) >= _MAX_PHOTOS:
-                raise ValueError("Слишком много фото")
-            sort_no = int(existing or 0)
             result = session.execute(
                 update(PunchItemRow)
                 .where(PunchItemRow.id == punch_id, PunchItemRow.row_version == row_version, PunchItemRow.deleted_at.is_(None))
@@ -666,14 +774,18 @@ def add_photo(
             fresh = session.get(PunchItemRow, punch_id)
             assert fresh is not None
             photos = _photos(session, [punch_id]).get(punch_id, {})
-            history = _history_for_project(session, fresh.project_id).get(punch_id, [])
+            history = _history_for_project(session, fresh.project_id, company_id, [punch_id]).get(punch_id, [])
             payload = _public(fresh, photos, history, user, _today())
-        _publish_exclusive(temp, storage_key)
-        temp = None
+        if duplicate:
+            payload["warnings"] = ["duplicate_sha256"]
+        try:
+            _publish_link(temp, storage_key)
+        except Exception:
+            _compensate_unpublished(file_id, photo_id)
+            raise
         return payload
     finally:
-        if temp is not None:
-            temp.unlink(missing_ok=True)
+        temp.unlink(missing_ok=True)
 
 
 def file_for_punch(punch_id: str, company_id: str, file_id: str, project_id: str) -> tuple[Path, str]:
@@ -702,8 +814,7 @@ def soft_delete(user: User, punch_id: str, company_id: str, project_id: str, row
     stamp = _now()
     with _session() as session:
         item = _load(session, punch_id, company_id, project_id)
-        roles = _actors(user, item.author_id, item.project_id)
-        if not roles & {"author", "supervisor"}:
+        if not _can_delete(user, item):
             raise PunchForbidden()
         if int(item.row_version) != int(row_version):
             raise PunchConflict()
@@ -760,13 +871,17 @@ def build_pdf(user: User, project_id: str, company_id: str) -> bytes:
             )
         )
     font = ImageFont.truetype(str(_FONT), 16) if _FONT.is_file() else ImageFont.load_default()
-    line_h = 24
-    image = Image.new("RGB", (1200, 32 + line_h * max(1, len(lines))), "white")
-    draw = ImageDraw.Draw(image)
-    y = 12
-    for line in lines:
-        draw.text((12, y), line[:220], fill="black", font=font)
-        y += line_h
+    per_page = max(1, (_PAGE_H - 2 * _PAGE_MARGIN) // _LINE_H)
+    chunks = [lines[index : index + per_page] for index in range(0, len(lines), per_page)] or [[]]
+    pages: list[Image.Image] = []
+    for chunk in chunks:
+        image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
+        draw = ImageDraw.Draw(image)
+        y = _PAGE_MARGIN
+        for line in chunk:
+            draw.text((12, y), line[:180], fill="black", font=font)
+            y += _LINE_H
+        pages.append(image)
     buffer = io.BytesIO()
-    image.save(buffer, format="PDF")
+    pages[0].save(buffer, format="PDF", save_all=True, append_images=pages[1:])
     return strip_pdf_author(buffer.getvalue())

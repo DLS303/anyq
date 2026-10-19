@@ -129,7 +129,11 @@ export async function uploadPunchPhoto(projectId: string, punchId: string, file:
   body.set("phase", fields.phase);
   body.set("row_version", String(fields.row_version));
   body.set("file", prepared);
-  return readPunch<PunchPhotoItem>(`/v1/site/projects/${projectId}/punch-items/${punchId}/photos`, { method: "POST", body });
+  return readPunch<PunchPhotoItem>(`/v1/site/projects/${projectId}/punch-items/${punchId}/photos`, {
+    method: "POST",
+    body,
+    headers: { "Idempotency-Key": fields.file_id },
+  });
 }
 
 export function setPunchItemStatus(projectId: string, punchId: string, status: PunchStatus, rowVersion: number) {

@@ -1,9 +1,13 @@
 """Photo punch routes. The pilot punch routes stay on the site router."""
 
+import hashlib
+import json
+
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 
+from app import media
 from app.company_features import require_feature, resolve_path_company
 from app.idempotency import IdempotencyConflict, run_idempotent
 from app.punch_photos import (
@@ -116,7 +120,15 @@ def punch_pdf(pid: str, user: User = Depends(require_feature("punch_photos"))):
         payload = build_pdf(user, pid, company_id)
     except (PunchConflict, PunchForbidden, LookupError, ValueError) as exc:
         raise _http(exc) from exc
-    return Response(content=payload, media_type="application/pdf")
+    return Response(
+        content=payload,
+        media_type="application/pdf",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'attachment; filename="punches.pdf"',
+        },
+    )
 
 
 @router.get("/projects/{pid}/punch-items/{punch_id}")
@@ -143,6 +155,28 @@ def punch_status(
     return {"ok": True, "data": data}
 
 
+_READ_CHUNK = 64 * 1024
+_FILE_HEADERS = {
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+}
+_FILE_SUFFIX = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+
+
+async def _read_capped(upload: UploadFile) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        block = await upload.read(_READ_CHUNK)
+        if not block:
+            break
+        total += len(block)
+        if total > media.MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Файл слишком большой")
+        chunks.append(block)
+    return b"".join(chunks)
+
+
 @router.post("/projects/{pid}/punch-items/{punch_id}/photos")
 async def punch_photo(
     pid: str,
@@ -151,24 +185,42 @@ async def punch_photo(
     phase: str = Form(...),
     row_version: int = Form(...),
     photo_id: str = Form(..., alias="id"),
-    file_id: str = Form(...),
     file: UploadFile = File(...),
+    file_id: str = Form(""),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     company_id = _company(pid, user)
-    raw = await file.read()
-    try:
-        data = add_photo(
+    raw = await _read_capped(file)
+    hint = (file_id or "").strip()
+    fingerprint = json.dumps(
+        {
+            "punch_id": punch_id,
+            "phase": phase,
+            "row_version": row_version,
+            "photo_id": photo_id,
+            "file_id": hint.lower(),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        },
+        sort_keys=True,
+    )
+    key = (idempotency_key or "").strip() or hint or None
+
+    def create():
+        return add_photo(
             user,
             punch_id,
             company_id,
             pid,
             photo_id=photo_id,
-            file_id=file_id,
+            client_file_id=hint,
             phase=phase,
             row_version=row_version,
             raw=raw,
         )
-    except (PunchConflict, PunchForbidden, LookupError, ValueError) as exc:
+
+    try:
+        data = run_idempotent(user.id, key, fingerprint, create)
+    except (PunchConflict, PunchForbidden, LookupError, ValueError, IdempotencyConflict) as exc:
         raise _http(exc) from exc
     return {"ok": True, "data": data}
 
@@ -185,7 +237,14 @@ def punch_file(
         path, mime = file_for_punch(punch_id, company_id, file_id, pid)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Не найдено") from exc
-    return FileResponse(path, media_type=mime)
+    name = "photo" + _FILE_SUFFIX.get(mime, ".bin")
+    return FileResponse(
+        path,
+        media_type=mime,
+        filename=name,
+        content_disposition_type="attachment",
+        headers={**_FILE_HEADERS, "Content-Disposition": f'attachment; filename="{name}"'},
+    )
 
 
 @router.get("/projects/{pid}/punch-items/{punch_id}/link")

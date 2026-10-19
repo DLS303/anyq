@@ -17,8 +17,7 @@ from app.audit import write as audit_write
 from app.company_features import project_company_id, resolve_path_company
 from app.tenant import company_key
 from app.main import app
-from app.punch_photos import PUSH_TEXT, legacy_punch_id, migrate_status
-from app.site_models import PunchItem
+from app.punch_photos import PUSH_TEXT, migrate_status
 from app.store import store
 
 client = TestClient(app)
@@ -221,6 +220,10 @@ def test_foreign_company_is_404_on_read_write_file_and_link(monkeypatch):
         headers=_auth(owner["token"]),
     )
     assert own_file.status_code == 200, own_file.text
+    assert "private" in own_file.headers["cache-control"]
+    assert "no-store" in own_file.headers["cache-control"]
+    assert own_file.headers["x-content-type-options"] == "nosniff"
+    assert "attachment" in own_file.headers["content-disposition"].lower()
     assert b"SecretArtist" not in own_file.content
     opened = Image.open(io.BytesIO(own_file.content))
     assert 315 not in opened.getexif()
@@ -324,25 +327,117 @@ def test_status_rules_version_and_audit(monkeypatch):
     assert [row["id"] for row in mine.json()["data"]] == [item["id"]]
 
 
-def test_legacy_status_migration_does_not_change_the_pilot_row(monkeypatch):
-    owner, _foreign, pid = _world(monkeypatch, 610000000601)
-    legacy = PunchItem(
-        id="pu-synthetic-601",
-        project_id=pid,
-        title="Loose tile",
-        location="stair",
-        trade="finish",
-        status="ready",
-        created_at="2026-10-01T00:00:00+00:00",
+def _legacy_copy(company_id: str, legacy_id: str):
+    from sqlalchemy import select
+
+    from app.punch_photos import PunchItemRow
+
+    with store._sql.factory() as session:
+        row = session.scalar(
+            select(PunchItemRow).where(PunchItemRow.company_id == company_id, PunchItemRow.legacy_id == legacy_id)
+        )
+        if row is None:
+            return None
+        return {
+            "id": row.id,
+            "status": row.status,
+            "title": row.title,
+            "row_version": int(row.row_version),
+            "updated_at": row.updated_at,
+            "legacy_id": row.legacy_id,
+        }
+
+
+def test_flag_enable_imports_legacy_and_then_locks_writes(monkeypatch):
+    from sqlalchemy import func, select
+
+    from app.punch_photos import PunchItemRow
+
+    owner, _foreign, pid = _world(monkeypatch, 610000000601, flag=False)
+    hidden = client.get(f"/v1/site/projects/{pid}/punch-items", headers=_auth(owner["token"]))
+    assert hidden.status_code == 404
+    pilot = client.post(
+        f"/v1/site/projects/{pid}/punches",
+        json={"title": "Loose tile", "location": "stair", "trade": "finish"},
+        headers=_auth(owner["token"]),
     )
-    store.punches[legacy.id] = legacy
+    assert pilot.status_code == 200, pilot.text
+    pilot_id = pilot.json()["data"]["id"]
+    ready = client.post(
+        f"/v1/site/punches/{pilot_id}/status",
+        json={"status": "ready"},
+        headers=_auth(owner["token"]),
+    )
+    assert ready.status_code == 200, ready.text
+    assert store.punches[pilot_id].status == "ready"
+    opened = client.post(
+        "/v1/org/features",
+        json={"key": "punch_photos", "enabled": True, "row_version": 0},
+        headers=_auth(owner["token"]),
+    )
+    assert opened.status_code == 200, opened.text
+    company_id = opened.json()["data"]["company_id"]
+    flag_version = opened.json()["data"]["row_version"]
+    copied = _legacy_copy(company_id, pilot_id)
+    assert copied is not None
+    assert copied["status"] == "fixed"
+    assert copied["title"] == "Loose tile"
+    assert store.punches[pilot_id].status == "ready"
     listed = client.get(f"/v1/site/projects/{pid}/punch-items", headers=_auth(owner["token"]))
     assert listed.status_code == 200, listed.text
-    copied = [row for row in listed.json()["data"] if row["id"] == legacy_punch_id(pid, legacy.id)]
-    assert copied and copied[0]["status"] == "fixed"
-    assert store.punches[legacy.id].status == "ready"
-    again = client.get(f"/v1/site/projects/{pid}/punch-items", headers=_auth(owner["token"]))
-    assert sum(1 for row in again.json()["data"] if row["title"] == "Loose tile") == 1
+    assert [row["id"] for row in listed.json()["data"] if row["title"] == "Loose tile"] == [copied["id"]]
+    again = client.post(
+        "/v1/org/features",
+        json={"key": "punch_photos", "enabled": True, "row_version": flag_version},
+        headers=_auth(owner["token"]),
+    )
+    assert again.status_code == 200, again.text
+    second = _legacy_copy(company_id, pilot_id)
+    assert second == copied
+    with store._sql.factory() as session:
+        count = session.scalar(
+            select(func.count()).select_from(PunchItemRow).where(PunchItemRow.legacy_id == pilot_id)
+        )
+    assert count == 1
+    disabled = client.post(
+        "/v1/org/features",
+        json={"key": "punch_photos", "enabled": False, "row_version": again.json()["data"]["row_version"]},
+        headers=_auth(owner["token"]),
+    )
+    assert disabled.status_code == 200, disabled.text
+    edited = client.post(
+        f"/v1/site/punches/{pilot_id}/status",
+        json={"status": "closed"},
+        headers=_auth(owner["token"]),
+    )
+    assert edited.status_code == 200, edited.text
+    assert store.punches[pilot_id].status == "closed"
+    revived = client.post(
+        "/v1/org/features",
+        json={"key": "punch_photos", "enabled": True, "row_version": 0},
+        headers=_auth(owner["token"]),
+    )
+    assert revived.status_code == 200, revived.text
+    latest = _legacy_copy(company_id, pilot_id)
+    assert latest is not None
+    assert latest["id"] == copied["id"]
+    assert latest["status"] == "accepted"
+    assert latest["title"] == "Loose tile"
+    blocked = client.post(
+        f"/v1/site/projects/{pid}/punches",
+        json={"title": "After the flag"},
+        headers=_auth(owner["token"]),
+    )
+    assert blocked.status_code == 409
+    assert "Фото до и после" in blocked.json()["detail"]
+    blocked_status = client.post(
+        f"/v1/site/punches/{pilot_id}/status",
+        json={"status": "open"},
+        headers=_auth(owner["token"]),
+    )
+    assert blocked_status.status_code == 409
+    assert "Фото до и после" in blocked_status.json()["detail"]
+    assert store.punches[pilot_id].status == "closed"
 
 
 def test_pdf_has_no_author_names_or_phones(monkeypatch):
@@ -394,8 +489,10 @@ def test_reused_file_id_does_not_change_stored_bytes(monkeypatch):
         headers=_auth(owner["token"]),
     )
     assert first.status_code == 200, first.text
+    stored_id = first.json()["data"]["photos_before"][0]
+    assert stored_id != file_id
     original = client.get(
-        f"/v1/site/projects/{pid}/punch-items/{item['id']}/files/{file_id}",
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/files/{stored_id}",
         headers=_auth(owner["token"]),
     )
     assert original.status_code == 200
@@ -416,7 +513,8 @@ def test_reused_file_id_does_not_change_stored_bytes(monkeypatch):
         files={"file": ("other.jpg", _jpeg(color="blue"), "image/jpeg")},
         headers=_auth(foreign["token"]),
     )
-    assert foreign_upload.status_code == 409, foreign_upload.text
+    assert foreign_upload.status_code == 200, foreign_upload.text
+    assert foreign_upload.json()["data"]["photos_before"][0] != stored_id
 
     same = _create(owner["token"], pid, title="Second crack")
     again = client.post(
@@ -427,7 +525,7 @@ def test_reused_file_id_does_not_change_stored_bytes(monkeypatch):
     )
     assert again.status_code == 409, again.text
     reread = client.get(
-        f"/v1/site/projects/{pid}/punch-items/{item['id']}/files/{file_id}",
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/files/{stored_id}",
         headers=_auth(owner["token"]),
     )
     assert reread.status_code == 200
@@ -436,14 +534,321 @@ def test_reused_file_id_does_not_change_stored_bytes(monkeypatch):
     from app.punch_photos import FileRow, PunchItemRow
 
     with store._sql.factory() as session:
-        row = session.get(FileRow, file_id)
+        row = session.get(FileRow, stored_id)
+        hinted = session.get(FileRow, file_id)
         punch = session.get(PunchItemRow, item["id"])
+        assert hinted is None
         assert row is not None and punch is not None
         assert file_id not in (row.storage_key or "")
+        assert stored_id not in (row.storage_key or "")
         assert row.created_by == owner["user"]["id"]
         assert row.updated_by == owner["user"]["id"]
         assert punch.created_by == owner["user"]["id"]
         assert punch.updated_by == owner["user"]["id"]
+
+
+def test_roles_come_from_project_membership(monkeypatch):
+    owner, _foreign, pid = _world(monkeypatch, 610000000951)
+    foreman = _register("punch-foreman-951@example.com", _bin(610000000951), name="Foreman Nine")
+    customer = _register("punch-customer-951@example.com", _bin(610000000951), name="Customer Nine")
+    buyer = _register("punch-buyer-951@example.com", _bin(610000000951), name="Buyer Nine")
+    _promote("punch-foreman-951@example.com", "foreman")
+    _promote("punch-customer-951@example.com", "supervisor")
+    _promote("punch-buyer-951@example.com", "owner")
+    for email, role in (
+        ("punch-foreman-951@example.com", "foreman"),
+        ("punch-customer-951@example.com", "customer"),
+        ("punch-buyer-951@example.com", "procurement"),
+    ):
+        added = client.post(
+            f"/v1/site/projects/{pid}/members",
+            json={"email": email, "role": role},
+            headers=_auth(owner["token"]),
+        )
+        assert added.status_code == 200, added.text
+    item = _create(foreman["token"], pid, assignee_id=customer["user"]["id"])
+    assert item["author_id"] == foreman["user"]["id"]
+    denied_fix = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/status",
+        json={"status": "fixed", "row_version": item["row_version"]},
+        headers=_auth(buyer["token"]),
+    )
+    assert denied_fix.status_code == 403
+    item = _photo(customer["token"], pid, item, "after")
+    fixed = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/status",
+        json={"status": "fixed", "row_version": item["row_version"]},
+        headers=_auth(customer["token"]),
+    )
+    assert fixed.status_code == 200, fixed.text
+    fixed_body = fixed.json()["data"]
+    for token in (customer["token"], buyer["token"]):
+        denied = client.post(
+            f"/v1/site/projects/{pid}/punch-items/{item['id']}/status",
+            json={"status": "accepted", "row_version": fixed_body["row_version"]},
+            headers=_auth(token),
+        )
+        assert denied.status_code == 403
+    removed = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/delete",
+        json={"row_version": fixed_body["row_version"]},
+        headers=_auth(foreman["token"]),
+    )
+    assert removed.status_code == 403
+    accepted = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/status",
+        json={"status": "accepted", "row_version": fixed_body["row_version"]},
+        headers=_auth(owner["token"]),
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["data"]["author_id"] == foreman["user"]["id"]
+    assert accepted.json()["data"]["status"] == "accepted"
+
+
+def test_concurrent_list_calls_do_not_fail(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    owner, _foreign, pid = _world(monkeypatch, 610000001001)
+    _create(owner["token"], pid)
+
+    def hit(_n: int):
+        return client.get(f"/v1/site/projects/{pid}/punch-items", headers=_auth(owner["token"]))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(hit, range(8)))
+    assert [row.status_code for row in results] == [200] * 8
+
+
+def test_publish_failure_soft_deletes_rows(monkeypatch):
+    from sqlalchemy import select
+
+    from app.punch_photos import FileRow, PunchPhotoRow
+
+    owner, _foreign, pid = _world(monkeypatch, 610000001101)
+    item = _create(owner["token"], pid)
+
+    def fail(_src, dest):
+        raise FileExistsError(dest)
+
+    monkeypatch.setattr("app.punch_photos.os.link", fail)
+    with pytest.raises(FileExistsError):
+        client.post(
+            f"/v1/site/projects/{pid}/punch-items/{item['id']}/photos",
+            data={"phase": "before", "row_version": str(item["row_version"]), "id": str(uuid4()), "file_id": str(uuid4())},
+            files={"file": ("shot.jpg", _jpeg(), "image/jpeg")},
+            headers=_auth(owner["token"]),
+        )
+    with store._sql.factory() as session:
+        files = session.scalars(select(FileRow).where(FileRow.project_id == pid)).all()
+        photos = session.scalars(select(PunchPhotoRow).where(PunchPhotoRow.punch_id == item["id"])).all()
+        assert files and all(row.deleted_at for row in files)
+        assert photos and all(row.deleted_at for row in photos)
+    listed = client.get(f"/v1/site/projects/{pid}/punch-items/{item['id']}", headers=_auth(owner["token"]))
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"]["photos_before"] == []
+
+
+def test_link_publish_leaves_an_existing_file(tmp_path, monkeypatch):
+    from app.paths import resolve_stored_file
+    from app.punch_photos import _publish_link, _write_temp
+
+    monkeypatch.setenv("ANYQ_UPLOADS_DIR", str(tmp_path))
+    dest = resolve_stored_file("upload", "kept.jpg")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(b"old")
+    temp = _write_temp(b"new")
+    try:
+        with pytest.raises(FileExistsError):
+            _publish_link(temp, "kept.jpg")
+        assert dest.read_bytes() == b"old"
+        assert temp.is_file()
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def test_upload_is_capped_and_pixels_are_limited(monkeypatch):
+    from PIL import Image
+
+    from app import media
+
+    assert media.MAX_UPLOAD_BYTES == 10 * 1024 * 1024
+    assert Image.MAX_IMAGE_PIXELS == 48_000_000
+    owner, _foreign, pid = _world(monkeypatch, 610000001201)
+    item = _create(owner["token"], pid)
+    monkeypatch.setattr(media, "MAX_UPLOAD_BYTES", 32)
+    rejected = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/photos",
+        data={"phase": "before", "row_version": "1", "id": str(uuid4()), "file_id": str(uuid4())},
+        files={"file": ("shot.jpg", b"x" * 64, "image/jpeg")},
+        headers=_auth(owner["token"]),
+    )
+    assert rejected.status_code == 413
+
+
+def test_photo_idempotency_key_returns_the_same_response(monkeypatch):
+    from sqlalchemy import func, select
+
+    from app.punch_photos import PunchPhotoRow
+
+    owner, _foreign, pid = _world(monkeypatch, 610000001301)
+    item = _create(owner["token"], pid)
+    key = str(uuid4())
+    payload = {"phase": "before", "row_version": str(item["row_version"]), "id": str(uuid4()), "file_id": str(uuid4())}
+    image = _jpeg(color="red")
+    headers = {**_auth(owner["token"]), "Idempotency-Key": key}
+    first = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/photos",
+        data=payload,
+        files={"file": ("shot.jpg", image, "image/jpeg")},
+        headers=headers,
+    )
+    second = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/photos",
+        data=payload,
+        files={"file": ("shot.jpg", image, "image/jpeg")},
+        headers=headers,
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["data"] == second.json()["data"]
+    with store._sql.factory() as session:
+        count = session.scalar(
+            select(func.count()).select_from(PunchPhotoRow).where(PunchPhotoRow.punch_id == item["id"])
+        )
+    assert count == 1
+
+
+def test_duplicate_sha256_is_a_warning(monkeypatch):
+    owner, _foreign, pid = _world(monkeypatch, 610000001401)
+    image = _jpeg(color="blue")
+    first_item = _create(owner["token"], pid)
+    second_item = _create(owner["token"], pid, title="Same pixels")
+    first = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{first_item['id']}/photos",
+        data={"phase": "before", "row_version": "1", "id": str(uuid4()), "file_id": str(uuid4())},
+        files={"file": ("shot.jpg", image, "image/jpeg")},
+        headers=_auth(owner["token"]),
+    )
+    second = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{second_item['id']}/photos",
+        data={"phase": "before", "row_version": "1", "id": str(uuid4()), "file_id": str(uuid4())},
+        files={"file": ("shot.jpg", image, "image/jpeg")},
+        headers=_auth(owner["token"]),
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert "warnings" not in first.json()["data"]
+    assert second.json()["data"]["warnings"] == ["duplicate_sha256"]
+    assert first.json()["data"]["photos_before"][0] != second.json()["data"]["photos_before"][0]
+
+
+def test_overdue_uses_the_almaty_day(monkeypatch):
+    from datetime import UTC, datetime
+
+    from app import punch_photos as photos
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = datetime(2026, 10, 19, 19, 30, tzinfo=UTC)
+            if tz is None:
+                return base
+            return base.astimezone(tz)
+
+    monkeypatch.setattr(photos, "datetime", Frozen)
+    assert photos._today() == "2026-10-20"
+
+
+def test_history_is_limited_to_the_company_and_entity(monkeypatch):
+    owner, _foreign, pid = _world(monkeypatch, 610000001501)
+    item = _create(owner["token"], pid, due_date="2020-01-02")
+    item = _photo(owner["token"], pid, item, "after")
+    moved = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{item['id']}/status",
+        json={"status": "fixed", "row_version": item["row_version"]},
+        headers=_auth(owner["token"]),
+    )
+    assert moved.status_code == 200, moved.text
+    with store._sql.factory() as session:
+        audit_write(
+            "punch.status_change",
+            "punch_item",
+            item["id"],
+            pid,
+            {"from": "open", "to": "fixed"},
+            session=session,
+            company_id="bin:000000000000",
+            actor_user_id="u-other",
+        )
+        audit_write(
+            "punch.status_change",
+            "punch_item",
+            "00000000-0000-4000-8000-000000000077",
+            pid,
+            {"from": "fixed", "to": "accepted"},
+            session=session,
+            company_id=item["company_id"],
+            actor_user_id="u-other",
+        )
+        session.commit()
+    listed = client.get(f"/v1/site/projects/{pid}/punch-items/{item['id']}", headers=_auth(owner["token"]))
+    assert listed.status_code == 200, listed.text
+    history = listed.json()["data"]["history"]
+    assert history == [{"at": history[0]["at"], "actor_id": owner["user"]["id"], "from_status": "open", "to_status": "fixed"}]
+    assert listed.json()["data"]["overdue"] is True
+
+
+def test_pdf_is_split_into_pages(monkeypatch):
+    import re
+
+    from app.punch_photos import PunchItemRow, build_pdf
+
+    owner, _foreign, pid = _world(monkeypatch, 610000001601)
+    user = store.get_user(owner["user"]["id"])
+    assert user is not None
+    company_id = project_company_id(store.get_project(pid))
+    stamp = "2026-10-01T00:00:00+00:00"
+    with store._sql.factory() as session:
+        for number in range(40):
+            session.add(
+                PunchItemRow(
+                    id=str(uuid4()),
+                    company_id=company_id,
+                    project_id=pid,
+                    title=f"Row {number} +77001112233",
+                    location="stair",
+                    trade="finish",
+                    status="open",
+                    author_id=user.id,
+                    created_at=stamp,
+                    created_by=user.id,
+                    updated_at=stamp,
+                    updated_by=user.id,
+                    row_version=1,
+                )
+            )
+        session.commit()
+    raw = build_pdf(user, pid, company_id)
+    assert len(re.findall(rb"/Type\s*/Page(?!s)", raw)) >= 2
+    assert b"/Author" not in raw
+    assert b"77001112233" not in raw
+
+
+def test_missing_punch_does_not_store_a_temp_file(monkeypatch):
+    from app.paths import uploads_dir
+
+    owner, _foreign, pid = _world(monkeypatch, 610000001701)
+    incoming = uploads_dir() / ".incoming"
+    before = set(incoming.glob("*")) if incoming.exists() else set()
+    missing = client.post(
+        f"/v1/site/projects/{pid}/punch-items/{uuid4()}/photos",
+        data={"phase": "before", "row_version": "1", "id": str(uuid4()), "file_id": str(uuid4())},
+        files={"file": ("shot.jpg", _jpeg(), "image/jpeg")},
+        headers=_auth(owner["token"]),
+    )
+    assert missing.status_code == 404
+    after = set(incoming.glob("*")) if incoming.exists() else set()
+    assert after == before
 
 
 def test_alembic_upgrade_downgrade_upgrade(tmp_path):
@@ -473,5 +878,15 @@ def test_alembic_upgrade_downgrade_upgrade(tmp_path):
     for table in ("files", "punch_items", "punch_photos"):
         columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
         assert {"created_by", "updated_by"} <= columns
+    item_columns = {row[1] for row in connection.execute("PRAGMA table_info(punch_items)")}
+    assert "legacy_id" in item_columns
+    item_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='punch_items'").fetchone()[0]
+    photo_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='punch_photos'").fetchone()[0]
+    assert "uq_punch_items_company_legacy" in item_sql
+    assert "uq_punch_photos_punch_file" in photo_sql
+    assert "REFERENCES punch_items" in photo_sql
+    assert "REFERENCES files" in photo_sql
+    fk_tables = {row[2] for row in connection.execute("PRAGMA foreign_key_list(punch_photos)")}
+    assert {"punch_items", "files"} <= fk_tables
     connection.close()
 

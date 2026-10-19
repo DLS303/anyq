@@ -63,7 +63,9 @@ def upgrade() -> None:
         sa.Column("updated_by", sa.String(80), nullable=True),
         sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("deleted_at", sa.String(40), nullable=True),
+        sa.Column("legacy_id", sa.String(80), nullable=True),
         sa.CheckConstraint("status IN ('open','fixed','accepted','returned')", name="ck_punch_items_status"),
+        sa.UniqueConstraint("company_id", "legacy_id", name="uq_punch_items_company_legacy"),
     )
     op.create_index("ix_punch_items_company_updated", "punch_items", ["company_id", "updated_at"])
     op.create_index(
@@ -86,9 +88,9 @@ def upgrade() -> None:
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("company_id", sa.String(180), nullable=False),
         sa.Column("project_id", sa.String(80), nullable=False),
-        sa.Column("punch_id", sa.String(36), nullable=False),
+        sa.Column("punch_id", sa.String(36), sa.ForeignKey("punch_items.id"), nullable=False),
         sa.Column("phase", sa.String(10), nullable=False),
-        sa.Column("file_id", sa.String(36), nullable=False),
+        sa.Column("file_id", sa.String(36), sa.ForeignKey("files.id"), nullable=False),
         sa.Column("sort_no", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_at", sa.String(40), nullable=False),
         sa.Column("created_by", sa.String(80), nullable=True),
@@ -97,6 +99,7 @@ def upgrade() -> None:
         sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("deleted_at", sa.String(40), nullable=True),
         sa.CheckConstraint("phase IN ('before','after')", name="ck_punch_photos_phase"),
+        sa.UniqueConstraint("punch_id", "file_id", name="uq_punch_photos_punch_file"),
     )
     op.create_index("ix_punch_photos_company_updated", "punch_photos", ["company_id", "updated_at"])
     op.create_index("ix_punch_photos_file_id", "punch_photos", ["file_id"])
