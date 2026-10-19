@@ -1,19 +1,18 @@
 """Designer questions, external contacts, and reply links.
 
 Revision ID: 20261019_0005_pf3a
-Revises: 20261019_0002
+Revises: 20261019_0002_pf0
 Create Date: 2026-10-19
 
-down_revision is PR #18 (20261019_0002). A later merge revision joins wave-1 heads.
+down_revision is the company feature-flag revision. A later merge joins wave-1 heads.
 """
 
 import sqlalchemy as sa
 
 from alembic import op
-from app.sql_backend import install_audit_guards
 
 revision = "20261019_0005_pf3a"
-down_revision = "20261019_0002"
+down_revision = "20261019_0002_pf0"
 branch_labels = None
 depends_on = None
 
@@ -89,20 +88,9 @@ def upgrade() -> None:
     )
     op.create_index("ix_access_tokens_token_sha256", "access_tokens", ["token_sha256"], unique=True)
     op.create_index("ix_access_tokens_company_updated", "access_tokens", ["company_id", "updated_at"])
-    op.add_column("audit_log", sa.Column("entity_type", sa.String(length=64), nullable=True))
-    op.add_column("audit_log", sa.Column("entity_id", sa.String(length=36), nullable=True))
-    op.add_column("audit_log", sa.Column("project_id", sa.String(length=80), nullable=True))
-    op.add_column("audit_log", sa.Column("changes", sa.Text(), nullable=True))
-    install_audit_guards(op.get_bind())
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("audit_log") as batch:
-        batch.drop_column("changes")
-        batch.drop_column("project_id")
-        batch.drop_column("entity_id")
-        batch.drop_column("entity_type")
-    install_audit_guards(op.get_bind())
     op.drop_index("ix_access_tokens_company_updated", table_name="access_tokens")
     op.drop_index("ix_access_tokens_token_sha256", table_name="access_tokens")
     op.drop_table("access_tokens")

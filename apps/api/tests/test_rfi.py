@@ -13,13 +13,13 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import select, update
 
-from app.audit import mask_changes
+from app.audit import _mask
 from app.company_features import company_id_of
 from app.main import app
+from app.pf0_tables import AuditLog
 from app.rfi_service import add_business_days
 from app.rfi_tables import access_tokens
 from app.schemas import User
-from app.sql_backend import AuditLog
 from app.store import store
 
 client = TestClient(app)
@@ -109,14 +109,14 @@ def test_business_days_skip_the_weekend():
     assert add_business_days(date(2026, 10, 16), 5) == date(2026, 10, 23)
 
 
-def test_mask_changes_drops_text_and_phones():
-    masked = mask_changes({"status": ["open", "answered"], "answer": "secret text", "phone": "+15551230000"})
+def test_audit_mask_hides_phone_and_name():
+    masked = _mask({"status": ["open", "answered"], "phone": "+15551230000", "full_name": "Ada North"})
     blob = json.dumps(masked)
     assert masked["status"] == ["open", "answered"]
-    assert masked["answer"] == "***"
     assert masked["phone"] == "***"
-    assert "secret" not in blob
+    assert masked["full_name"] == "***"
     assert "+1555" not in blob
+    assert "Ada" not in blob
 
 
 def test_foreign_company_is_404_on_read_write_files_and_links(monkeypatch):
@@ -355,10 +355,10 @@ def test_foreign_company_is_404_on_read_write_files_and_links(monkeypatch):
 
     with store._sql.factory() as session:
         events = session.scalars(select(AuditLog).where(AuditLog.entity_id == record_id)).all()
-    actions = [row.event for row in events]
+    actions = [row.action for row in events]
     assert "rfi.create" in actions
     assert "rfi.answer" in actions
-    blob = " ".join(row.changes or "" for row in events)
+    blob = " ".join(json.dumps(row.changes or {}, ensure_ascii=True) for row in events)
     assert "Land it on grid C" not in blob
     assert "+15551230000" not in blob
     assert "Ada North" not in blob

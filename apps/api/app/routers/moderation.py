@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.deps import require_roles
 from app.schemas import ModerateBody, User, VerificationCreate
+from app.sql_backend import page_body
 from app.store import store
 
 router = APIRouter(prefix="/v1/moderation", tags=["moderation"])
@@ -18,7 +19,7 @@ def queue(
         items = store.queue()
         return {"ok": True, "data": items, "total": len(items)}
     items, total = store.page_queue(limit=limit, offset=offset)
-    return {"ok": True, "data": items, "total": total, "limit": limit, "offset": offset}
+    return page_body(items, total, limit, offset)
 
 
 @router.post("/verifications")

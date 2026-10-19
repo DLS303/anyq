@@ -10,10 +10,10 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from sqlalchemy import (
     JSON,
@@ -27,17 +27,19 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     delete,
+    desc,
     event,
     func,
-    inspect,
     or_,
     select,
     text,
+    update,
 )
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.geo import centroid, haversine_km
+from app.tenant import company_key as tenant_company_key
 
 
 class Base(DeclarativeBase):
@@ -49,14 +51,14 @@ class Record(Base):
 
     collection: Mapped[str] = mapped_column(String(40), primary_key=True)
     doc_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    project_id: Mapped[str | None] = mapped_column(String(80), index=True)
-    company_key: Mapped[str | None] = mapped_column(String(180), index=True)
-    owner_id: Mapped[str | None] = mapped_column(String(80), index=True)
-    user_id: Mapped[str | None] = mapped_column(String(80), index=True)
-    status: Mapped[str | None] = mapped_column(String(40), index=True)
-    created_at: Mapped[str | None] = mapped_column(String(40), index=True)
-    email: Mapped[str | None] = mapped_column(String(200), index=True)
-    category: Mapped[str | None] = mapped_column(String(40), index=True)
+    project_id: Mapped[str | None] = mapped_column(String(80))
+    company_key: Mapped[str | None] = mapped_column(String(180))
+    owner_id: Mapped[str | None] = mapped_column(String(80))
+    user_id: Mapped[str | None] = mapped_column(String(80))
+    status: Mapped[str | None] = mapped_column(String(40))
+    created_at: Mapped[str | None] = mapped_column(String(40))
+    email: Mapped[str | None] = mapped_column(String(200))
+    category: Mapped[str | None] = mapped_column(String(40))
     district: Mapped[str | None] = mapped_column(String(160))
     gas: Mapped[str | None] = mapped_column(String(40))
     electricity: Mapped[str | None] = mapped_column(String(40))
@@ -67,18 +69,24 @@ class Record(Base):
     price: Mapped[int | None] = mapped_column(Integer, index=True)
     lat: Mapped[float | None] = mapped_column(Float)
     lng: Mapped[float | None] = mapped_column(Float)
-    seq: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
 
     __table_args__ = (
-        Index("ix_records_collection_status", "collection", "status"),
-        Index("ix_records_collection_project", "collection", "project_id"),
-        Index("ix_records_collection_company", "collection", "company_key"),
-        Index("ix_records_collection_created", "collection", "created_at"),
-        Index("ix_records_collection_owner", "collection", "owner_id"),
-        Index("ix_records_collection_user", "collection", "user_id"),
-        Index("ix_records_collection_category", "collection", "category"),
-        Index("ix_records_collection_email", "collection", "email"),
+        Index("ix_records_coll_seq", "collection", "seq", "doc_id"),
+        Index("ix_records_coll_proj_seq", "collection", "project_id", "seq"),
+        Index("ix_records_coll_comp_seq", "collection", "company_key", "seq"),
+        Index("ix_records_coll_owner_seq", "collection", "owner_id", "seq"),
+        Index("ix_records_coll_status_seq", "collection", "status", "seq"),
+        Index("ix_records_coll_created", "collection", desc("created_at")),
+        Index(
+            "ux_records_user_email",
+            "email",
+            unique=True,
+            sqlite_where=text("collection = 'users'"),
+            postgresql_where=text("collection = 'users'"),
+        ),
     )
 
 
@@ -98,7 +106,6 @@ class RecordLink(Base):
             ondelete="CASCADE",
         ),
         Index("ix_record_links_user", "user_id", "collection"),
-        Index("ix_record_links_doc", "collection", "doc_id"),
     )
 
 
@@ -140,6 +147,61 @@ class InvitationRow(Base):
     revoked_at: Mapped[str | None] = mapped_column(String(40))
 
 
+class LoginFailure(Base):
+    """Failed login attempts. Shared by every worker so the window is global."""
+
+    __tablename__ = "login_failures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account: Mapped[str] = mapped_column(String(200))
+    ip: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[float] = mapped_column(Float)
+
+    __table_args__ = (Index("ix_login_failures_account_ip_created", "account", "ip", "created_at"),)
+
+
+class ConsentEvent(Base):
+    """Append-only consent journal. Updates and deletes are rejected by triggers."""
+
+    __tablename__ = "consent_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    legacy_id: Mapped[str] = mapped_column(String(40))
+    company_id: Mapped[str | None] = mapped_column(String(180))
+    subject_user_id: Mapped[str] = mapped_column(String(80))
+    purpose: Mapped[str] = mapped_column(String(40))
+    text_version: Mapped[str] = mapped_column(String(80))
+    text_sha256: Mapped[str] = mapped_column(String(64))
+    action: Mapped[str] = mapped_column(String(20))
+    occurred_at: Mapped[str] = mapped_column(String(40))
+    granted_at: Mapped[str] = mapped_column(String(40), default="")
+    ip: Mapped[str] = mapped_column(String(80), default="")
+    user_agent: Mapped[str] = mapped_column(Text, default="")
+    login: Mapped[str] = mapped_column(String(200), default="")
+    provider: Mapped[str] = mapped_column(String(200), default="")
+    country: Mapped[str] = mapped_column(String(80), default="")
+    privacy_version: Mapped[str] = mapped_column(String(40), default="")
+    privacy_sha256: Mapped[str] = mapped_column(String(64), default="")
+
+    __table_args__ = (
+        UniqueConstraint("legacy_id", name="uq_consent_events_legacy_id"),
+        Index("ix_consents_subject", "subject_user_id", "purpose", desc("occurred_at")),
+        Index("ix_consents_company", "company_id", desc("occurred_at")),
+    )
+
+
+class RecordTombstone(Base):
+    """Deleted record ids so another worker can drop them without a full reload."""
+
+    __tablename__ = "record_tombstones"
+
+    collection: Mapped[str] = mapped_column(String(40), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (Index("ix_tombstones_coll_seq", "collection", "seq"),)
+
+
 class PhotoJob(Base):
     __tablename__ = "photo_jobs"
 
@@ -154,83 +216,6 @@ class PhotoJob(Base):
     taken_at: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[str] = mapped_column(String(40), index=True)
     finished_at: Mapped[str | None] = mapped_column(String(40))
-
-
-class CompanyFeature(Base):
-    """Company feature flag. Logical key is (company_id, key)."""
-
-    __tablename__ = "company_features"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    company_id: Mapped[str] = mapped_column(String(180), nullable=False)
-    key: Mapped[str] = mapped_column(String(64), nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    changed_by: Mapped[str] = mapped_column(String(80), nullable=False, default="")
-    changed_at: Mapped[str] = mapped_column(String(40), nullable=False, default="")
-    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    updated_at: Mapped[str] = mapped_column(String(40), nullable=False, default="")
-    deleted_at: Mapped[str | None] = mapped_column(String(40))
-
-    __table_args__ = (
-        UniqueConstraint("company_id", "key", name="uq_company_features_company_key"),
-        Index("ix_company_features_company_id", "company_id"),
-    )
-
-
-class AuditLog(Base):
-    """Append-only events. Feature toggles use feature.enable and feature.disable."""
-
-    __tablename__ = "audit_log"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    event: Mapped[str] = mapped_column(String(64), nullable=False)
-    company_id: Mapped[str] = mapped_column(String(180), nullable=False)
-    actor: Mapped[str] = mapped_column(String(80), nullable=False)
-    at: Mapped[str] = mapped_column(String(40), nullable=False)
-    key: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    entity_type: Mapped[str | None] = mapped_column(String(64))
-    entity_id: Mapped[str | None] = mapped_column(String(36))
-    project_id: Mapped[str | None] = mapped_column(String(80))
-    changes: Mapped[str | None] = mapped_column(Text)
-
-    __table_args__ = (Index("ix_audit_log_company_id", "company_id"),)
-
-
-def install_audit_guards(bind) -> None:
-    """Reject UPDATE and DELETE on audit_log. SQLite and PostgreSQL 16."""
-    if not inspect(bind).has_table("audit_log"):
-        return
-    dialect = bind.dialect.name
-    if dialect == "sqlite":
-        bind.exec_driver_sql(
-            "CREATE TRIGGER IF NOT EXISTS trg_audit_log_no_update BEFORE UPDATE ON audit_log "
-            "BEGIN SELECT RAISE(ABORT, 'append-only'); END"
-        )
-        bind.exec_driver_sql(
-            "CREATE TRIGGER IF NOT EXISTS trg_audit_log_no_delete BEFORE DELETE ON audit_log "
-            "BEGIN SELECT RAISE(ABORT, 'append-only'); END"
-        )
-        return
-    if dialect != "postgresql":
-        return
-    bind.exec_driver_sql(
-        "CREATE OR REPLACE FUNCTION forbid_audit_log_mutation() RETURNS trigger "
-        "LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'append-only'; END $$"
-    )
-    bind.exec_driver_sql(
-        "DO $$ BEGIN "
-        "IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_log_no_update') THEN "
-        "CREATE TRIGGER trg_audit_log_no_update BEFORE UPDATE ON audit_log "
-        "FOR EACH ROW EXECUTE FUNCTION forbid_audit_log_mutation(); "
-        "END IF; END $$"
-    )
-    bind.exec_driver_sql(
-        "DO $$ BEGIN "
-        "IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_log_no_delete') THEN "
-        "CREATE TRIGGER trg_audit_log_no_delete BEFORE DELETE ON audit_log "
-        "FOR EACH ROW EXECUTE FUNCTION forbid_audit_log_mutation(); "
-        "END IF; END $$"
-    )
 
 
 # Attribute on MemoryStore -> collection name in `records`.
@@ -283,6 +268,11 @@ LISTS: tuple[tuple[str, str], ...] = (
 )
 
 DICT_ATTRS = tuple(attr for attr, _name in PERSISTED) + ("users",)
+COLLECTION_OF = {attr: collection for attr, collection in PERSISTED}
+COLLECTION_OF["users"] = "users"
+COLLECTION_OF["favorites"] = "favorites"
+COLLECTION_OF["consents"] = "consents"
+ATTR_OF = {collection: attr for attr, collection in PERSISTED}
 INDEX_FIELDS = (
     "project_id",
     "company_key",
@@ -311,6 +301,51 @@ class TrackedDict(dict):
         self.dirty: set[str] = set()
         self.deleted: set[str] = set()
         self._tracking = True
+        self.on_read = None
+        self.synced_rev: int | None = None
+        self.collection: str | None = None
+        self.versions: dict[str, int] = {}
+        self.last_seq = 0
+
+    def _read(self) -> None:
+        hook = self.on_read
+        if hook is not None:
+            hook(self)
+
+    def peek(self, key, default=None):
+        return dict.get(self, key, default)
+
+    def __getitem__(self, key):
+        self._read()
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        self._read()
+        return super().get(key, default)
+
+    def __contains__(self, key) -> bool:
+        self._read()
+        return super().__contains__(key)
+
+    def __iter__(self):
+        self._read()
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self._read()
+        return super().__len__()
+
+    def keys(self):
+        self._read()
+        return super().keys()
+
+    def values(self):
+        self._read()
+        return super().values()
+
+    def items(self):
+        self._read()
+        return super().items()
 
     def __setitem__(self, key, value) -> None:
         super().__setitem__(key, value)
@@ -339,6 +374,19 @@ class TrackedDict(dict):
         for key in list(self.keys()):
             del self[key]
 
+    def peek_values(self):
+        return list(super().values())
+
+    def adopt(self, key, value, version: int, seq: int) -> None:
+        token = str(key)
+        self._tracking = False
+        super().__setitem__(token, value)
+        self.versions[token] = version
+        self.last_seq = max(self.last_seq, seq)
+        self.dirty.discard(token)
+        self.deleted.discard(token)
+        self._tracking = True
+
     def replace(self, items: dict) -> None:
         incoming = dict(items)
         for key in list(self.keys()):
@@ -347,12 +395,30 @@ class TrackedDict(dict):
         for key, value in incoming.items():
             self[key] = value
 
-    def load_clean(self, items: dict) -> None:
+    def load_clean(self, items: dict, versions: dict[str, int] | None = None, last_seq: int | None = None) -> None:
         self._tracking = False
         super().clear()
         super().update(items)
         self.dirty.clear()
         self.deleted.clear()
+        self.versions = dict(versions or {})
+        if last_seq is not None:
+            self.last_seq = last_seq
+        self._tracking = True
+
+    def merge_changes(self, items: dict, versions: dict[str, int], deleted: set[str], last_seq: int) -> None:
+        self._tracking = False
+        for key in deleted:
+            super().pop(key, None)
+            self.versions.pop(str(key), None)
+            self.dirty.discard(str(key))
+        for key, value in items.items():
+            token = str(key)
+            super().__setitem__(token, value)
+            if token in versions:
+                self.versions[token] = versions[token]
+            self.dirty.discard(token)
+        self.last_seq = max(self.last_seq, last_seq)
         self._tracking = True
 
 
@@ -362,6 +428,29 @@ class TrackedList(list):
         self.identify = identify
         self.mutated = False
         self._silent = False
+        self.on_read = None
+        self.synced_rev: int | None = None
+        self.collection: str | None = None
+        self.pending_add: list = []
+        self.pending_del: set[str] = set()
+        self.last_seq = 0
+
+    def _read(self) -> None:
+        hook = self.on_read
+        if hook is not None:
+            hook(self)
+
+    def __iter__(self):
+        self._read()
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self._read()
+        return super().__len__()
+
+    def __getitem__(self, index):
+        self._read()
+        return super().__getitem__(index)
 
     def _touch(self) -> None:
         if not self._silent:
@@ -369,37 +458,89 @@ class TrackedList(list):
 
     def append(self, item) -> None:
         super().append(item)
-        self._touch()
+        if not self._silent:
+            self.pending_add.append(item)
+            self.mutated = True
 
     def extend(self, items) -> None:
-        super().extend(items)
-        self._touch()
+        for item in items:
+            self.append(item)
 
     def __setitem__(self, index, value) -> None:
+        previous = list.__getitem__(self, index)
         super().__setitem__(index, value)
-        self._touch()
+        if not self._silent:
+            self.pending_del.add(str(self.identify(previous)))
+            self.pending_add.append(value)
+            self.mutated = True
 
     def __delitem__(self, index) -> None:
+        previous = list.__getitem__(self, index)
         super().__delitem__(index)
-        self._touch()
+        if not self._silent:
+            self.pending_del.add(str(self.identify(previous)))
+            self.mutated = True
 
     def remove(self, item) -> None:
+        ident = str(self.identify(item))
         super().remove(item)
-        self._touch()
+        if not self._silent:
+            self.pending_del.add(ident)
+            self.pending_add = [row for row in self.pending_add if str(self.identify(row)) != ident]
+            self.mutated = True
 
     def replace(self, items) -> None:
+        incoming = list(items)
+        old_ids = {str(self.identify(item)) for item in list.__iter__(self)}
+        new_ids: set[str] = set()
+        for item in incoming:
+            ident = str(self.identify(item))
+            new_ids.add(ident)
+            if ident not in old_ids:
+                self.pending_add.append(item)
+        self.pending_del.update(old_ids - new_ids)
         self._silent = True
-        super().clear()
-        super().extend(items)
+        list.clear(self)
+        list.extend(self, incoming)
         self._silent = False
         self.mutated = True
 
     def load_clean(self, items) -> None:
         self._silent = True
-        super().clear()
-        super().extend(items)
+        list.clear(self)
+        list.extend(self, items)
         self._silent = False
+        self.pending_add.clear()
+        self.pending_del.clear()
         self.mutated = False
+
+    def adopt_item(self, item, seq: int) -> None:
+        ident = str(self.identify(item))
+        self._silent = True
+        if not any(str(self.identify(current)) == ident for current in list.__iter__(self)):
+            list.append(self, item)
+        self._silent = False
+        self.last_seq = max(self.last_seq, seq)
+
+    def merge_appends(self, items, deleted: set[str], last_seq: int) -> None:
+        self._silent = True
+        current = [item for item in list.__iter__(self) if str(self.identify(item)) not in deleted]
+        order: list[str] = []
+        mapping = {}
+        for item in current:
+            ident = str(self.identify(item))
+            if ident not in mapping:
+                order.append(ident)
+            mapping[ident] = item
+        for item in items:
+            ident = str(self.identify(item))
+            if ident not in mapping:
+                order.append(ident)
+            mapping[ident] = item
+        list.clear(self)
+        list.extend(self, [mapping[ident] for ident in order])
+        self._silent = False
+        self.last_seq = max(self.last_seq, last_seq)
 
 
 def json_db_file() -> Path:
@@ -430,16 +571,6 @@ def sqlite_path_from_url(url: str) -> str | None:
     if url.startswith(prefix):
         return url[len(prefix) :]
     return None
-
-
-def _company_key(company: str, company_bin: str, user_id: str) -> str:
-    digits = re.sub(r"\D", "", company_bin or "")
-    if len(digits) == 12:
-        return f"bin:{digits}"
-    name = re.sub(r"\s+", " ", (company or "").strip().casefold())
-    if name:
-        return f"name:{name}"
-    return f"user:{user_id}"
 
 
 def _dump(value) -> dict:
@@ -482,11 +613,11 @@ def index_values(store, collection: str, doc_id: str, payload: dict) -> dict:
     email = _blank((payload.get("email") or "").lower()) if collection == "users" else _blank(payload.get("email"))
     company_key = None
     if collection == "users":
-        company_key = _company_key(str(payload.get("company") or ""), str(payload.get("company_bin") or ""), doc_id)
+        company_key = tenant_company_key(SimpleNamespace(id=doc_id, company_key=payload.get("company_key") or ""))
     elif collection == "projects" and owner_id or collection == "crm_contacts" and owner_id:
         owner = store.users_by_id.get(owner_id)
         if owner is not None:
-            company_key = _company_key(owner.company, owner.company_bin, owner.id)
+            company_key = tenant_company_key(owner)
     category = _blank(payload.get("category") or payload.get("purpose") or payload.get("funnel") or payload.get("contact_type"))
     district = _blank(payload.get("district"))
     gas = _blank(payload.get("gas"))
@@ -496,6 +627,15 @@ def index_values(store, collection: str, doc_id: str, payload: dict) -> dict:
     published = payload.get("published") if isinstance(payload.get("published"), bool) else None
     price = payload.get("price_kzt")
     price_value = int(price) if isinstance(price, (int, float)) and not isinstance(price, bool) else None
+    if collection == "verifications":
+        user_id = _blank(payload.get("subject_id"))
+        status = _blank(payload.get("subject_type"))
+        category = _blank(payload.get("kind"))
+    if collection == "reviews":
+        owner_id = _blank(payload.get("specialist_id"))
+        stars = payload.get("stars")
+        if isinstance(stars, int) and not isinstance(stars, bool):
+            price_value = stars
     lat = lng = None
     polygon = payload.get("polygon")
     if isinstance(polygon, list) and polygon:
@@ -654,16 +794,192 @@ def _like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+class ChangedByOther(Exception):
+    def __init__(self) -> None:
+        super().__init__("Изменено другим")
+
+
+def _production() -> bool:
+    return os.getenv("ANYQ_ENV", "development").strip().lower() == "production"
+
+
+def _chunks(items: list, size: int):
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def consent_event_from_record(record, company_id: str | None) -> ConsentEvent:
+    action = record.action or "grant"
+    occurred = record.revoked_at if action == "revoke" and record.revoked_at else record.granted_at
+    return ConsentEvent(
+        legacy_id=record.id,
+        company_id=company_id,
+        subject_user_id=record.user_id,
+        purpose=record.type,
+        text_version=record.text_version,
+        text_sha256=record.text_sha256,
+        action=action,
+        occurred_at=occurred or record.granted_at,
+        granted_at=record.granted_at or occurred or "",
+        ip=record.ip or "",
+        user_agent=record.user_agent or "",
+        login=record.login or "",
+        provider=record.provider or "",
+        country=record.country or "",
+        privacy_version=record.privacy_version or "",
+        privacy_sha256=record.privacy_sha256 or "",
+    )
+
+
+def consent_record_from_event(row: ConsentEvent):
+    from app.schemas import ConsentRecord
+
+    action = row.action or "grant"
+    return ConsentRecord(
+        id=row.legacy_id,
+        user_id=row.subject_user_id,
+        type=row.purpose,  # type: ignore[arg-type]
+        text_version=row.text_version,
+        text_sha256=row.text_sha256,
+        granted_at=row.granted_at or row.occurred_at,
+        action=action,  # type: ignore[arg-type]
+        revoked_at=row.occurred_at if action == "revoke" else None,
+        ip=row.ip or "",
+        user_agent=row.user_agent or "",
+        login=row.login or "",
+        provider=row.provider or "",
+        country=row.country or "",
+        privacy_version=row.privacy_version or "",
+        privacy_sha256=row.privacy_sha256 or "",
+    )
+
+
+def copy_legacy_consents(session: Session) -> None:
+    from app.schemas import ConsentRecord
+
+    rows = session.scalars(select(Record).where(Record.collection == "consents")).all()
+    if not rows:
+        return
+    known = set(session.scalars(select(ConsentEvent.legacy_id)).all())
+    for row in rows:
+        payload = dict(row.payload or {})
+        legacy = str(payload.get("id") or row.doc_id)
+        if legacy in known:
+            continue
+        record = ConsentRecord.model_validate(payload)
+        session.add(consent_event_from_record(record, row.company_key))
+        known.add(legacy)
+    session.execute(delete(Record).where(Record.collection == "consents"))
+
+
+def bump_revisions(session: Session, collections: set[str]) -> int:
+    names = ["rev", *sorted(collections)]
+    session.execute(
+        text("INSERT INTO meta (id, revision) VALUES (:id, 0) ON CONFLICT (id) DO NOTHING"),
+        [{"id": name} for name in names],
+    )
+    current = 0
+    for name in names:
+        row = session.execute(
+            text("UPDATE meta SET revision = revision + 1 WHERE id = :id RETURNING revision"),
+            {"id": name},
+        ).one()
+        if name == "rev":
+            current = int(row[0])
+    return current
+
+
+def _trigger_sql(dialect: str) -> list[str]:
+    if dialect == "sqlite":
+        return [
+            """
+            CREATE TRIGGER IF NOT EXISTS consent_events_no_update
+            BEFORE UPDATE ON consent_events
+            BEGIN
+                SELECT RAISE(ABORT, 'append-only');
+            END
+            """,
+            """
+            CREATE TRIGGER IF NOT EXISTS consent_events_no_delete
+            BEFORE DELETE ON consent_events
+            BEGIN
+                SELECT RAISE(ABORT, 'append-only');
+            END
+            """,
+        ]
+    if dialect == "postgresql":
+        return [
+            """
+            CREATE OR REPLACE FUNCTION consent_events_append_only()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                RAISE EXCEPTION 'append-only';
+            END;
+            $$
+            """,
+            "DROP TRIGGER IF EXISTS consent_events_no_update ON consent_events",
+            """
+            CREATE TRIGGER consent_events_no_update
+            BEFORE UPDATE ON consent_events
+            FOR EACH ROW EXECUTE FUNCTION consent_events_append_only()
+            """,
+            "DROP TRIGGER IF EXISTS consent_events_no_delete ON consent_events",
+            """
+            CREATE TRIGGER consent_events_no_delete
+            BEFORE DELETE ON consent_events
+            FOR EACH ROW EXECUTE FUNCTION consent_events_append_only()
+            """,
+        ]
+    return []
+
+
+def install_consent_triggers(bind) -> None:
+    from sqlalchemy.engine import Engine
+
+    def apply(connection) -> None:
+        if connection.dialect.name == "postgresql":
+            exists = connection.execute(text("SELECT to_regclass('public.consent_events')")).scalar()
+            if exists is None:
+                return
+        elif connection.dialect.name == "sqlite":
+            exists = connection.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'consent_events'")
+            ).scalar()
+            if not exists:
+                return
+        for statement in _trigger_sql(connection.dialect.name):
+            connection.execute(text(statement))
+
+    if isinstance(bind, Engine):
+        with bind.begin() as connection:
+            apply(connection)
+        return
+    apply(bind)
+
+
+def page_body(data, total, limit: int, offset: int) -> dict:
+    body = {"ok": True, "data": data, "limit": limit, "offset": offset}
+    if total is not None:
+        body["total"] = total
+    return body
+
+
 class SqlRuntime:
     def __init__(self) -> None:
         self.url = resolve_database_url()
         self.path = sqlite_path_from_url(self.url)
-        connect_args = {}
+        engine_kwargs: dict = {"future": True, "pool_pre_ping": True}
         if self.url.startswith("sqlite"):
             if self.path:
                 Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-            connect_args["check_same_thread"] = False
-        self.engine = create_engine(self.url, future=True, pool_pre_ping=True, connect_args=connect_args)
+            engine_kwargs["connect_args"] = {"check_same_thread": False}
+        else:
+            engine_kwargs["pool_size"] = 10
+            engine_kwargs["max_overflow"] = 20
+            engine_kwargs["pool_recycle"] = 300
+        self.engine = create_engine(self.url, **engine_kwargs)
         if self.url.startswith("sqlite"):
 
             @event.listens_for(self.engine, "connect")
@@ -675,16 +991,31 @@ class SqlRuntime:
                 cursor.close()
 
         self.factory = sessionmaker(self.engine, expire_on_commit=False, future=True)
+        self.full_loads = 0
         self._create_schema()
 
     def _create_schema(self) -> None:
+        if _production():
+            return
+        if not self.url.startswith("sqlite"):
+            try:
+                self._ensure_meta()
+                install_consent_triggers(self.engine)
+                with self.factory() as session:
+                    copy_legacy_consents(session)
+                    session.commit()
+            except (OperationalError, ProgrammingError):
+                return
+            return
         last: Exception | None = None
         for attempt in range(8):
             try:
                 Base.metadata.create_all(self.engine)
+                install_consent_triggers(self.engine)
                 self._ensure_meta()
-                with self.engine.begin() as conn:
-                    install_audit_guards(conn)
+                with self.factory() as session:
+                    copy_legacy_consents(session)
+                    session.commit()
                 from app.rfi_tables import ensure_rfi_tables
 
                 ensure_rfi_tables(self.engine)
@@ -724,14 +1055,86 @@ class SqlRuntime:
     def session(self) -> Session:
         return self.factory()
 
-    def revision(self) -> int:
+    def revisions(self) -> dict[str, int]:
         with self.factory() as session:
-            row = session.get(Meta, "rev")
-            return int(row.revision) if row else 0
+            rows = session.execute(select(Meta.id, Meta.revision)).all()
+        return {str(item_id): int(revision or 0) for item_id, revision in rows}
+
+    def revision(self) -> int:
+        return self.revisions().get("rev", 0)
+
+    def count_collection(self, collection: str) -> int:
+        with self.factory() as session:
+            return int(
+                session.scalar(select(func.count()).select_from(Record).where(Record.collection == collection)) or 0
+            )
+
+    def fetch_payload(self, collection: str, doc_id: str) -> dict | None:
+        with self.factory() as session:
+            row = session.get(Record, (collection, doc_id))
+            if row is None:
+                return None
+            return dict(row.payload or {})
+
+    def fetch_user_by_email(self, email: str) -> dict | None:
+        with self.factory() as session:
+            row = session.scalar(
+                select(Record).where(Record.collection == "users", Record.email == email).limit(1)
+            )
+            if row is None:
+                return None
+            return dict(row.payload or {})
+
+    def subject_ids(self, subject_type: str, kind: str, ids: list[str]) -> set[str]:
+        if not ids:
+            return set()
+        with self.factory() as session:
+            rows = session.scalars(
+                select(Record.user_id).where(
+                    Record.collection == "verifications",
+                    Record.status == subject_type,
+                    Record.category == kind,
+                    Record.user_id.in_(ids),
+                )
+            ).all()
+        return {row for row in rows if row}
+
+    def review_stats(self, specialist_ids: list[str]) -> dict[str, tuple[int, int]]:
+        if not specialist_ids:
+            return {}
+        with self.factory() as session:
+            rows = session.execute(
+                select(Record.owner_id, func.count(), func.coalesce(func.sum(Record.price), 0))
+                .where(Record.collection == "reviews", Record.owner_id.in_(specialist_ids))
+                .group_by(Record.owner_id)
+            ).all()
+        return {str(owner): (int(total or 0), int(count or 0)) for owner, count, total in rows}
+
+    def consent_payloads(self, user_id: str) -> list[dict]:
+        with self.factory() as session:
+            rows = session.scalars(
+                select(ConsentEvent)
+                .where(ConsentEvent.subject_user_id == user_id)
+                .order_by(ConsentEvent.id)
+            ).all()
+            return [consent_record_from_event(row).model_dump() for row in rows]
 
     def count(self) -> int:
         with self.factory() as session:
             return int(session.scalar(select(func.count()).select_from(Record)) or 0)
+
+    def stored_text(self) -> str:
+        if self.path and os.path.isfile(self.path):
+            chunks = []
+            for candidate in (self.path, self.path + "-wal", self.path + "-shm"):
+                if os.path.exists(candidate):
+                    with open(candidate, "rb") as handle:
+                        chunks.append(handle.read().decode("latin-1"))
+            return "".join(chunks)
+        with self.factory() as session:
+            payloads = list(session.scalars(select(Record.payload)).all())
+            tokens = list(session.scalars(select(InvitationRow.token_hash)).all())
+        return json.dumps(payloads, ensure_ascii=False, default=str) + "\n" + "\n".join(tokens)
 
     def dialect(self) -> str:
         if self.url.startswith("sqlite"):
@@ -741,63 +1144,184 @@ class SqlRuntime:
         return self.engine.dialect.name
 
     def load_into(self, store) -> None:
+        self.full_loads += 1
         models = _models()
         buckets: dict[str, dict] = {name: {} for _attr, name in PERSISTED}
+        versions: dict[str, dict[str, int]] = {name: {} for _attr, name in PERSISTED}
+        last_seq: dict[str, int] = {name: 0 for _attr, name in PERSISTED}
         favorites: list = []
-        consents: list = []
+        favorite_seq = 0
         with self.factory() as session:
+            copy_legacy_consents(session)
+            session.commit()
             rows = session.scalars(select(Record).order_by(Record.seq, Record.doc_id)).all()
-        for row in rows:
-            payload = row.payload or {}
-            if row.collection == "credentials":
-                buckets["credentials"][row.doc_id] = str(payload.get("password_hash") or "")
+            consent_rows = session.scalars(select(ConsentEvent).order_by(ConsentEvent.id)).all()
+            snapshot = [
+                (row.collection, row.doc_id, dict(row.payload or {}), int(row.row_version or 1), int(row.seq or 0))
+                for row in rows
+            ]
+            consents = [consent_record_from_event(row) for row in consent_rows]
+            consent_last = max((int(row.id) for row in consent_rows), default=0)
+        for collection, doc_id, payload, version, seq in snapshot:
+            last_seq[collection] = max(last_seq.get(collection, 0), seq)
+            if collection == "credentials":
+                buckets.setdefault("credentials", {})[doc_id] = str(payload.get("password_hash") or "")
+                versions.setdefault("credentials", {})[doc_id] = version
                 continue
-            model = models.get(row.collection)
+            if collection == "consents":
+                continue
+            model = models.get(collection)
             if model is None:
                 continue
             item = model.model_validate(payload)
-            if row.collection == "favorites":
+            if collection == "favorites":
                 favorites.append(item)
+                favorite_seq = max(favorite_seq, seq)
                 continue
-            if row.collection == "consents":
-                consents.append(item)
-                continue
-            key = item.project_id if row.collection == "object_budgets" else row.doc_id
-            buckets[row.collection][key] = item
-        users = buckets["users"]
-        store.users_by_id.load_clean(users)
-        email_index = {}
-        for user in users.values():
-            email_index[user.email.lower()] = user
-        store.users.load_clean(email_index)
+            key = item.project_id if collection == "object_budgets" else doc_id
+            buckets.setdefault(collection, {})[key] = item
+            versions.setdefault(collection, {})[key] = version
+        users = buckets.get("users", {})
+        store.users_by_id.load_clean(users, versions.get("users", {}), last_seq.get("users", 0))
+        if not store.users.dirty and not store.users.deleted:
+            store.users.load_clean({user.email.lower(): user for user in users.values()})
         for attr, collection in PERSISTED:
             if collection in {"users", "favorites", "consents"}:
                 continue
-            getattr(store, attr).load_clean(buckets[collection])
+            getattr(store, attr).load_clean(
+                buckets.get(collection, {}),
+                versions.get(collection, {}),
+                last_seq.get(collection, 0),
+            )
         store.favorites.load_clean(favorites)
+        store.favorites.last_seq = favorite_seq
         store.consents.load_clean(consents)
+        store.consents.last_seq = consent_last
 
-    def flush(self, store) -> None:
+    def load_changes(self, store, collection: str, since_seq: int) -> None:
+        if collection == "consents":
+            self._load_consent_changes(store, since_seq)
+            return
+        models = _models()
+        with self.factory() as session:
+            rows = session.scalars(
+                select(Record).where(Record.collection == collection, Record.seq > since_seq)
+            ).all()
+            tombs = session.scalars(
+                select(RecordTombstone).where(
+                    RecordTombstone.collection == collection,
+                    RecordTombstone.seq > since_seq,
+                )
+            ).all()
+            packed = [
+                (row.doc_id, dict(row.payload or {}), int(row.row_version or 1), int(row.seq or 0))
+                for row in rows
+            ]
+            tomb_ids = [(row.doc_id, int(row.seq or 0)) for row in tombs]
+        changed = {doc_id for doc_id, _payload, _version, _seq in packed}
+        deleted = {doc_id for doc_id, _seq in tomb_ids if doc_id not in changed}
+        last = since_seq
+        for _doc_id, _payload, _version, seq in packed:
+            last = max(last, seq)
+        for _doc_id, seq in tomb_ids:
+            last = max(last, seq)
+        if collection == "favorites":
+            model = models["favorites"]
+            items = [model.model_validate(payload) for _doc_id, payload, _version, _seq in packed]
+            store.favorites.merge_appends(items, deleted, last)
+            return
+        if collection == "credentials":
+            items = {doc_id: str(payload.get("password_hash") or "") for doc_id, payload, _version, _seq in packed}
+            versions = {doc_id: version for doc_id, _payload, version, _seq in packed}
+            store.credentials.merge_changes(items, versions, deleted, last)
+            return
+        if collection == "users":
+            model = models["users"]
+            items = {}
+            versions = {}
+            for doc_id, payload, version, _seq in packed:
+                items[doc_id] = model.model_validate(payload)
+                versions[doc_id] = version
+            store.users_by_id.merge_changes(items, versions, deleted, last)
+            if not store.users.dirty and not store.users.deleted:
+                store.users.load_clean({user.email.lower(): user for user in store.users_by_id.peek_values()})
+            return
+        model = models.get(collection)
+        if model is None:
+            return
+        items = {}
+        versions = {}
+        for doc_id, payload, version, _seq in packed:
+            item = model.model_validate(payload)
+            key = item.project_id if collection == "object_budgets" else doc_id
+            items[key] = item
+            versions[key] = version
+        getattr(store, ATTR_OF[collection]).merge_changes(items, versions, deleted, last)
+
+    def _load_consent_changes(self, store, since_seq: int) -> None:
+        with self.factory() as session:
+            rows = session.scalars(
+                select(ConsentEvent).where(ConsentEvent.id > since_seq).order_by(ConsentEvent.id)
+            ).all()
+            items = [consent_record_from_event(row) for row in rows]
+            last = max([since_seq, *[int(row.id) for row in rows]])
+        store.consents.merge_appends(items, set(), last)
+
+    def flush(self, store) -> set[str]:
+        last: Exception | None = None
+        for attempt in range(5):
+            try:
+                return self._flush_once(store)
+            except ChangedByOther:
+                raise
+            except (OperationalError, IntegrityError) as exc:
+                last = exc
+                locked = isinstance(exc, OperationalError) and "locked" in str(exc).lower()
+                if attempt == 4 or not (locked or isinstance(exc, IntegrityError)):
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+        if last is not None:
+            raise last
+        return set()
+
+    def _flush_once(self, store) -> set[str]:
+        local = store._local
+        local.suspend = True
         session = self.factory()
+        touched: set[str] = set()
+        snapshots = []
+        for attr, _collection in PERSISTED:
+            bag = getattr(store, attr)
+            snapshots.append((bag, dict(bag.versions), bag.last_seq))
+        for attr, _collection in LISTS:
+            bag = getattr(store, attr)
+            snapshots.append((bag, None, bag.last_seq))
         try:
             seq = int(session.scalar(select(func.max(Record.seq))) or 0)
+            tomb_seq = int(session.scalar(select(func.max(RecordTombstone.seq))) or 0)
+            seq = max(seq, tomb_seq)
             for attr, collection in PERSISTED:
                 bag = getattr(store, attr)
-                seq = self._flush_dict(session, store, collection, bag, seq)
-            for attr, collection in LISTS:
-                bag = getattr(store, attr)
-                if bag.mutated:
-                    self._flush_list(session, store, collection, bag)
-            meta = session.get(Meta, "rev")
-            if meta is None:
-                meta = Meta(id="rev", revision=0)
-                session.add(meta)
-            meta.revision = int(meta.revision) + 1
+                if bag.dirty or bag.deleted:
+                    seq = self._flush_dict(session, store, collection, bag, seq)
+                    touched.add(collection)
+            favorites = store.favorites
+            if favorites.mutated:
+                seq = self._flush_favorites(session, store, favorites, seq)
+                touched.add("favorites")
+            consents = store.consents
+            if consents.mutated:
+                self._flush_consents(session, store, consents)
+                touched.add("consents")
+            if touched:
+                bump_revisions(session, touched)
             session.commit()
-            if self.url.startswith("sqlite"):
-                session.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
         except Exception:
             session.rollback()
+            for bag, versions, last_seq in snapshots:
+                if versions is not None:
+                    bag.versions = versions
+                bag.last_seq = last_seq
             raise
         else:
             for attr, _collection in PERSISTED:
@@ -807,32 +1331,83 @@ class SqlRuntime:
             store.users.dirty.clear()
             store.users.deleted.clear()
             for attr, _collection in LISTS:
-                getattr(store, attr).mutated = False
+                bag = getattr(store, attr)
+                bag.mutated = False
+                bag.pending_add.clear()
+                bag.pending_del.clear()
+            return touched
         finally:
             session.close()
+            local.suspend = False
 
     def _flush_dict(self, session: Session, store, collection: str, bag: TrackedDict, seq: int) -> int:
-        if not bag.dirty and not bag.deleted:
-            return seq
-        for key in list(bag.deleted):
+        deleted = [str(key) for key in bag.deleted]
+        dirty = [str(key) for key in bag.dirty]
+        ids = list(dict.fromkeys(deleted + dirty))
+        existing: dict[str, int] = {}
+        for chunk in _chunks(ids, 200):
+            rows = session.scalars(
+                select(Record).where(Record.collection == collection, Record.doc_id.in_(chunk))
+            ).all()
+            for row in rows:
+                existing[row.doc_id] = int(row.row_version or 1)
+        for key in deleted:
+            expected = bag.versions.get(key)
+            stmt = delete(Record).where(Record.collection == collection, Record.doc_id == key)
+            if expected is not None:
+                stmt = stmt.where(Record.row_version == expected)
+            result = session.execute(stmt)
+            if expected is not None and result.rowcount != 1 and existing.get(key) not in (None, expected):
+                raise ChangedByOther()
+            if result.rowcount == 1:
+                seq += 1
+                session.merge(RecordTombstone(collection=collection, doc_id=key, seq=seq))
+                bag.last_seq = max(bag.last_seq, seq)
             session.execute(delete(RecordLink).where(RecordLink.collection == collection, RecordLink.doc_id == key))
-            session.execute(delete(Record).where(Record.collection == collection, Record.doc_id == key))
+            bag.versions.pop(key, None)
+            existing.pop(key, None)
         pending: list[tuple[str, list[str]]] = []
-        for key in list(bag.dirty):
+        for key in dirty:
             if key not in bag:
                 continue
-            value = bag[key]
+            value = bag.peek(key)
             payload = _dump(value)
             doc_id = str(getattr(value, "project_id", "") or key) if collection == "object_budgets" else str(key)
             fields = index_values(store, collection, doc_id, payload)
-            row = session.get(Record, (collection, doc_id))
-            if row is None:
+            expected = bag.versions.get(key)
+            if doc_id not in existing:
                 seq += 1
-                session.add(Record(collection=collection, doc_id=doc_id, seq=seq, payload=payload, **fields))
+                session.add(
+                    Record(collection=collection, doc_id=doc_id, seq=seq, row_version=1, payload=payload, **fields)
+                )
+                session.execute(
+                    delete(RecordTombstone).where(
+                        RecordTombstone.collection == collection,
+                        RecordTombstone.doc_id == doc_id,
+                    )
+                )
+                bag.versions[key] = 1
+                existing[doc_id] = 1
             else:
-                row.payload = payload
-                for field, field_value in fields.items():
-                    setattr(row, field, field_value)
+                if expected is None:
+                    expected = existing[doc_id]
+                if existing[doc_id] != expected:
+                    raise ChangedByOther()
+                seq += 1
+                result = session.execute(
+                    update(Record)
+                    .where(
+                        Record.collection == collection,
+                        Record.doc_id == doc_id,
+                        Record.row_version == expected,
+                    )
+                    .values(payload=payload, row_version=expected + 1, seq=seq, **fields)
+                )
+                if result.rowcount != 1:
+                    raise ChangedByOther()
+                bag.versions[key] = expected + 1
+                existing[doc_id] = expected + 1
+            bag.last_seq = max(bag.last_seq, seq)
             if collection == "deals":
                 pending.append((doc_id, _deal_holders(store, payload)))
         session.flush()
@@ -842,15 +1417,57 @@ class SqlRuntime:
                 session.add(RecordLink(collection=collection, doc_id=doc_id, user_id=user_id))
         return seq
 
-    def _flush_list(self, session: Session, store, collection: str, bag: TrackedList) -> None:
-        session.execute(delete(Record).where(Record.collection == collection))
-        for index, item in enumerate(bag):
-            payload = _dump(item)
+    def _flush_favorites(self, session: Session, store, bag: TrackedList, seq: int) -> int:
+        if self.url.startswith("postgresql"):
+            session.execute(text("SELECT pg_advisory_xact_lock(21419002)"))
+        for doc_id in list(bag.pending_del):
+            result = session.execute(delete(Record).where(Record.collection == "favorites", Record.doc_id == doc_id))
+            if result.rowcount:
+                seq += 1
+                session.merge(RecordTombstone(collection="favorites", doc_id=doc_id, seq=seq))
+        add_ids = [str(bag.identify(item)) for item in bag.pending_add if str(bag.identify(item)) not in bag.pending_del]
+        existing: set[str] = set()
+        for chunk in _chunks(add_ids, 200):
+            existing.update(
+                session.scalars(
+                    select(Record.doc_id).where(Record.collection == "favorites", Record.doc_id.in_(chunk))
+                ).all()
+            )
+        for item in bag.pending_add:
             doc_id = str(bag.identify(item))
-            fields = index_values(store, collection, doc_id, payload)
-            session.add(Record(collection=collection, doc_id=doc_id, seq=index, payload=payload, **fields))
+            if doc_id in bag.pending_del or doc_id in existing:
+                continue
+            seq += 1
+            payload = _dump(item)
+            fields = index_values(store, "favorites", doc_id, payload)
+            session.add(Record(collection="favorites", doc_id=doc_id, seq=seq, row_version=1, payload=payload, **fields))
+            existing.add(doc_id)
+        bag.last_seq = max(bag.last_seq, seq)
+        return seq
 
-    def page(self, store, collection: str, *, limit: int, offset: int, **filters) -> tuple[list, int]:
+    def _flush_consents(self, session: Session, store, bag: TrackedList) -> None:
+        pending = [item for item in bag.pending_add if str(bag.identify(item)) not in bag.pending_del]
+        ids = [str(bag.identify(item)) for item in pending]
+        known: set[str] = set()
+        for chunk in _chunks(ids, 200):
+            known.update(
+                session.scalars(select(ConsentEvent.legacy_id).where(ConsentEvent.legacy_id.in_(chunk))).all()
+            )
+        for item in pending:
+            legacy = str(bag.identify(item))
+            if legacy in known:
+                continue
+            user = store.users_by_id.peek(getattr(item, "user_id", ""))
+            company_id = tenant_company_key(user) if user is not None else None
+            session.add(consent_event_from_record(item, company_id))
+            known.add(legacy)
+        session.flush()
+        if known:
+            last = session.scalar(select(func.max(ConsentEvent.id)).where(ConsentEvent.legacy_id.in_(list(known))))
+            if last:
+                bag.last_seq = max(bag.last_seq, int(last))
+
+    def page(self, store, collection: str, *, limit: int, offset: int, **filters) -> tuple[list, int | None]:
         models = _models()
         model = models[collection]
         stmt = select(Record).where(Record.collection == collection)
@@ -864,11 +1481,13 @@ class SqlRuntime:
         else:
             stmt = stmt.order_by(Record.seq, Record.doc_id)
         radius = filters.get("radius_km")
+        total: int | None = None
         with self.factory() as session:
             if radius:
                 rows = session.scalars(stmt).all()
             else:
-                total = int(session.scalar(count_stmt) or 0)
+                if offset == 0:
+                    total = int(session.scalar(count_stmt) or 0)
                 rows = session.scalars(stmt.limit(limit).offset(offset)).all()
         items = [model.model_validate(row.payload) for row in rows]
         if radius:
@@ -878,7 +1497,8 @@ class SqlRuntime:
                 point = centroid(item.polygon)
                 if point and haversine_km(origin, point) <= float(radius):
                     kept.append(item)
-            total = len(kept)
+            if offset == 0:
+                total = len(kept)
             items = kept[offset : offset + limit]
         return items, total
 

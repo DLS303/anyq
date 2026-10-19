@@ -153,6 +153,29 @@ def _view(row, viewer_id: str, contact=None) -> dict:
     }
 
 
+def project_id_of(rfi_id: str) -> str:
+    try:
+        with store._sql.factory() as session:
+            found = session.scalar(select(rfis.c.project_id).where(rfis.c.id == rfi_id, rfis.c.deleted_at.is_(None)))
+    except (OperationalError, ProgrammingError):
+        return ""
+    return str(found or "")
+
+
+def _audit(session, action, entity_id, project_id, changes, *, company_id, actor_user_id, actor_kind="user") -> None:
+    audit.write(
+        action,
+        "rfi",
+        entity_id,
+        project_id,
+        changes,
+        session=session,
+        company_id=company_id,
+        actor_user_id=actor_user_id,
+        actor_kind=actor_kind,
+    )
+
+
 def _load(session, rfi_id: str):
     return session.execute(select(rfis).where(rfis.c.id == rfi_id)).mappings().first()
 
@@ -269,15 +292,14 @@ def create_rfi(user, access: dict, body: dict) -> dict:
                 deleted_at=None,
             )
         )
-        audit.write(
+        _audit(
             session,
             "rfi.create",
-            "rfi",
             record_id,
             project.id,
             {"status": "open", "due_date": due, "drawing_revision_id": revision, "assignee_user_id": assignee},
             company_id=company_id,
-            actor=user.id,
+            actor_user_id=user.id,
         )
         session.commit()
     except IntegrityError as exc:
@@ -359,15 +381,15 @@ def answer_rfi(
             if spent.rowcount != 1:
                 session.rollback()
                 raise HTTPException(status_code=410, detail="Срок ссылки истёк")
-        audit.write(
+        _audit(
             session,
             "rfi.answer",
-            "rfi",
             rfi_id,
             row.project_id,
-            {"status": ["open", "answered"], "answer": text_value},
+            {"status": ["open", "answered"]},
             company_id=row.company_id,
-            actor=user.id if user is not None else "link",
+            actor_user_id=None if user is None else user.id,
+            actor_kind="user" if user is not None else "token",
         )
         session.commit()
     finally:
@@ -397,15 +419,14 @@ def set_status(user, rfi_id: str, status: str, row_version: int) -> dict:
             _conflict()
         previous = row.status
         _cas(session, rfi_id, int(row_version), {"status": "closed"})
-        audit.write(
+        _audit(
             session,
             "rfi.status_change",
-            "rfi",
             rfi_id,
             row.project_id,
             {"status": [previous, "closed"]},
             company_id=row.company_id,
-            actor=user.id,
+            actor_user_id=user.id,
         )
         session.commit()
     finally:
@@ -427,15 +448,14 @@ def tombstone(user, rfi_id: str, row_version: int) -> dict:
             _conflict()
         stamp = _now()
         _cas(session, rfi_id, int(row_version), {"deleted_at": stamp})
-        audit.write(
+        _audit(
             session,
             "rfi.delete",
-            "rfi",
             rfi_id,
             row.project_id,
             {"row_version": int(row_version) + 1},
             company_id=row.company_id,
-            actor=user.id,
+            actor_user_id=user.id,
         )
         session.commit()
     finally:
@@ -487,15 +507,14 @@ def attach_file(user, access: dict, rfi_id: str, file_id: str, raw: bytes, conte
         if record_file not in files:
             files.append(record_file)
         _cas(session, rfi_id, int(row_version), {"attachments": json.dumps(files)})
-        audit.write(
+        _audit(
             session,
             "rfi.file",
-            "rfi",
             rfi_id,
             row.project_id,
             {"file_id": record_file},
             company_id=row.company_id,
-            actor=user.id,
+            actor_user_id=user.id,
         )
         session.commit()
     finally:
@@ -559,15 +578,14 @@ def create_link(user, access: dict, rfi_id: str, body: dict) -> dict:
                 deleted_at=None,
             )
         )
-        audit.write(
+        _audit(
             session,
             "rfi.link",
-            "rfi",
             rfi_id,
             access["project_id"],
             {"expires_in_days": days},
             company_id=access["company_id"],
-            actor=user.id,
+            actor_user_id=user.id,
         )
         session.commit()
     except IntegrityError as exc:

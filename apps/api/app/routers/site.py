@@ -8,9 +8,11 @@ from pydantic import BaseModel, Field, field_validator
 from app.company_features import (
     apply_bundle_flags,
     feature_open_for_company,
+    flag_map,
     project_company_id,
     require_feature,
 )
+from app.config import demo_mode
 from app.deps import require_user
 from app.idempotency import IdempotencyConflict, run_idempotent
 from app.paths import write_stored_file
@@ -301,8 +303,10 @@ def get_project(pid: str, user: User = Depends(require_user)):
 @router.get("/projects/{pid}/bundle")
 def bundle(pid: str, user: User = Depends(require_user)):
     p = _guard_pid(user, pid)
+    company_id = project_company_id(p)
+    flags = flag_map(company_id)
     data = {
-        "snapshot": store.project_snapshot(p.id),
+        "snapshot": store.project_snapshot(p.id, flags),
         "daily": [member_daily(item) for item in store._by_project(store.daily_logs, p.id)],
         "rfis": store._by_project(store.rfis, p.id),
         "submittals": store._by_project(store.submittals, p.id),
@@ -320,8 +324,8 @@ def bundle(pid: str, user: User = Depends(require_user)):
         "can_manage_members": store.can_manage_project(user, p),
         "can_approve_changes": store.is_assigned_supervisor(user, p),
     }
-    data = apply_bundle_flags(p, data)
-    if data.get("features", {}).get("rfi") or feature_open_for_company(data.get("company_id") or "", "rfi"):
+    data = apply_bundle_flags(p, data, flags)
+    if flags.get("rfi") or demo_mode():
         from app.rfi_service import list_for_user
 
         data["rfis"] = [*data.get("rfis", []), *list_for_user(user, p.id)]

@@ -14,6 +14,7 @@ from app.schemas import (
     LeadCreate,
     User,
 )
+from app.sql_backend import page_body
 from app.store import store
 
 router = APIRouter(prefix="/v1/crm", tags=["crm"])
@@ -59,7 +60,7 @@ def deals(
         ]
         return {"ok": True, "data": items, "total": len(items)}
     items, total = store.page_deals(user, limit=limit, offset=offset, funnel=funnel, q=q)
-    return {"ok": True, "data": items, "total": total, "limit": limit, "offset": offset}
+    return page_body(items, total, limit, offset)
 
 
 @router.post("/deals")
@@ -120,7 +121,7 @@ def contacts(
         items = store.list_crm_contacts(user, q, ctype)
         return {"ok": True, "data": items, "total": len(items)}
     items, total = store.page_contacts(user, limit=limit, offset=offset, q=q, ctype=ctype)
-    return {"ok": True, "data": items, "total": total, "limit": limit, "offset": offset}
+    return page_body(items, total, limit, offset)
 
 
 @router.post("/contacts")

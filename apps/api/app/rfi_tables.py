@@ -1,16 +1,14 @@
 """SQL tables for designer questions.
 
-Registered on the shared metadata so `alembic check` sees them. Revision 0001
-skips these names; 0005 creates them with op.create_table.
+Kept off the store metadata. Revision 0005 creates them with op.create_table,
+and startup create_all would otherwise ignore them.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import Column, Index, Integer, String, Table, Text, text
+from sqlalchemy import Column, Index, Integer, MetaData, String, Table, Text, text
 
-from app.sql_backend import Base
-
-metadata = Base.metadata
+metadata = MetaData()
 
 external_contacts = Table(
     "external_contacts",

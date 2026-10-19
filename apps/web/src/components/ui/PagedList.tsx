@@ -26,16 +26,21 @@ export function usePaged<T>(items: readonly T[], resetKey: string, pageSize = PA
 
 export function useServerPaged<T>(
   resetKey: string,
-  loader: (page: number, signal: AbortSignal) => Promise<{ items: T[]; total: number }>,
+  loader: (page: number, signal: AbortSignal) => Promise<{ items: T[]; total: number | null }>,
   pageSize = PAGE_SIZE,
 ) {
   const [state, setState] = useState({ key: resetKey, page: 0 });
+  const [cachedTotal, setCachedTotal] = useState<{ key: string; total: number } | null>(null);
   const page = state.key === resetKey ? state.page : 0;
   if (state.key !== resetKey) {
     setState({ key: resetKey, page: 0 });
   }
   const query = useAsync((signal) => loader(page, signal), [resetKey, page, pageSize]);
-  const total = query.data?.total ?? 0;
+  const reported = query.data?.total;
+  if (typeof reported === "number" && (cachedTotal?.key !== resetKey || cachedTotal.total !== reported)) {
+    setCachedTotal({ key: resetKey, total: reported });
+  }
+  const total = typeof reported === "number" ? reported : cachedTotal?.key === resetKey ? cachedTotal.total : 0;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   return {
     page,

@@ -1,4 +1,4 @@
-"""Company feature flags and append-only audit events."""
+"""Company feature flags. require_feature reads ids from the path only."""
 
 from __future__ import annotations
 
@@ -6,15 +6,19 @@ import re
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import Depends, HTTPException
-from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy import and_, case, func, inspect, or_, select, true, update
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+from sqlalchemy.orm import aliased
 
+from app.audit import write as audit_write
 from app.config import demo_mode
 from app.deps import require_user
+from app.pf0_tables import AuditLog, CompanyFeature
 from app.schemas import User
-from app.sql_backend import AuditLog, CompanyFeature
+from app.sql_backend import Record
 from app.store import store
+from app.tenant import company_key
 
 FEATURE_KEYS: tuple[str, ...] = (
     "drawings",
@@ -30,17 +34,21 @@ FEATURE_KEYS: tuple[str, ...] = (
     "offline",
 )
 
-_ITEM_ATTR = {
-    "rfi": ("rfis", "rid"),
-    "checklists": ("inspections", "iid"),
-    "meetings": ("meetings", "mid"),
-    "gantt": ("schedule", "tid"),
-    "changes": ("change_orders", "cid"),
-    "drawings": ("drawings", "did"),
-    "submittals": ("submittals", "sid"),
-}
+_PATH_IDS = (
+    ("rid", "rfis"),
+    ("tid", "schedule"),
+    ("cid", "change_orders"),
+    ("iid", "inspections"),
+    ("did", "drawings"),
+    ("sid", "submittals"),
+    ("mid", "meetings"),
+    ("pid", "projects"),
+)
 
-_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 _BIN = re.compile(r"^bin:\d{12}$")
 
 
@@ -49,11 +57,8 @@ def _now() -> str:
 
 
 def company_id_of(user: User) -> str:
-    """Tenant id until a companies table exists. Never the name: form."""
-    digits = re.sub(r"\D", "", user.company_bin or "")
-    if len(digits) == 12:
-        return f"bin:{digits}"
-    return f"user:{user.id}"
+    """Stored tenant key. Profile BIN and company name are not read."""
+    return company_key(user)
 
 
 def member_of(user: User, company_id: str) -> bool:
@@ -70,6 +75,10 @@ def project_company_id(project) -> str:
     return company_id_of(owner)
 
 
+def _table_ready(name: str) -> bool:
+    return inspect(store._sql.engine).has_table(name)
+
+
 def _live(row: CompanyFeature | None) -> CompanyFeature | None:
     if row is None or row.deleted_at:
         return None
@@ -77,13 +86,15 @@ def _live(row: CompanyFeature | None) -> CompanyFeature | None:
 
 
 def _rows(company_id: str) -> dict[str, CompanyFeature]:
+    if not company_id or not _table_ready("company_features"):
+        return {}
     with store._sql.factory() as session:
         found = session.scalars(select(CompanyFeature).where(CompanyFeature.company_id == company_id)).all()
         return {row.key: row for row in found if _live(row) is not None}
 
 
 def flag_map(company_id: str) -> dict[str, bool]:
-    stored = _rows(company_id) if company_id else {}
+    stored = _rows(company_id)
     return {key: bool(stored[key].enabled) if key in stored else False for key in FEATURE_KEYS}
 
 
@@ -106,6 +117,7 @@ def _public(company_id: str, key: str, row: CompanyFeature | None) -> dict:
             "changed_by": "",
             "changed_at": "",
             "row_version": 0,
+            "created_at": "",
             "updated_at": "",
             "deleted_at": None,
         }
@@ -117,6 +129,7 @@ def _public(company_id: str, key: str, row: CompanyFeature | None) -> dict:
         "changed_by": live.changed_by,
         "changed_at": live.changed_at,
         "row_version": int(live.row_version),
+        "created_at": live.created_at,
         "updated_at": live.updated_at,
         "deleted_at": live.deleted_at,
     }
@@ -127,13 +140,39 @@ def list_features(company_id: str) -> list[dict]:
     return [_public(company_id, key, stored.get(key)) for key in FEATURE_KEYS]
 
 
-def _audit(company_id: str, key: str, enabled: bool, actor: str, stamp: str) -> AuditLog:
-    return AuditLog(
-        event="feature.enable" if enabled else "feature.disable",
+def export_features() -> list[dict]:
+    """Every flag row, including resets, for the stage-1 rollback export."""
+    if not _table_ready("company_features"):
+        return []
+    with store._sql.factory() as session:
+        rows = session.scalars(select(CompanyFeature).order_by(CompanyFeature.company_id, CompanyFeature.key)).all()
+        return [
+            {
+                "id": row.id,
+                "company_id": row.company_id,
+                "key": row.key,
+                "enabled": bool(row.enabled),
+                "changed_by": row.changed_by,
+                "changed_at": row.changed_at,
+                "row_version": int(row.row_version),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "deleted_at": row.deleted_at,
+            }
+            for row in rows
+        ]
+
+
+def _audit(session, company_id: str, key: str, enabled: bool, actor: str, before: bool) -> None:
+    audit_write(
+        "feature.enable" if enabled else "feature.disable",
+        "company_feature",
+        key,
+        None,
+        {"enabled": [before, enabled], "key": key},
+        session=session,
         company_id=company_id,
-        actor=actor,
-        at=stamp,
-        key=key,
+        actor_user_id=actor,
     )
 
 
@@ -152,6 +191,7 @@ def set_feature(
     if record_id is not None and not _UUID.match(record_id):
         raise HTTPException(status_code=400, detail="Некорректный идентификатор")
     stamp = _now()
+    deleted_at = None if enabled else stamp
     with store._sql.factory() as session:
         current = session.scalar(
             select(CompanyFeature).where(CompanyFeature.company_id == company_id, CompanyFeature.key == key)
@@ -167,11 +207,13 @@ def set_feature(
                 changed_by=actor,
                 changed_at=stamp,
                 row_version=1,
+                created_at=stamp,
                 updated_at=stamp,
-                deleted_at=None,
+                deleted_at=deleted_at,
             )
             session.add(row)
-            session.add(_audit(company_id, key, enabled, actor, stamp))
+            session.flush()
+            _audit(session, company_id, key, enabled, actor, False)
             try:
                 session.commit()
             except IntegrityError as exc:
@@ -179,6 +221,7 @@ def set_feature(
                 raise HTTPException(status_code=409, detail="Изменено другим") from exc
             return _public(company_id, key, row)
         tombstone = current.deleted_at is not None
+        before = False if tombstone else bool(current.enabled)
         if tombstone:
             if row_version not in (None, 0) and row_version != current.row_version:
                 raise HTTPException(status_code=409, detail="Изменено другим")
@@ -194,34 +237,55 @@ def set_feature(
                 changed_at=stamp,
                 updated_at=stamp,
                 row_version=new_version,
-                deleted_at=None,
+                deleted_at=deleted_at,
             )
         )
         if result.rowcount != 1:
             session.rollback()
             raise HTTPException(status_code=409, detail="Изменено другим")
-        session.add(_audit(company_id, key, enabled, actor, stamp))
+        _audit(session, company_id, key, enabled, actor, before)
         session.commit()
         current.enabled = enabled
         current.changed_by = actor
         current.changed_at = stamp
         current.updated_at = stamp
         current.row_version = new_version
-        current.deleted_at = None
+        current.deleted_at = deleted_at
         return _public(company_id, key, current)
 
 
+def _iso(value) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        text = value.isoformat(timespec="seconds")
+        if text.endswith(("+00:00", "Z")):
+            return text.replace("Z", "+00:00")
+        if "+" not in text and not text.endswith("Z"):
+            return text + "+00:00"
+        return text
+    return str(value)
+
+
 def audit_events(company_id: str) -> list[dict]:
+    if not _table_ready("audit_log"):
+        return []
     with store._sql.factory() as session:
         rows = session.scalars(select(AuditLog).where(AuditLog.company_id == company_id).order_by(AuditLog.id)).all()
         return [
             {
                 "id": row.id,
-                "event": row.event,
+                "action": row.action,
                 "company_id": row.company_id,
-                "actor": row.actor,
-                "at": row.at,
-                "key": row.key,
+                "actor_user_id": row.actor_user_id,
+                "actor_kind": row.actor_kind,
+                "occurred_at": _iso(row.occurred_at),
+                "entity_type": row.entity_type,
+                "entity_id": row.entity_id,
+                "project_id": row.project_id,
+                "changes": row.changes,
+                "prev_hash": row.prev_hash.hex() if row.prev_hash else None,
+                "row_hash": row.row_hash.hex() if row.row_hash else "",
             }
             for row in rows
         ]
@@ -236,52 +300,33 @@ def _without_photo(item):
     return data
 
 
-def apply_bundle_flags(project, data: dict) -> dict:
-    """Drop feature payloads the company has not turned on."""
+def apply_bundle_flags(project, data: dict, flags: dict[str, bool] | None = None) -> dict:
+    """Drop feature payloads the company has not turned on. One flag read."""
     company_id = project_company_id(project)
-    opened = {key: feature_open_for_company(company_id, key) for key in FEATURE_KEYS}
-    if not opened["drawings"]:
+    stored = flags if flags is not None else flag_map(company_id)
+
+    def opened(key: str) -> bool:
+        return demo_mode() or bool(stored.get(key))
+
+    if not opened("drawings"):
         data["drawings"] = []
-    if not opened["rfi"]:
+    if not opened("rfi"):
         data["rfis"] = []
-    if not opened["submittals"]:
+    if not opened("submittals"):
         data["submittals"] = []
-    if not opened["checklists"]:
+    if not opened("checklists"):
         data["inspections"] = []
-    if not opened["gantt"]:
+    if not opened("gantt"):
         data["schedule"] = []
-    if not opened["meetings"]:
+    if not opened("meetings"):
         data["meetings"] = []
-    if not opened["changes"]:
+    if not opened("changes"):
         data["changes"] = []
-    if not opened["punch_photos"]:
+    if not opened("punch_photos"):
         data["punches"] = [_without_photo(item) for item in data["punches"]]
-    data["features"] = flag_map(company_id)
+    data["features"] = stored
     data["company_id"] = company_id
     return data
-
-
-def _company_from_route(key: str, values: dict[str, str | None]) -> str | None:
-    pid = values.get("pid")
-    if pid:
-        project = store.get_project(pid)
-        if project is not None:
-            return project_company_id(project) or None
-    attr = _ITEM_ATTR.get(key)
-    if not attr:
-        return None
-    table_name, param = attr
-    item_id = values.get(param)
-    if not item_id:
-        return None
-    table = getattr(store, table_name, None)
-    item = table.get(item_id) if isinstance(table, dict) else None
-    if item is None:
-        return None
-    project = store.get_project(getattr(item, "project_id", ""))
-    if project is None:
-        return None
-    return project_company_id(project) or None
 
 
 def ensure_feature(company_id: str, key: str) -> None:
@@ -289,29 +334,103 @@ def ensure_feature(company_id: str, key: str) -> None:
         raise HTTPException(status_code=404, detail="Не найдено")
 
 
+def resolve_path_company(collection: str, doc_id: str, user: User) -> str | None:
+    """One query: path entity, its project, and membership. No row means no access."""
+    entity = aliased(Record)
+    project = aliased(Record)
+    member = aliased(Record)
+    owner = aliased(Record)
+    project_doc = case((entity.collection == "projects", entity.doc_id), else_=entity.project_id)
+    access = or_(
+        member.user_id == user.id,
+        project.owner_id == user.id,
+        project.company_key == company_key(user),
+    )
+    if user.role == "admin":
+        access = true()
+    stmt = (
+        select(func.coalesce(project.company_key, owner.company_key))
+        .select_from(entity)
+        .join(project, and_(project.collection == "projects", project.doc_id == project_doc))
+        .outerjoin(
+            member,
+            and_(
+                member.collection == "directory",
+                member.project_id == project.doc_id,
+                member.user_id == user.id,
+            ),
+        )
+        .outerjoin(owner, and_(owner.collection == "users", owner.doc_id == project.owner_id))
+        .where(entity.collection == collection, entity.doc_id == doc_id, access)
+        .limit(1)
+    )
+    with store._sql.factory() as session:
+        found = session.execute(stmt).first()
+        if found is None and collection == "rfis":
+            found = _sql_rfi_company(session, doc_id, user)
+    if found is None:
+        return None
+    return str(found[0] or "")
+
+
+def _sql_rfi_company(session, doc_id: str, user: User):
+    """Questions live in their own table. Same membership rule as the records query."""
+    from app.rfi_tables import rfis
+
+    project = aliased(Record)
+    member = aliased(Record)
+    owner = aliased(Record)
+    access = or_(
+        member.user_id == user.id,
+        project.owner_id == user.id,
+        project.company_key == company_key(user),
+    )
+    if user.role == "admin":
+        access = true()
+    stmt = (
+        select(func.coalesce(project.company_key, owner.company_key))
+        .select_from(rfis)
+        .join(project, and_(project.collection == "projects", project.doc_id == rfis.c.project_id))
+        .outerjoin(
+            member,
+            and_(
+                member.collection == "directory",
+                member.project_id == project.doc_id,
+                member.user_id == user.id,
+            ),
+        )
+        .outerjoin(owner, and_(owner.collection == "users", owner.doc_id == project.owner_id))
+        .where(rfis.c.id == doc_id, rfis.c.deleted_at.is_(None), access)
+        .limit(1)
+    )
+    try:
+        return session.execute(stmt).first()
+    except (OperationalError, ProgrammingError):
+        return None
+
+
+def _path_target(path_params) -> tuple[str, str] | None:
+    for name, collection in _PATH_IDS:
+        value = path_params.get(name)
+        if value:
+            return collection, str(value)
+    return None
+
+
 def require_feature(key: str):
-    """Hide a route when the company flag is off. A missing flag is 404."""
+    """Hide a route when the company flag is off. Ids come from the path, not the query string."""
 
     if key not in FEATURE_KEYS:
         raise RuntimeError(f"unknown feature {key}")
 
-    def dependency(
-        user: User = Depends(require_user),
-        pid: str | None = None,
-        rid: str | None = None,
-        tid: str | None = None,
-        cid: str | None = None,
-        iid: str | None = None,
-        did: str | None = None,
-        sid: str | None = None,
-        mid: str | None = None,
-    ) -> User:
-        company_id = _company_from_route(
-            key,
-            {"pid": pid, "rid": rid, "tid": tid, "cid": cid, "iid": iid, "did": did, "sid": sid, "mid": mid},
-        )
+    def dependency(request: Request, user: User = Depends(require_user)) -> User:
+        target = _path_target(request.path_params)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Не найдено")
+        company_id = resolve_path_company(target[0], target[1], user)
         if not company_id:
-            company_id = company_id_of(user)
+            raise HTTPException(status_code=404, detail="Не найдено")
+        request.state.feature_company_id = company_id
         ensure_feature(company_id, key)
         return user
 

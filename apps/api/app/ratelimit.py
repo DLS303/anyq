@@ -1,9 +1,12 @@
-"""In-memory login failure window. Each worker keeps its own window."""
+"""Login failure window stored in the database and shared by every worker."""
 
 from __future__ import annotations
 
 import time
-from threading import Lock
+
+from sqlalchemy import delete, func, select
+
+from app.sql_backend import LoginFailure
 
 
 class RateLimited(Exception):
@@ -15,41 +18,52 @@ class LoginRateLimiter:
     def __init__(self, limit: int = 5, window_s: int = 600) -> None:
         self.limit = limit
         self.window_s = window_s
-        self._failures: dict[tuple[str, str], list[float]] = {}
-        self._lock = Lock()
 
-    def reset(self) -> None:
-        with self._lock:
-            self._failures.clear()
+    def _session(self):
+        from app.store import store
+
+        return store._sql.factory()
 
     def _key(self, account: str, ip: str) -> tuple[str, str]:
         return (account.strip().lower(), ip or "")
 
-    def _fresh(self, key: tuple[str, str], now: float) -> list[float]:
-        stamps = [stamp for stamp in self._failures.get(key, []) if now - stamp < self.window_s]
-        if stamps:
-            self._failures[key] = stamps
-        else:
-            self._failures.pop(key, None)
-        return stamps
+    def reset(self) -> None:
+        with self._session() as session:
+            session.execute(delete(LoginFailure))
+            session.commit()
+
+    def count(self, account: str, ip: str) -> int:
+        account_key, ip_key = self._key(account, ip)
+        now = time.time()
+        with self._session() as session:
+            value = session.scalar(
+                select(func.count())
+                .select_from(LoginFailure)
+                .where(
+                    LoginFailure.account == account_key,
+                    LoginFailure.ip == ip_key,
+                    LoginFailure.created_at > now - self.window_s,
+                )
+            )
+            return int(value or 0)
 
     def check(self, account: str, ip: str) -> None:
-        now = time.time()
-        with self._lock:
-            if len(self._fresh(self._key(account, ip), now)) >= self.limit:
-                raise RateLimited()
+        if self.count(account, ip) >= self.limit:
+            raise RateLimited()
 
     def record_failure(self, account: str, ip: str) -> None:
-        now = time.time()
-        key = self._key(account, ip)
-        with self._lock:
-            stamps = self._fresh(key, now)
-            stamps.append(now)
-            self._failures[key] = stamps
+        account_key, ip_key = self._key(account, ip)
+        with self._session() as session:
+            session.add(LoginFailure(account=account_key, ip=ip_key, created_at=time.time()))
+            session.commit()
 
     def clear(self, account: str, ip: str) -> None:
-        with self._lock:
-            self._failures.pop(self._key(account, ip), None)
+        account_key, ip_key = self._key(account, ip)
+        with self._session() as session:
+            session.execute(
+                delete(LoginFailure).where(LoginFailure.account == account_key, LoginFailure.ip == ip_key)
+            )
+            session.commit()
 
 
 login_limiter = LoginRateLimiter()

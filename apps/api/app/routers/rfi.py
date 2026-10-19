@@ -15,7 +15,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from app.feature_gate import require_feature
+from app.company_features import require_feature
 from app.idempotency import IdempotencyConflict, run_idempotent
 from app.rfi_service import (
     answer_rfi,
@@ -81,7 +81,19 @@ class PublicAnswerIn(BaseModel):
 
 
 def _access(request: Request) -> dict:
-    return request.state.rfi_access
+    company_id = str(getattr(request.state, "feature_company_id", "") or "")
+    pid = str(request.path_params.get("pid") or "")
+    rid = str(request.path_params.get("rid") or "")
+    if rid:
+        from app.rfi_service import project_id_of
+
+        real = project_id_of(rid)
+        if not real or (pid and pid != real):
+            raise HTTPException(status_code=404, detail="Не найдено")
+        pid = real
+    if not company_id or not pid:
+        raise HTTPException(status_code=404, detail="Не найдено")
+    return {"project_id": pid, "company_id": company_id, "entity_id": rid or None}
 
 
 @router.get("/projects/{pid}/rfis")

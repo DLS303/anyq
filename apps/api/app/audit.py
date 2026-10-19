@@ -1,66 +1,88 @@
-"""Append-only audit rows in the shared audit_log table.
-
-`write` only adds the INSERT. The caller commits it in the same transaction
-as the change it describes.
-"""
+"""Append-only audit log. write() participates in the caller's transaction and does not commit."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 
-from app.sql_backend import AuditLog
+from sqlalchemy import text
 
-_PLAIN = {
-    "status",
-    "row_version",
-    "due_date",
-    "drawing_revision_id",
-    "assignee_user_id",
-    "assignee_contact_id",
-    "file_id",
-    "expires_in_days",
-}
+from app.pf0_tables import AuditLog
+
+_PII = {"phone", "email", "full_name", "name", "password", "company_bin", "token"}
+_KINDS = {"user", "token", "system", "platform_admin", "migration"}
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+def _mask(value):
+    if isinstance(value, dict):
+        return {key: "***" if key in _PII else _mask(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_mask(item) for item in value]
+    return value
 
 
-def mask_changes(changes: dict | None) -> dict:
-    """Drop names, phones, and free text. Status codes and ids stay."""
-    if not changes:
-        return {}
-    masked: dict = {}
-    for key, value in changes.items():
-        if key in _PLAIN:
-            masked[key] = value
-        else:
-            masked[key] = "***"
-    return masked
+def _stamp(moment: datetime) -> str:
+    return moment.astimezone(UTC).isoformat(timespec="seconds")
 
 
 def write(
-    session,
     action: str,
-    entity_type: str,
-    entity_id: str,
-    project_id: str,
+    entity_type: str | None,
+    entity_id: str | None,
+    project_id: str | None,
     changes: dict | None,
     *,
-    company_id: str,
-    actor: str,
+    session,
+    company_id: str | None,
+    actor_user_id: str | None,
+    actor_kind: str = "user",
+    request_id: str | None = None,
 ) -> None:
+    """Insert one audit row. The caller commits."""
+    if actor_kind not in _KINDS:
+        actor_kind = "system"
+    moment = datetime.now(UTC)
+    masked = _mask(changes or {})
+    body = {
+        "action": action,
+        "actor_kind": actor_kind,
+        "actor_user_id": actor_user_id,
+        "changes": masked,
+        "company_id": company_id,
+        "entity_id": entity_id,
+        "entity_type": entity_type,
+        "occurred_at": _stamp(moment),
+        "project_id": project_id,
+        "request_id": request_id,
+    }
+    raw = json.dumps(body, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    bind = session.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:company_id))"),
+            {"company_id": company_id or ""},
+        )
+    prev = session.execute(
+        text("SELECT row_hash FROM audit_log WHERE company_id = :company_id ORDER BY id DESC LIMIT 1"),
+        {"company_id": company_id},
+    ).scalar()
+    prev_bytes = bytes(prev) if prev else b""
+    digest = hashlib.sha256(prev_bytes + raw).digest()
     session.add(
         AuditLog(
-            event=action[:64],
+            occurred_at=moment,
             company_id=company_id,
-            actor=(actor or "")[:80],
-            at=_now(),
-            key=entity_type[:64],
-            entity_type=entity_type[:64],
-            entity_id=entity_id[:36],
-            project_id=(project_id or "")[:80],
-            changes=json.dumps(mask_changes(changes), ensure_ascii=True, sort_keys=True),
+            actor_kind=actor_kind,
+            actor_user_id=actor_user_id,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            project_id=project_id,
+            request_id=request_id,
+            changes=masked,
+            prev_hash=prev_bytes or None,
+            row_hash=digest,
         )
     )
+    session.flush()

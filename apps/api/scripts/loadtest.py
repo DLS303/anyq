@@ -32,8 +32,8 @@ async def _hit(client: httpx.AsyncClient, method: str, path: str, **kwargs) -> t
     return path, elapsed, response.status_code, response
 
 
-async def _user(client: httpx.AsyncClient, index: int, rounds: int) -> list[tuple[str, float, int]]:
-    samples: list[tuple[str, float, int]] = []
+async def _user(client: httpx.AsyncClient, index: int, rounds: int) -> list[tuple[str, float, int, str]]:
+    samples: list[tuple[str, float, int, str]] = []
     for _ in range(rounds):
         email = f"load-{index}-{uuid.uuid4().hex[:8]}@example.com"
         password = "secret12"
@@ -54,23 +54,29 @@ async def _user(client: httpx.AsyncClient, index: int, rounds: int) -> list[tupl
             "/v1/materials?limit=24&offset=0",
             "/v1/specialists?limit=24&offset=0",
         ):
-            path_name, elapsed, status, _response = await _hit(client, "GET", path)
-            samples.append((path_name.split("?", 1)[0], elapsed, status))
-        _path, elapsed, status, _response = await _hit(client, "POST", "/v1/auth/register", json=body)
-        samples.append(("/v1/auth/register", elapsed, status))
+            path_name, elapsed, status, response = await _hit(client, "GET", path)
+            samples.append((path_name.split("?", 1)[0], elapsed, status, _body(response)))
+        _path, elapsed, status, response = await _hit(client, "POST", "/v1/auth/register", json=body)
+        samples.append(("/v1/auth/register", elapsed, status, _body(response)))
         _path, elapsed, status, response = await _hit(
             client,
             "POST",
             "/v1/auth/login",
             json={"email": email, "password": password, "consent_offer_pd": True},
         )
-        samples.append(("/v1/auth/login", elapsed, status))
+        samples.append(("/v1/auth/login", elapsed, status, _body(response)))
         if status == 200:
             token = response.json()["data"]["token"]
             headers = {"Authorization": f"Bearer {token}"}
-            _path, elapsed, me_status, _response = await _hit(client, "GET", "/v1/auth/me", headers=headers)
-            samples.append(("/v1/auth/me", elapsed, me_status))
+            _path, elapsed, me_status, me_response = await _hit(client, "GET", "/v1/auth/me", headers=headers)
+            samples.append(("/v1/auth/me", elapsed, me_status, _body(me_response)))
     return samples
+
+
+def _body(response: httpx.Response) -> str:
+    if response.status_code < 400:
+        return ""
+    return response.text[:500]
 
 
 async def run(base: str, users: int, rounds: int) -> dict:
@@ -81,10 +87,12 @@ async def run(base: str, users: int, rounds: int) -> dict:
     flat = [row for batch in batches for row in batch]
     by_path: dict[str, list[float]] = {}
     errors = 0
-    for path, elapsed, status in flat:
+    failures: list[dict[str, str | int]] = []
+    for path, elapsed, status, body in flat:
         by_path.setdefault(path, []).append(elapsed)
         if status >= 400:
             errors += 1
+            failures.append({"path": path, "status": status, "body": body})
     endpoints = {}
     for path, values in sorted(by_path.items()):
         endpoints[path] = {
@@ -99,6 +107,7 @@ async def run(base: str, users: int, rounds: int) -> dict:
         "rounds": rounds,
         "requests": len(flat),
         "errors": errors,
+        "failures": failures,
         "p50_ms": round(_pct(all_values, 50), 2),
         "p95_ms": round(_pct(all_values, 95), 2),
         "endpoints": endpoints,
