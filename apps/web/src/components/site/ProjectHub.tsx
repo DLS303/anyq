@@ -20,6 +20,8 @@ import { ObjectBudgetCard } from "./ObjectBudgetCard";
 import { DailyReport, type DailyEntry } from "./DailyReport";
 import { InspectionForm } from "./InspectionForm";
 import { MeetingForm } from "./MeetingForm";
+import { MyTasks } from "./MyTasks";
+import type { PlanMeeting, TaskItem, TaskPerson } from "@/lib/meetings";
 import { toast } from "@/lib/toast";
 import { t } from "@/i18n/messages";
 import dynamic from "next/dynamic";
@@ -420,7 +422,8 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       ) : null}
 
       {tab === "punch" ? (
-        pilot && punches.length === 0 && !showPunch ? (
+        <>
+        {pilot && punches.length === 0 && !showPunch ? (
           <EmptyLine
             text={m.hubPunchEmpty}
             action={
@@ -497,7 +500,16 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
               </form>
             ) : null}
           </Tool>
-        )
+        )}
+        {org.meetings && user ? (
+          <MyTasks
+            locale={locale}
+            userId={user.id}
+            items={(bundle.action_items as TaskItem[]) || []}
+            onDone={load}
+          />
+        ) : null}
+        </>
       ) : null}
 
       {tab === "procurement" ? <ProcurementTab locale={locale} projectId={p.id} projectTitle={p.title} /> : null}
@@ -838,7 +850,16 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
             </div>
           )}
         >
-          {user ? <MeetingForm locale={locale} projectId={p.id} onDone={load} /> : null}
+          {user ? (
+            <MeetingForm
+              locale={locale}
+              projectId={p.id}
+              members={(bundle.task_assignees as TaskPerson[]) || []}
+              plans={(bundle.plan_meetings as PlanMeeting[]) || []}
+              tasks={(bundle.action_items as TaskItem[]) || []}
+              onDone={load}
+            />
+          ) : null}
         </Tool>
       ) : null}
 

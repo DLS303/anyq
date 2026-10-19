@@ -320,6 +320,9 @@ def apply_bundle_flags(project, data: dict, flags: dict[str, bool] | None = None
         data["schedule"] = []
     if not opened("meetings"):
         data["meetings"] = []
+        data["plan_meetings"] = []
+        data["action_items"] = []
+        data["task_assignees"] = []
     if not opened("changes"):
         data["changes"] = []
     if not opened("punch_photos"):

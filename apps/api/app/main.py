@@ -17,6 +17,7 @@ from app.routers import (
     health,
     invitations,
     materials,
+    meetings,
     moderation,
     modules,
     org_features,
@@ -57,6 +58,7 @@ app.include_router(materials.router)
 app.include_router(estimates.router)
 app.include_router(acts.router)
 app.include_router(site.router)
+app.include_router(meetings.router)
 app.include_router(org_features.router)
 app.include_router(invitations.router)
 app.include_router(budget.router)

@@ -2,6 +2,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
+import app.meeting_schema  # noqa: F401  registers meeting tables on Base.metadata
 from alembic import context
 from app.sql_backend import Base, resolve_database_url
 

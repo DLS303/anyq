@@ -334,11 +334,20 @@ def bundle(pid: str, user: User = Depends(require_user)):
         "changes": store._by_project(store.change_orders, p.id),
         "timesheets": store._by_project(store.timesheets, p.id),
         "meetings": store._by_project(store.meetings, p.id),
+        "plan_meetings": [],
+        "action_items": [],
+        "task_assignees": [],
         "directory": store._by_project(store.directory, p.id),
         "members": store.list_project_members(p),
         "can_manage_members": store.can_manage_project(user, p),
         "can_approve_changes": store.is_assigned_supervisor(user, p),
     }
+    from app.meetings import project_bundle
+
+    plans, items, people = project_bundle(p)
+    data["plan_meetings"] = plans
+    data["action_items"] = items
+    data["task_assignees"] = people
     return {"ok": True, "data": apply_bundle_flags(p, data, flags)}
 
 
