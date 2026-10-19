@@ -141,7 +141,7 @@ docker compose --env-file deploy/.env \
   "SELECT count(*) AS photo_jobs FROM photo_jobs;"
 docker run --rm --entrypoint sh \
   -v anyq-data:/data:ro \
-  postgis/postgis:16-3.4 \
+  anyq-api:current \
   -c 'find /data/uploads /data/private -type f | wc -l'
 ```
 

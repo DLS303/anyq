@@ -11,8 +11,9 @@
 под пользователем `deploy`. Координатор до этого записывает уровень
 и метку времени восстановления, если дошли до pgBackRest.
 
-Цель плана, не гарантия для клиента: RPO не больше 15 минут,
-RTO — `<цель-RTO>`. В письмо клиенту эти цифры не ставят.
+Цель плана, не гарантия для клиента: RPO не больше 15 минут
+(`archive_timeout=60` в конфигурации DevOps), RTO — ≤ 4 ч (пилот).
+В письмо клиенту эти цифры не ставят.
 
 ## Признаки
 
@@ -56,36 +57,31 @@ RTO — `<цель-RTO>`. В письмо клиенту эти цифры не 
 и читается. Восстановление из копии — если SQL-разработчик записал,
 что кластер не читается, или если нужен момент времени до повреждения.
 
-Базу поднимают только в образе `postgis/postgis:16-3.4`.
-Образ Alpine для базы не используют. `deploy/restore.sh` —
-будет добавлено. Пока команды выполняют напрямую.
+Существующий том всегда запускают тем образом, которым он создан.
+Образ `postgis/postgis:16-3.4` — после миграции на этот образ
+(задача DevOps). Перенос локального стенда с Alpine на PostGIS —
+только дамп в новый пустой том. Боевой том другим образом не
+запускают.
 
-Остановка API, чтобы он не писал в базу:
+`deploy/restore.sh` — будет добавлено: он восстанавливает в отдельный
+том. Пока его нет, pgBackRest на месте выполняют только при SEV1
+и только если координатор записал это решение. В остальных случаях
+ждут скрипт.
+
+Остановка API и базы, чтобы API не писал в кластер:
 
 ```bash
 cd /opt/anyq
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml stop api
+  -f deploy/docker-compose.prod.yml stop api postgres
 ```
 
-Образ базы для этого запуска:
-
-```bash
-cat > /tmp/anyq-postgres-image.yml <<'EOF'
-services:
-  postgres:
-    image: postgis/postgis:16-3.4
-EOF
-```
-
-Файл `/tmp/anyq-postgres-image.yml` в git не кладут.
-
-Если контейнер просто остановлен и том трогать не нужно:
+Если контейнер просто остановлен и том трогать не нужно, его
+запускают файлом compose, без второго образа:
 
 ```bash
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml \
-  -f /tmp/anyq-postgres-image.yml up -d postgres
+  -f deploy/docker-compose.prod.yml up -d postgres
 docker inspect -f '{{.State.Health.Status}}' anyq-postgres
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T postgres \
@@ -101,46 +97,67 @@ docker compose --env-file deploy/.env \
 
 Любое копирование тома или каталога данных через tar делают только
 после остановки PostgreSQL. Файлы в `pg_wal` вручную не удаляют.
+Архив снимает тот же сервис `postgres`, тем же образом, которым
+создан том.
 
 ```bash
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml stop postgres
-docker run --rm --entrypoint tar \
-  -v anyq-postgres:/from:ro \
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
+  --user root --entrypoint tar \
   -v /var/backups/anyq:/backup \
-  postgis/postgis:16-3.4 \
-  -C /from -czf /backup/anyq-pgvolume-<штамп>.tar.gz .
+  postgres \
+  -C /var/lib/postgresql/data \
+  -czf /backup/anyq-pgvolume-<штамп>.tar.gz .
+tar -tzf /var/backups/anyq/anyq-pgvolume-<штамп>.tar.gz >/dev/null
 ```
 
 Эта копия — слепок тома в Казахстане, не замена pgBackRest.
-Пока архив не проверен `tar -tzf`, том не удаляют.
+Пока `tar -tzf` не прошёл, том не удаляют.
 
 ### pgBackRest
 
-Пароль шифрования репозитория берут только из офлайн-хранилища
+На месте — только SEV1 и запись решения координатора, как сказано
+выше. Пароль шифрования репозитория берут только из офлайн-хранилища
 `<офлайн-хранилище>`. В команду, карточку, чат и git его не вставляют.
-Метку `<timestamp>` выбирает SQL-разработчик и пишет в карточку.
-Для повреждённого шага migrate это момент непосредственно до шага.
+Метку выбирает SQL-разработчик и пишет в карточку как
+`<YYYY-MM-DD HH:MM:SS+05>` (пример `2026-10-24 10:15:00+05`).
+Кластер в UTC, смещение в `--target` обязательно. Для повреждённого
+шага migrate это момент непосредственно до шага.
 
-PostgreSQL на время restore остановлен. Репозиторий за пределами
-Казахстана не используют.
+`pgbackrest` на хосте нет. Его запускают одноразовым контейнером
+сервиса `postgres`, пока сами `api` и `postgres` остановлены.
+Том при этом не меняет образ. Репозиторий за пределами Казахстана
+не используют.
 
 ```bash
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml stop postgres
-pgbackrest info
-pgbackrest restore --delta --type=time \
-  --target='<timestamp>' --target-action=promote
+  -f deploy/docker-compose.prod.yml stop api postgres
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
+  --user postgres postgres \
+  pgbackrest --stanza=anyq info
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
+  --user postgres postgres \
+  pgbackrest --stanza=anyq restore --delta --type=time \
+  --target='<YYYY-MM-DD HH:MM:SS+05>' --target-action=promote
 ```
 
-Затем снова контейнер `postgis/postgis:16-3.4` и проверка копии:
+Затем тот же образ из файла compose, проверка и полная копия:
 
 ```bash
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml \
-  -f /tmp/anyq-postgres-image.yml up -d postgres
-pgbackrest check
-pgbackrest backup --type=full
+  -f deploy/docker-compose.prod.yml up -d postgres
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
+  --user postgres postgres \
+  pgbackrest --stanza=anyq check
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
+  --user postgres postgres \
+  pgbackrest --stanza=anyq backup --type=full
 ```
 
 ### Логический дамп
@@ -150,24 +167,37 @@ pgBackRest. Его грузят только если координатор з�
 репозиторий pgBackRest для этой метки недоступен, а дамп проверен
 `gzip -t`. Дамп не восстанавливает владельцев и права.
 
-Роль приложения — `anyq`. Она не суперпользователь. Роль
-администрирования кластера отдельная, приложению её не выдают.
-Пароль роли берут из офлайн-хранилища, в SQL его не пишут
-(`\password anyq` в сессии `psql`). Сначала роль, затем база:
+Три роли. Роль `postgres` (`POSTGRES_USER`) создаёт роли и базу,
+выдаёт и снимает права, запускает `pg_amcheck`. Роль `anyq` —
+владелец таблиц: она грузит дамп и выполняет шаг migrate. Роль
+приложения — `anyq_app`. Приложению роль `postgres` не выдают.
 
-```sql
-CREATE ROLE anyq WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+Пароли берут из офлайн-хранилища. В SQL, карточку и git их не пишут.
+В интерактивной сессии `psql` под ролью `postgres`: `\password anyq`
+и `\password anyq_app`.
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -it postgres \
+  psql --username postgres --dbname postgres
 ```
 
-Если роль уже есть, вместо `CREATE ROLE`:
+Дальше в этой сессии, роль `postgres`. Если роль `anyq` уже есть,
+строку `CREATE ROLE anyq` пропускают. `ALTER ROLE anyq ... NOSUPERUSER`
+не выполняют.
 
 ```sql
-ALTER ROLE anyq WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+-- выполняет роль postgres
+CREATE ROLE anyq WITH LOGIN;
+CREATE ROLE anyq_app WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
 ```
 
-Базу создают так и только так:
+Базу создают так и только так, если её ещё нет. Если образ уже
+создал пустую базу `anyq`, эту команду пропускают. Владелец —
+роль `anyq`. Базу, в которой уже есть данные, этим путём не стирают.
 
 ```sql
+-- выполняет роль postgres
 CREATE DATABASE anyq OWNER anyq
   TEMPLATE template0
   ENCODING 'UTF8'
@@ -175,7 +205,7 @@ CREATE DATABASE anyq OWNER anyq
   ICU_LOCALE 'ru-KZ';
 ```
 
-Дамп загружают в эту пустую базу:
+Дамп загружает роль `anyq`:
 
 ```bash
 gunzip -c /var/backups/anyq/anyq-postgres-<штамп>.sql.gz \
@@ -184,16 +214,18 @@ gunzip -c /var/backups/anyq/anyq-postgres-<штамп>.sql.gz \
     psql --username anyq --dbname anyq -v ON_ERROR_STOP=1
 ```
 
-После загрузки заново применяют права. Список GRANT/REVOKE
-берут из файла рядом с дампом, `<скрипт-прав>`, а не составляют
-по памяти. Если этого файла нет, минимум такой:
+После загрузки права заново применяет роль `postgres`. Если рядом
+с дампом лежит `<скрипт-прав>`, берут его: в нём должен быть тот же
+`REVOKE` на `audit_log` и `consents`. Иначе минимум такой:
 
 ```sql
-GRANT CONNECT ON DATABASE anyq TO anyq;
-GRANT USAGE ON SCHEMA public TO anyq;
+-- выполняет роль postgres
+GRANT CONNECT ON DATABASE anyq TO anyq_app;
+GRANT USAGE ON SCHEMA public TO anyq_app;
 GRANT SELECT, INSERT, UPDATE, DELETE
-  ON ALL TABLES IN SCHEMA public TO anyq;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anyq;
+  ON ALL TABLES IN SCHEMA public TO anyq_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anyq_app;
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_log, consents FROM anyq_app;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ```
 
@@ -203,8 +235,9 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 
 Сверяют ревизию с ожидаемой `<ревизия>` из карточки выпуска.
 Числа строк — с прошлыми известными счётчиками `<счётчики>`,
-не с выгрузкой людей. `max(created_at)` не позже метки `<timestamp>`.
-Сами строки, почту и `payload` не выводят.
+не с выгрузкой людей. `max(created_at)` не позже метки
+`<YYYY-MM-DD HH:MM:SS+05>`. Сами строки, почту и `payload` не выводят.
+Запросы счёта выполняет роль `anyq`.
 
 ```bash
 docker compose --env-file deploy/.env \
@@ -220,27 +253,32 @@ docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T postgres \
   psql --username anyq --dbname anyq -c \
   'SELECT max(created_at) AS newest FROM records;'
-pgbackrest verify
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml exec -T postgres \
-  pg_amcheck --username anyq --dbname anyq --all
+  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
+  --user postgres postgres \
+  pgbackrest --stanza=anyq verify
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
+  pg_amcheck --username postgres -d anyq \
+  --install-missing --heapallindexed
 ```
+
+`pg_amcheck` выполняет роль `postgres`. Флаг `--all` не ставят.
 
 После этого поднимают API и смотрят готовность внутри контейнера,
 на `127.0.0.1`, порт процесса API:
 
 ```bash
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml \
-  -f /tmp/anyq-postgres-image.yml up -d
+  -f deploy/docker-compose.prod.yml up -d
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T api \
   python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/v1/health/ready', timeout=3).read()"
 ```
 
-Ожидание: `pg_amcheck` без ошибок, `pgbackrest verify` без ошибок,
-ревизия совпала, числа строк сходятся со `<счётчики>`,
-`newest` не позже `<timestamp>`, ответ ready без ошибки.
+Ожидание: `pg_amcheck` без ошибок, `pgbackrest --stanza=anyq verify`
+без ошибок, ревизия совпала, числа строк сходятся со `<счётчики>`,
+`newest` не позже `<YYYY-MM-DD HH:MM:SS+05>`, ответ ready без ошибки.
 Снаружи, когда вход уже открыт: `/health` и `/healthz` содержат
 `"ok":true`. Для боевого домена флаг `-k` не используют.
 
@@ -256,6 +294,6 @@ docker compose --env-file deploy/.env \
 ## После инцидента
 
 1. Допишите хронологию в закрытой карточке.
-2. Если было восстановление, полная копия уже снята командой `pgbackrest backup --type=full`. Её вторая точка — в Казахстане. Логический дамп `deploy/backup.sh` эту копию не заменяет.
+2. Если было восстановление, полная копия уже снята командой `pgbackrest --stanza=anyq backup --type=full`. Её вторая точка — в Казахстане. Логический дамп `deploy/backup.sh` эту копию не заменяет.
 3. Для SEV1 и SEV2 назначьте разбор по [`docs/incidents/POSTMORTEM.md`](../incidents/POSTMORTEM.md) в рабочие часы.
 4. Образы и тома, которые не стирали, не удаляйте до конца разбора.

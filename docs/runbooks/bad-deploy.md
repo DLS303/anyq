@@ -91,21 +91,39 @@ docker compose --env-file deploy/.env \
 
 Миграции выполняют отдельным шагом migrate. Если этот шаг повредил
 данные, базу восстанавливают на момент непосредственно до него.
-Метку времени `<timestamp>` пишут в карточку. Дальше команды из
-[`docs/runbooks/db-down.md`](db-down.md):
+Метку пишут в карточку как `<YYYY-MM-DD HH:MM:SS+05>`
+(пример `2026-10-24 10:15:00+05`). Кластер в UTC, смещение в
+`--target` обязательно. Пароль шифрования берут только из
+офлайн-хранилища `<офлайн-хранилище>`. В команду его не вставляют.
+
+`pgbackrest` на хосте нет. Его запускают одноразовым контейнером
+сервиса `postgres`, пока сами `api` и `postgres` остановлены.
+Существующий том всегда запускают тем образом, которым он создан.
+Восстановление на месте делают при SEV1, когда координатор записал
+решение. Иначе ждут `deploy/restore.sh` (будет добавлено): он
+восстанавливает в отдельный том.
 
 ```bash
-pgbackrest info
-pgbackrest restore --delta --type=time \
-  --target='<timestamp>' --target-action=promote
+cd /opt/anyq
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml stop api postgres
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
+  --user postgres postgres \
+  pgbackrest --stanza=anyq info
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
+  --user postgres postgres \
+  pgbackrest --stanza=anyq restore --delta --type=time \
+  --target='<YYYY-MM-DD HH:MM:SS+05>' --target-action=promote
 ```
 
-Пароль шифрования репозитория берут только из офлайн-хранилища
-`<офлайн-хранилище>`. В команду, карточку и git его не вставляют.
-Контейнер базы при этом восстановлении — только `postgis/postgis:16-3.4`.
-Образ Alpine для базы не используют. После восстановления —
-`pgbackrest check` и новая полная копия, как в регламенте базы.
-`deploy/restore.sh` — будет добавлено.
+Дальше запуск того же образа, `pgbackrest --stanza=anyq check` и
+`pgbackrest --stanza=anyq backup --type=full` — как в
+[`docs/runbooks/db-down.md`](db-down.md). Образ
+`postgis/postgis:16-3.4` — после миграции на этот образ
+(задача DevOps). Перенос локального стенда с Alpine на PostGIS —
+только дамп в новый пустой том.
 
 Контейнер, который перезапускается из-за `deploy/.env`, смотрят так:
 
