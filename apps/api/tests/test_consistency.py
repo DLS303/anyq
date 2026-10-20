@@ -408,7 +408,7 @@ def test_consents_append_only(tmp_path, monkeypatch):
     store._save()
     with store._sql.factory() as session:
         rows = session.execute(
-            text("SELECT action FROM consent_events WHERE subject_user_id = :user_id ORDER BY id"),
+            text("SELECT action FROM consent_events WHERE subject_user_id = :user_id ORDER BY seq"),
             {"user_id": user.id},
         ).all()
     assert [row[0] for row in rows] == ["grant", "withdraw", "grant"]
@@ -559,6 +559,237 @@ def test_production_start_does_not_create_tables(tmp_path, monkeypatch):
     finally:
         fresh._sql.engine.dispose()
     assert "records" not in names
+
+
+def test_schema_head_matches_alembic_heads():
+    from alembic.script import ScriptDirectory
+
+    from app.sql_backend import SCHEMA_HEAD
+
+    cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    heads = ScriptDirectory.from_config(cfg).get_heads()
+    assert heads == [SCHEMA_HEAD]
+    source = (Path(__file__).resolve().parents[1] / "alembic" / "versions" / "20261019_0001b_store_fixes.py").read_text()
+    assert "app.schemas" not in source
+    assert "app.sql_backend" not in source
+    assert "consent_events back into records" in source
+
+
+def test_upgrade_dedupes_emails_and_restores_consents(tmp_path):
+    previous = os.environ.get("DATABASE_URL")
+
+    def once(url: str) -> None:
+        os.environ["DATABASE_URL"] = url
+        cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+        command.upgrade(cfg, "20261019_0001")
+        engine = create_engine(url, future=True)
+        cast = "CAST(:payload AS json)" if url.startswith("postgresql") else ":payload"
+        user_a = {
+            "id": "u-1",
+            "email": "User@example.com",
+            "full_name": "Тест Пользователь",
+            "role": "buyer",
+            "phone": "+77000000031",
+            "company": "ТОО Тест",
+        }
+        user_b = {**user_a, "id": "u-2", "email": "user@example.com", "phone": "+77000000032"}
+        consent = {
+            "id": "c-1",
+            "user_id": "u-1",
+            "type": "offer_pd",
+            "text_version": "v1",
+            "text_sha256": "abc",
+            "granted_at": "2026-01-01T00:00:00+00:00",
+            "action": "revoke",
+            "revoked_at": "2026-02-01T00:00:00+00:00",
+        }
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"INSERT INTO records (collection, doc_id, email, user_id, seq, search_text, payload) "
+                    f"VALUES ('users', 'u-1', 'User@example.com', 'u-1', 1, '', {cast})"
+                ),
+                {"payload": json.dumps(user_a)},
+            )
+            connection.execute(
+                text(
+                    f"INSERT INTO records (collection, doc_id, email, user_id, seq, search_text, payload) "
+                    f"VALUES ('users', 'u-2', 'user@example.com', 'u-2', 2, '', {cast})"
+                ),
+                {"payload": json.dumps(user_b)},
+            )
+            connection.execute(
+                text(
+                    f"INSERT INTO records (collection, doc_id, user_id, company_key, seq, search_text, payload) "
+                    f"VALUES ('consents', 'c-1', 'u-1', 'too-test', 1, '', {cast})"
+                ),
+                {"payload": json.dumps(consent)},
+            )
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        with engine.connect() as connection:
+            emails = connection.execute(
+                text("SELECT doc_id, email FROM records WHERE collection = 'users' ORDER BY doc_id")
+            ).all()
+            events = connection.execute(text("SELECT action, seq FROM consent_events ORDER BY seq")).all()
+            revision = connection.execute(text("SELECT revision FROM meta WHERE id = 'consents'")).scalar()
+            failures = connection.execute(text("SELECT count(*) FROM login_failures")).scalar()
+        assert [(row[0], row[1]) for row in emails] == [("u-1", "user@example.com"), ("u-2", "user@example.com#u-2")]
+        assert [(row[0], row[1]) for row in events] == [("grant", 1), ("withdraw", 2)]
+        assert int(revision) == 2
+        assert failures == 0
+        command.downgrade(cfg, "-1")
+        with engine.connect() as connection:
+            restored = connection.execute(
+                text("SELECT payload FROM records WHERE collection = 'consents' AND doc_id = 'c-1'")
+            ).scalar()
+            names = set(inspect(engine).get_table_names())
+        if isinstance(restored, str):
+            restored = json.loads(restored)
+        assert restored["action"] == "revoke"
+        assert restored["revoked_at"] == "2026-02-01T00:00:00+00:00"
+        assert "consent_events" not in names
+        assert "login_failures" not in names
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        engine.dispose()
+
+    try:
+        once("sqlite:///" + (tmp_path / "legacy.sqlite").as_posix())
+        if os.environ.get("ANYQ_TEST_POSTGRES") == "1" and previous:
+            parsed = make_url(previous)
+            name = "l" + uuid4().hex[:12]
+            admin = create_engine(
+                parsed.set(database="postgres").render_as_string(hide_password=False),
+                isolation_level="AUTOCOMMIT",
+                future=True,
+            )
+            with admin.connect() as connection:
+                connection.execute(text(f'CREATE DATABASE "{name}"'))
+            admin.dispose()
+            once(parsed.set(database=name).render_as_string(hide_password=False))
+    finally:
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
+
+
+def test_concurrent_consent_writes_stay_visible(tmp_path, monkeypatch):
+    _isolated(monkeypatch, tmp_path)
+    left = MemoryStore()
+    user, _token = _register(left)
+    right = MemoryStore()
+    reader = MemoryStore()
+    expected: set[str] = set()
+    guard = threading.Lock()
+    errors: list[BaseException] = []
+
+    def write(store: MemoryStore, prefix: str) -> None:
+        try:
+            _write_consents(store, prefix, user, expected, guard)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def _write_consents(store, prefix, owner, ids, lock) -> None:
+        for index in range(25):
+            item = ConsentRecord(
+                id=f"c-{prefix}-{index}",
+                user_id=owner.id,
+                type="offer_pd",
+                text_version=PD_VERSION,
+                text_sha256=pd_sha256(),
+                granted_at="2026-10-20T00:00:00+00:00",
+                action="grant",
+                ip="127.0.0.1",
+                user_agent="test",
+                login=owner.email,
+            )
+            store._enter()
+            try:
+                store.consents.append(item)
+                store._save_unlocked()
+            finally:
+                store._leave()
+            with lock:
+                ids.add(item.id)
+
+    stop = threading.Event()
+
+    def watch() -> None:
+        while not stop.is_set():
+            try:
+                reader._enter()
+                try:
+                    list(reader.consents)
+                finally:
+                    reader._leave()
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+                return
+
+    watcher = threading.Thread(target=watch)
+    watcher.start()
+    threads = [
+        threading.Thread(target=write, args=(left, "a")),
+        threading.Thread(target=write, args=(right, "b")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    stop.set()
+    watcher.join()
+    reader._enter()
+    try:
+        found = {item.id for item in reader.consents if item.id in expected}
+    finally:
+        reader._leave()
+    assert not errors
+    assert found == expected
+    with reader._sql.factory() as session:
+        seqs = [int(row[0]) for row in session.execute(text("SELECT seq FROM consent_events ORDER BY seq"))]
+        revision = session.execute(text("SELECT revision FROM meta WHERE id = 'consents'")).scalar()
+    assert seqs == list(range(1, len(seqs) + 1))
+    assert int(revision) == seqs[-1]
+    assert len(expected) == 50
+
+
+def test_production_empty_database_skips_json_import(tmp_path, monkeypatch):
+    url = "sqlite:///" + (tmp_path / "prod.sqlite").as_posix()
+    monkeypatch.setenv("DATABASE_URL", url)
+    _alembic(url)
+    path = tmp_path / "import.json"
+    path.write_text(
+        json.dumps(
+            {
+                "users": [
+                    {
+                        "id": "u-json",
+                        "email": "json-user@example.com",
+                        "full_name": "Тест Пользователь",
+                        "role": "buyer",
+                        "phone": "+77000000099",
+                        "company": "ТОО Тест",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANYQ_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("ANYQ_DB_PATH", str(path))
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "")
+    monkeypatch.setenv("ANYQ_DEMO_PASSWORD", "")
+    fresh = MemoryStore()
+    try:
+        assert "u-json" not in fresh.users_by_id
+        with fresh._sql.factory() as session:
+            count = session.execute(text("SELECT count(*) FROM records")).scalar()
+        assert count == 0
+    finally:
+        fresh._sql.engine.dispose()
 
 
 def test_ready_is_unavailable_until_schema_head(tmp_path, monkeypatch):

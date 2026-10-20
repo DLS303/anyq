@@ -118,19 +118,6 @@ def upgrade() -> None:
     op.create_index("ix_invitations_expires_at", "invitations", ["expires_at"])
 
     op.create_table(
-        "login_failures",
-        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("account", sa.String(length=200), nullable=False),
-        sa.Column("ip", sa.String(length=80), nullable=False),
-        sa.Column("created_at", sa.Float(), nullable=False),
-    )
-    op.create_index(
-        "ix_login_failures_account_ip_created",
-        "login_failures",
-        ["account", "ip", "created_at"],
-    )
-
-    op.create_table(
         "photo_jobs",
         sa.Column("id", sa.String(length=40), primary_key=True),
         sa.Column("status", sa.String(length=20), nullable=False),

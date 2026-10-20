@@ -2,16 +2,42 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import ipaddress
 import time
 
 from sqlalchemy import delete, func, select
 
+from app.authutil import load_secret
 from app.sql_backend import LoginFailure
+
+_RETENTION_S = 86_400
 
 
 class RateLimited(Exception):
     def __init__(self) -> None:
         super().__init__("Слишком много попыток входа. Повторите через 10 минут")
+
+
+def _ip_bucket(ip: str) -> str:
+    raw = (ip or "").strip()
+    if not raw:
+        return ""
+    try:
+        addr = ipaddress.ip_address(raw.split("%", 1)[0])
+    except ValueError:
+        return raw
+    if isinstance(addr, ipaddress.IPv4Address):
+        parts = str(addr).split(".")
+        return ".".join([*parts[:3], "0"])
+    network = ipaddress.ip_network(f"{addr}/64", strict=False)
+    return str(network.network_address)
+
+
+def login_key(account: str, ip: str) -> str:
+    material = f"{account.strip().lower()}|{_ip_bucket(ip)}"
+    return hmac.new(load_secret().encode(), material.encode(), hashlib.sha256).hexdigest()
 
 
 class LoginRateLimiter:
@@ -24,8 +50,8 @@ class LoginRateLimiter:
 
         return store._sql.factory()
 
-    def _key(self, account: str, ip: str) -> tuple[str, str]:
-        return (account.strip().lower(), ip or "")
+    def _purge(self, session, now: float) -> None:
+        session.execute(delete(LoginFailure).where(LoginFailure.created_at < now - _RETENTION_S))
 
     def reset(self) -> None:
         with self._session() as session:
@@ -33,36 +59,35 @@ class LoginRateLimiter:
             session.commit()
 
     def count(self, account: str, ip: str) -> int:
-        account_key, ip_key = self._key(account, ip)
+        key = login_key(account, ip)
         now = time.time()
         with self._session() as session:
             value = session.scalar(
                 select(func.count())
                 .select_from(LoginFailure)
-                .where(
-                    LoginFailure.account == account_key,
-                    LoginFailure.ip == ip_key,
-                    LoginFailure.created_at > now - self.window_s,
-                )
+                .where(LoginFailure.key_hash == key, LoginFailure.created_at > now - self.window_s)
             )
             return int(value or 0)
 
     def check(self, account: str, ip: str) -> None:
+        now = time.time()
+        with self._session() as session:
+            self._purge(session, now)
+            session.commit()
         if self.count(account, ip) >= self.limit:
             raise RateLimited()
 
     def record_failure(self, account: str, ip: str) -> None:
-        account_key, ip_key = self._key(account, ip)
+        now = time.time()
         with self._session() as session:
-            session.add(LoginFailure(account=account_key, ip=ip_key, created_at=time.time()))
+            self._purge(session, now)
+            session.add(LoginFailure(key_hash=login_key(account, ip), created_at=now))
             session.commit()
 
     def clear(self, account: str, ip: str) -> None:
-        account_key, ip_key = self._key(account, ip)
+        key = login_key(account, ip)
         with self._session() as session:
-            session.execute(
-                delete(LoginFailure).where(LoginFailure.account == account_key, LoginFailure.ip == ip_key)
-            )
+            session.execute(delete(LoginFailure).where(LoginFailure.key_hash == key))
             session.commit()
 
 

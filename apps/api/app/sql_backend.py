@@ -28,7 +28,6 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     delete,
-    desc,
     event,
     func,
     or_,
@@ -84,7 +83,7 @@ class Record(Base):
         Index("ix_records_coll_comp_seq", "collection", "company_key", "seq"),
         Index("ix_records_coll_owner_seq", "collection", "owner_id", "seq"),
         Index("ix_records_coll_status_seq", "collection", "status", "seq"),
-        Index("ix_records_coll_created", "collection", desc("created_at")),
+        Index("ix_records_coll_created", "collection", "created_at"),
         Index(
             "ux_records_user_email",
             "email",
@@ -158,11 +157,10 @@ class LoginFailure(Base):
     __tablename__ = "login_failures"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    account: Mapped[str] = mapped_column(String(200))
-    ip: Mapped[str] = mapped_column(String(80))
+    key_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[float] = mapped_column(Float)
 
-    __table_args__ = (Index("ix_login_failures_account_ip_created", "account", "ip", "created_at"),)
+    __table_args__ = (Index("ix_login_failures_key_created", "key_hash", "created_at"),)
 
 
 class ConsentEvent(Base):
@@ -171,6 +169,7 @@ class ConsentEvent(Base):
     __tablename__ = "consent_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
     legacy_id: Mapped[str] = mapped_column(String(40))
     event_uuid: Mapped[str] = mapped_column(String(36))
     company_id: Mapped[str | None] = mapped_column(String(180))
@@ -193,8 +192,9 @@ class ConsentEvent(Base):
     __table_args__ = (
         UniqueConstraint("legacy_id", name="uq_consent_events_legacy_id"),
         UniqueConstraint("event_uuid", name="uq_consent_events_event_uuid"),
-        Index("ix_consents_subject", "subject_user_id", "purpose", desc("occurred_at")),
-        Index("ix_consents_company", "company_id", desc("occurred_at")),
+        Index("ix_consent_events_seq", "seq", unique=True),
+        Index("ix_consents_subject", "subject_user_id", "purpose", "occurred_at"),
+        Index("ix_consents_company", "company_id", "occurred_at"),
     )
 
 
@@ -937,6 +937,7 @@ def copy_legacy_consents(session: Session) -> None:
         for consent in legacy_consent_events(record, row.company_key):
             if consent.legacy_id in known:
                 continue
+            consent.seq = alloc_seq(session, "consents")
             session.add(consent)
             known.add(consent.legacy_id)
     session.execute(delete(Record).where(Record.collection == "consents"))
@@ -962,15 +963,17 @@ def bump_revisions(session: Session, collections: set[str], *, seq_collections: 
 
 
 def alloc_seq(session: Session, collection: str) -> int:
-    """Next `records.seq` for one collection, taken from that collection's meta row."""
+    """Next sequence for one collection, taken under that collection's meta row lock."""
+    extra = "UNION ALL SELECT seq FROM consent_events" if collection == "consents" else ""
     floor = int(
         session.execute(
             text(
-                """
+                f"""
                 SELECT COALESCE(MAX(seq), 0) FROM (
                     SELECT seq FROM records WHERE collection = :id
                     UNION ALL
                     SELECT seq FROM record_tombstones WHERE collection = :id
+                    {extra}
                 ) AS seqs
                 """
             ),
@@ -1077,8 +1080,8 @@ class SqlRuntime:
                 Path(self.path).parent.mkdir(parents=True, exist_ok=True)
             engine_kwargs["connect_args"] = {"check_same_thread": False}
         else:
-            engine_kwargs["pool_size"] = 10
-            engine_kwargs["max_overflow"] = 20
+            engine_kwargs["pool_size"] = 5
+            engine_kwargs["max_overflow"] = 3
             engine_kwargs["pool_recycle"] = 300
         self.engine = create_engine(self.url, **engine_kwargs)
         if self.url.startswith("sqlite"):
@@ -1098,15 +1101,8 @@ class SqlRuntime:
     def _create_schema(self) -> None:
         if _production():
             return
+        # PostgreSQL schema, triggers, and consent copy belong to Alembic.
         if not self.url.startswith("sqlite"):
-            try:
-                self._ensure_meta()
-                install_consent_triggers(self.engine)
-                with self.factory() as session:
-                    copy_legacy_consents(session)
-                    session.commit()
-            except (OperationalError, ProgrammingError):
-                return
             return
         last: Exception | None = None
         for attempt in range(8):
@@ -1277,13 +1273,13 @@ class SqlRuntime:
             copy_legacy_consents(session)
             session.commit()
             rows = session.scalars(select(Record).order_by(Record.seq, Record.doc_id)).all()
-            consent_rows = session.scalars(select(ConsentEvent).order_by(ConsentEvent.id)).all()
+            consent_rows = session.scalars(select(ConsentEvent).order_by(ConsentEvent.seq)).all()
             snapshot = [
                 (row.collection, row.doc_id, dict(row.payload or {}), int(row.row_version or 1), int(row.seq or 0))
                 for row in rows
             ]
             consents = [consent_record_from_event(row) for row in consent_rows]
-            consent_last = max((int(row.id) for row in consent_rows), default=0)
+            consent_last = max((int(row.seq or 0) for row in consent_rows), default=0)
         for collection, doc_id, payload, version, seq in snapshot:
             last_seq[collection] = max(last_seq.get(collection, 0), seq)
             if collection == "credentials":
@@ -1383,10 +1379,10 @@ class SqlRuntime:
     def _load_consent_changes(self, store, since_seq: int) -> None:
         with self.factory() as session:
             rows = session.scalars(
-                select(ConsentEvent).where(ConsentEvent.id > since_seq).order_by(ConsentEvent.id)
+                select(ConsentEvent).where(ConsentEvent.seq > since_seq).order_by(ConsentEvent.seq)
             ).all()
             items = [consent_record_from_event(row) for row in rows]
-            last = max([since_seq, *[int(row.id) for row in rows]])
+            last = max([since_seq, *[int(row.seq) for row in rows]])
         store.consents.merge_appends(items, set(), last)
 
     def flush(self, store) -> set[str]:
@@ -1442,6 +1438,7 @@ class SqlRuntime:
             if consents.mutated:
                 self._flush_consents(session, store, consents)
                 touched.add("consents")
+                allocated.add("consents")
             if touched:
                 bump_revisions(session, touched, seq_collections=allocated)
             session.commit()
@@ -1595,13 +1592,12 @@ class SqlRuntime:
                     getattr(user, "company_bin", ""),
                     getattr(user, "id", ""),
                 )
-            session.add(consent_event_from_record(item, company_id))
+            event = consent_event_from_record(item, company_id)
+            event.seq = alloc_seq(session, "consents")
+            session.add(event)
             known.add(legacy)
+            bag.last_seq = max(bag.last_seq, event.seq)
         session.flush()
-        if known:
-            last = session.scalar(select(func.max(ConsentEvent.id)).where(ConsentEvent.legacy_id.in_(list(known))))
-            if last:
-                bag.last_seq = max(bag.last_seq, int(last))
 
     def page(self, store, collection: str, *, limit: int, offset: int, **filters) -> tuple[list, int | None]:
         models = _models()

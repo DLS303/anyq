@@ -15,9 +15,6 @@ target_metadata = Base.metadata
 
 _SKIP_INDEXES = {
     "ix_records_search_trgm",
-    "ix_records_coll_created",
-    "ix_consents_subject",
-    "ix_consents_company",
 }
 
 
@@ -59,6 +56,7 @@ def run_migrations_online() -> None:
         locked = connection.dialect.name == "postgresql"
         if locked:
             connection.execute(text("SELECT pg_advisory_lock(:key)"), {"key": MIGRATION_LOCK})
+            connection.execute(text("SET lock_timeout = '5s'"))
             connection.commit()
         try:
             context.configure(

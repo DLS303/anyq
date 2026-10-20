@@ -1,6 +1,7 @@
 import time
 
 from fastapi.testclient import TestClient
+from sqlalchemy import inspect, text
 
 from app.authutil import hash_password
 from app.main import app
@@ -244,7 +245,9 @@ def test_login_rate_limit_is_per_account_and_ip(monkeypatch):
     locked = attempt("secret12")
     assert locked.status_code == 429
 
-    other_ip = attempt("wrong-pass", ip="203.0.113.11")
+    same_bucket = attempt("wrong-pass", ip="203.0.113.50")
+    assert same_bucket.status_code == 429
+    other_ip = attempt("wrong-pass", ip="198.51.100.10")
     assert other_ip.status_code == 401
     other_account = attempt("wrong-pass", account="someone-else@example.com")
     assert other_account.status_code == 401
@@ -260,6 +263,26 @@ def test_login_rate_limit_is_per_account_and_ip(monkeypatch):
     allowed = attempt("secret12")
     assert allowed.status_code == 200, allowed.text
     assert login_limiter.count(email, "203.0.113.10") == 0
+
+
+def test_login_failures_store_a_hash_and_expire():
+    login_limiter.record_failure("Person@Example.com", "203.0.113.10")
+    columns = {column["name"] for column in inspect(store._sql.engine).get_columns("login_failures")}
+    assert "account" not in columns
+    assert "ip" not in columns
+    with store._sql.factory() as session:
+        stored = session.execute(text("SELECT key_hash FROM login_failures")).scalar()
+    assert stored
+    assert "example.com" not in stored
+    assert "203.0.113" not in stored
+    assert login_limiter.count("person@example.com", "203.0.113.20") == 1
+    with store._sql.factory() as session:
+        session.execute(text("UPDATE login_failures SET created_at = :old"), {"old": time.time() - 90_000})
+        session.commit()
+    login_limiter.record_failure("other@example.com", "198.51.100.8")
+    with store._sql.factory() as session:
+        left = session.execute(text("SELECT count(*) FROM login_failures")).scalar()
+    assert left == 1
 
 
 def test_cross_border_consent_is_appended():

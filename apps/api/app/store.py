@@ -112,7 +112,6 @@ from app.site_models import (
 from app.sql_backend import (
     COLLECTION_OF,
     DICT_ATTRS,
-    ConsentEvent,
     Record,
     SqlRuntime,
     TrackedDict,
@@ -616,6 +615,9 @@ class MemoryStore:
     def _load(self) -> None:
         if self._sql.count() > 0:
             self._sql.load_into(self)
+            self._seen_rev = self._sql.revision()
+            return
+        if _production():
             self._seen_rev = self._sql.revision()
             return
         self._load_json()
@@ -3027,15 +3029,15 @@ class MemoryStore:
             user_seq = put("users", uid, user)
             cred_seq = put("credentials", uid, password_hash)
             company_id = company_key(user)
-            session.add(consent_event_from_record(consent, company_id))
+            consent_seq = alloc_seq(session, "consents")
+            event = consent_event_from_record(consent, company_id)
+            event.seq = consent_seq
+            session.add(event)
             if directory is not None:
                 dir_seq = put("directory", directory.id, directory)
             session.flush()
-            consent_seq = int(
-                session.scalar(select(ConsentEvent.id).where(ConsentEvent.legacy_id == consent.id)) or 0
-            )
             collections = {"users", "credentials", "consents"}
-            allocated = {"users", "credentials"}
+            allocated = {"users", "credentials", "consents"}
             if directory is not None:
                 collections.add("directory")
                 allocated.add("directory")

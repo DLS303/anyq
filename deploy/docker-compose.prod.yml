@@ -163,6 +163,29 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-backup:
+        condition: service_completed_successfully
+    restart: "no"
+    init: true
+    networks:
+      - anyq
+
+  db-backup:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGHOST: postgres
+      PGUSER: anyq
+      PGDATABASE: anyq
+    volumes:
+      - anyq-backups:/backups
+    command:
+      - sh
+      - -c
+      - pg_dump --no-owner --file=/backups/pre-migrate.sql && test -s /backups/pre-migrate.sql
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: "no"
     init: true
     networks:
@@ -215,3 +238,5 @@ volumes:
     name: anyq-caddy-config
   anyq-postgres:
     name: anyq-postgres
+  anyq-backups:
+    name: anyq-backups
