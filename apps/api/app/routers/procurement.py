@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import date
 from uuid import uuid4
 
 from fastapi import (
@@ -15,7 +16,7 @@ from fastapi import (
     Query,
     UploadFile,
 )
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -31,12 +32,17 @@ from app.procurement_xlsx import (
 from app.schemas import User
 from app.store import store
 from app.store_budget import company_savings, project_savings, savings_for_request
+from app.procurement_calc import gross_tiyn, kzt_to_tiyn, price_is_suspicious
+from app.sql_backend import DuplicateInvoice
 from app.store_procurement import (
     access_flags,
     add_document,
+    add_invoice,
     add_offer,
+    offer_day,
     apply_lines,
     apply_offers,
+    confirm_suspicious,
     create_request,
     delete_offer,
     list_requests,
@@ -45,9 +51,13 @@ from app.store_procurement import (
     patch_document,
     patch_line,
     patch_offer,
+    price_benchmarks,
+    previous_completed,
     preview_lines,
     preview_offers,
+    publish_request,
     quick_request,
+    repeat_previous,
     repeat_request,
     select_best,
     select_offer,
@@ -73,9 +83,35 @@ class QuickIn(BaseModel):
     qty: float = Field(gt=0)
 
 
+def validate_offer_price(
+    price_kzt: float,
+    source_kind: str | None,
+    vat_included: bool | None,
+    recent_gross: list[int],
+    last_confirmed_gross: int | None,
+) -> tuple[int, bool]:
+    """A price needs a source. Money is integer tiyn. A price far below the benchmark is suspicious."""
+    kind = (source_kind or "").strip()
+    if not kind:
+        raise HTTPException(status_code=422, detail="Укажите источник цены")
+    try:
+        tiyn = kzt_to_tiyn(price_kzt)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    gross = gross_tiyn(tiyn, vat_included, settings.vat_rate)
+    suspicious = price_is_suspicious(
+        gross,
+        recent_gross,
+        last_confirmed_gross,
+        below=settings.price_suspicious_below,
+    )
+    return tiyn, suspicious
+
+
 class OfferIn(BaseModel):
     supplier_name: str = Field(min_length=1, max_length=200)
     price_kzt: float = Field(gt=0)
+    source_kind: str = Field(min_length=1, max_length=32)
     vat_included: bool | None = None
     qty_available: float | None = Field(default=None, ge=0)
     delivery_term: str = ""
@@ -113,6 +149,16 @@ class SelectIn(BaseModel):
     offer_id: str | None = None
 
 
+class InvoiceIn(BaseModel):
+    company_id: str = Field(min_length=1, max_length=80)
+    supplier_id: str = Field(min_length=1, max_length=80)
+    supplier_name: str = ""
+    number: str = Field(min_length=1, max_length=80)
+    date: str = Field(min_length=8, max_length=32)
+    amount_kzt: float = Field(gt=0)
+    request_id: str = Field(min_length=1, max_length=80)
+
+
 class DocPatch(BaseModel):
     is_actual: bool
 
@@ -124,6 +170,8 @@ def _fail(exc: Exception) -> None:
         raise HTTPException(403, str(exc) or "Недостаточно прав") from exc
     if isinstance(exc, LookupError):
         raise HTTPException(404, str(exc) or "Не найдено") from exc
+    if isinstance(exc, DuplicateInvoice):
+        raise HTTPException(status_code=409, detail={"code": "duplicate_invoice"}) from exc
     if isinstance(exc, ValueError):
         raise HTTPException(400, str(exc)) from exc
     raise exc
@@ -266,7 +314,15 @@ def get_offers_template(user: User = Depends(require_user)):
 def get_requests(pid: str, user: User = Depends(require_user)):
     project = _member_project(user, pid)
     flags = access_flags(store, user, project)
-    return {"ok": True, "data": {"requests": list_requests(store, project.id), "access": flags, "vat_rate": settings.vat_rate}}
+    return {
+        "ok": True,
+        "data": {
+            "requests": list_requests(store, project.id),
+            "access": flags,
+            "vat_rate": settings.vat_rate,
+            "previous_completed": previous_completed(store, project.id),
+        },
+    }
 
 
 @router.post("/projects/{pid}/requests")
@@ -319,6 +375,30 @@ def post_repeat(
     req, project = _request(user, rid)
     _need(access_flags(store, user, project), "can_request")
     data = _idem(user, idempotency_key, f"repeat:{rid}", lambda: repeat_request(store, req, user))
+    return {"ok": True, "data": data}
+
+
+@router.post("/projects/{pid}/repeat-previous")
+def post_repeat_previous(
+    pid: str,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    project = _member_project(user, pid)
+    _need(access_flags(store, user, project), "can_request")
+    data = _idem(user, idempotency_key, f"repeat-previous:{pid}", lambda: repeat_previous(store, project, user))
+    return {"ok": True, "data": data}
+
+
+@router.post("/requests/{rid}/publish")
+def post_publish(
+    rid: str,
+    user: User = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    req, project = _request(user, rid)
+    _need(access_flags(store, user, project), "can_request")
+    data = _idem(user, idempotency_key, f"publish:{rid}", lambda: publish_request(store, req))
     return {"ok": True, "data": data}
 
 
@@ -503,7 +583,38 @@ def post_offer(
         payload["supplier_name"] = (user.company or user.full_name).strip()
     else:
         _need(access_flags(store, user, project), "can_offer")
+    recent, last_confirmed = price_benchmarks(store, line, offer_day(body.offer_date, date.today()))
+    tiyn, suspicious = validate_offer_price(
+        body.price_kzt,
+        body.source_kind,
+        body.vat_included,
+        recent,
+        last_confirmed,
+    )
+    payload["price_tiyn"] = tiyn
+    payload["price_kzt"] = tiyn / 100
+    payload["suspicious"] = suspicious
     data = _idem(user, idempotency_key, body.model_dump_json(), lambda: add_offer(store, line, payload))
+    return {"ok": True, "data": data}
+
+
+@router.post("/offers/{oid}/confirm")
+def post_confirm_offer(oid: str, user: User = Depends(require_user)):
+    offer, _line, _req, project = _offer(user, oid)
+    _need(access_flags(store, user, project), "can_offer")
+    return {"ok": True, "data": _run(lambda: confirm_suspicious(store, offer))}
+
+
+@router.post("/invoices")
+def post_invoice(body: InvoiceIn, user: User = Depends(require_user)):
+    req, project = _request(user, body.request_id)
+    _need(access_flags(store, user, project), "can_invoice")
+    try:
+        data = add_invoice(store, req, user, body.model_dump())
+    except DuplicateInvoice:
+        return JSONResponse(status_code=409, content={"code": "duplicate_invoice"})
+    except (PermissionError, LookupError, ValueError) as exc:
+        _fail(exc)
     return {"ok": True, "data": data}
 
 

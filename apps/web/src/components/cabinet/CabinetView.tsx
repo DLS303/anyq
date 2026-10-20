@@ -7,6 +7,7 @@ import { ProjectList } from "@/components/site/ProjectList";
 import { ErrorRetry, LoadingSkeleton, useAsync, useSubmitLock } from "@/lib/useAsync";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
+import { useRegistrationEnabled } from "@/lib/registration";
 import {
   createMaterial,
   fetchMaterialOrders,
@@ -48,6 +49,7 @@ function roleLabel(role: string) {
 export function CabinetView({ locale }: { locale: Locale }) {
   const m = t(locale);
   const { user } = useAuth();
+  const registrationEnabled = useRegistrationEnabled();
   const [error, setError] = useState("");
   const loaded = useAsync(async (signal) => {
     if (!user) return { orders: [] as ServiceOrder[], matOrders: [] as MaterialOrder[], skus: [] as Material[] };
@@ -152,9 +154,11 @@ export function CabinetView({ locale }: { locale: Locale }) {
           </p>
 
           <div className="mt-6 flex flex-col items-center gap-3">
-            <Link href={`/${locale}/login?mode=register`} className="btn-ice font-semibold">
-              Регистрация компании
-            </Link>
+            {registrationEnabled ? (
+              <Link href={`/${locale}/login?mode=register`} className="btn-ice font-semibold">
+                Регистрация компании
+              </Link>
+            ) : null}
             <Link href={`/${locale}/login?mode=login`} className="text-xs text-slate-500 hover:underline">
               Уже есть доступ — войти
             </Link>

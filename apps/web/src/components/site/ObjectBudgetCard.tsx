@@ -210,6 +210,28 @@ export function ObjectBudgetCard({ locale, projectId }: { locale: Locale; projec
             <Line label={m.budgetPlan} value={money(data.plan.total_kzt, locale)} />
             <Line label={m.budgetFact} value={money(data.fact_kzt, locale)} />
             <Line label={m.budgetRemain} value={money(data.remaining_kzt ?? 0, locale)} />
+            {data.plan_vs_chosen && (data.plan_vs_chosen.plan_kzt > 0 || data.plan_vs_chosen.chosen_kzt > 0) ? (
+              <div className="grid gap-1 border-t border-ink/10 pt-2" data-plan-savings>
+                {data.plan_vs_chosen.lines.map((line) => (
+                  <p key={line.line_id} className="text-sm">
+                    <span className="block break-words font-medium">{line.title}</span>
+                    <span>
+                      {m.budgetPlan} {money(line.plan_kzt, locale)} − {m.budgetChosenPrice} {money(line.chosen_kzt, locale)}
+                    </span>
+                    <span className="block">
+                      {m.savingsAmount}: {money(line.saved_kzt, locale)}
+                    </span>
+                  </p>
+                ))}
+                <p className="text-sm">
+                  {m.budgetPlan} {money(data.plan_vs_chosen.plan_kzt, locale)} − {m.budgetChosenPrice}{" "}
+                  {money(data.plan_vs_chosen.chosen_kzt, locale)}
+                </p>
+                <p className="text-sm font-medium" data-total-saved>
+                  {m.budgetTotalSaved}: {money(data.plan_vs_chosen.total_saved_kzt, locale)}
+                </p>
+              </div>
+            ) : null}
             <p className="text-sm font-medium">
               {m.budgetUsed} {used} · {signalText(data.signal, m)}
             </p>
@@ -286,7 +308,7 @@ export function ObjectBudgetCard({ locale, projectId }: { locale: Locale; projec
               </button>
             ))}
           </div>
-          <button className={primary} disabled={expenseForm.submitting}>
+          <button className={`${primary} scroll-mb-32`} data-save-expense disabled={expenseForm.submitting}>
             {m.budgetSaveExpense}
           </button>
           {formError ? <p className="text-sm text-rose-700">{formError}</p> : null}

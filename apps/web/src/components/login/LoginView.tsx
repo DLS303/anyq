@@ -32,8 +32,8 @@ export function LoginView({
   const [phone, setPhone] = useState("");
   const [company, setCompany] = useState("");
   const [companyBin, setCompanyBin] = useState("");
-  const [city, setCity] = useState("Алматы");
-  const [role, setRole] = useState<RegRole | "">("");
+  const [city, setCity] = useState("");
+  const [role, setRole] = useState<RegRole>("buyer");
   const [pilotOn, setPilotOn] = useState(false);
   const [skuTitle, setSkuTitle] = useState("");
   const [skuCategory, setSkuCategory] = useState<MaterialCat>("concrete");
@@ -45,6 +45,9 @@ export function LoginView({
   const [pdConsent, setPdConsent] = useState(false);
   const [aiConsent, setAiConsent] = useState(false);
   const [needsOwner, setNeedsOwner] = useState(false);
+  const [registrationEnabled, setRegistrationEnabled] = useState(true);
+  const [fieldError, setFieldError] = useState<Record<string, string>>({});
+  const signUp = registrationEnabled;
 
   useEffect(() => {
     let stop = false;
@@ -53,8 +56,10 @@ export function LoginView({
     fetchBootstrap()
       .then((row) => {
         if (stop) return;
+        const allow = row.registration_enabled !== false;
+        setRegistrationEnabled(allow);
         setNeedsOwner(row.needs_owner);
-        setMode(row.needs_owner ? "register" : PILOT_MODE ? "login" : initialMode);
+        setMode(allow && (row.needs_owner || initialMode === "register") ? "register" : "login");
       })
       .catch(() => {
         if (!stop) setMode(PILOT_MODE ? "login" : initialMode);
@@ -95,39 +100,26 @@ export function LoginView({
     setError("");
     const bin = companyBin.replace(/\D/g, "");
     const price = Math.round(Number(skuPrice) || 0);
-    if (company.trim().length < 2) {
-      setError("Укажите компанию");
-      return;
-    }
-    if (bin.length !== 12) {
-      setError("БИН должен быть из 12 цифр");
-      return;
-    }
-    if (fullName.trim().length < 2) {
-      setError("Укажите контактное лицо");
-      return;
-    }
-    if (phone.trim().length < 6) {
-      setError("Укажите телефон");
-      return;
-    }
     const chosen = needsOwner ? "owner" : role;
-    if (!chosen) {
-      setError("Выберите роль");
-      return;
-    }
+    const next: Record<string, string> = {};
+    if (company.trim().length < 2) next.company = "Укажите компанию";
+    if (bin.length !== 12) next.bin = "БИН должен быть из 12 цифр";
+    if (city.trim().length < 2) next.city = "Укажите город";
+    if (fullName.trim().length < 2) next.name = "Укажите контактное лицо";
+    if (phone.trim().length < 6) next.phone = "Укажите телефон";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) next.email = "Укажите почту";
+    if (password.length < 6) next.password = "Пароль минимум 6 символов";
+    if (!chosen) next.role = "Выберите роль";
     if (chosen === "supplier") {
-      if (skuTitle.trim().length < 2) {
-        setError("Укажите первую позицию для каталога");
-        return;
-      }
-      if (price <= 0) {
-        setError("Укажите цену позиции");
-        return;
-      }
+      if (skuTitle.trim().length < 2) next.sku = "Укажите первую позицию для каталога";
+      if (price <= 0) next.price = "Укажите цену позиции";
     }
-    if (!pdConsent) {
-      setError(m.consentRequired);
+    if (!pdConsent) next.consent = m.consentRequired;
+    setFieldError(next);
+    const order = ["company", "bin", "city", "phone", "name", "email", "password", "role", "sku", "price", "consent"];
+    const firstInvalid = order.find((key) => next[key]);
+    if (firstInvalid) {
+      document.querySelector<HTMLElement>(`[data-field='${firstInvalid}']`)?.focus();
       return;
     }
     setBusy(true);
@@ -169,7 +161,7 @@ export function LoginView({
     <div className="max-w-4xl mx-auto py-6 sm:py-10">
       <div className="grid md:grid-cols-[1.15fr_0.85fr] gap-8 items-start">
         <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
-          {PILOT_MODE || needsOwner ? null : (
+          {!signUp || needsOwner ? null : (
             <div className="flex items-center gap-2 mb-6 p-1 bg-slate-100 rounded-2xl w-fit border border-slate-200">
               <button
                 type="button"
@@ -199,11 +191,11 @@ export function LoginView({
           )}
 
           <h1 className="text-2xl font-bold text-slate-900 mb-1">
-            {needsOwner ? m.ownerSetupTitle : PILOT_MODE || mode === "login" ? (PILOT_MODE ? m.pilotLoginTitle : m.loginTitle) : m.register}
+            {needsOwner && signUp ? m.ownerSetupTitle : !signUp || mode === "login" ? (PILOT_MODE ? m.pilotLoginTitle : m.loginTitle) : m.register}
           </h1>
           <p className="text-xs text-slate-500 mb-6">{needsOwner ? m.ownerSetupLead : PILOT_MODE ? m.pilotLoginLead : m.loginLead}</p>
 
-          {!needsOwner && (PILOT_MODE || mode === "login") ? (
+          {!signUp || mode === "login" ? (
             <form onSubmit={onLogin} className="grid gap-3.5">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
@@ -215,7 +207,6 @@ export function LoginView({
                     className="w-full pl-10 pr-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900 focus:border-pine"
                     type="email"
                     required
-                    placeholder="name@company.kz"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                   />
@@ -232,7 +223,6 @@ export function LoginView({
                     className="w-full pl-10 pr-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900 focus:border-pine"
                     type="password"
                     required
-                    placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                   />
@@ -251,96 +241,118 @@ export function LoginView({
               </button>
             </form>
           ) : (
-            <form onSubmit={onRegister} className="grid gap-3">
-              <div className="grid sm:grid-cols-2 gap-3">
+            <form onSubmit={onRegister} noValidate className="grid gap-3" data-signup-form>
+              <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
-                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Компания</span>
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Компания</span>
                   <input
-                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900"
                     required
                     autoComplete="organization"
-                    placeholder="ТОО «Название»"
+                    data-field="company"
+                    aria-invalid={fieldError.company ? true : undefined}
+                    data-invalid={fieldError.company ? "true" : undefined}
                     value={company}
                     onChange={(e) => setCompany(e.target.value)}
                   />
+                  {fieldError.company ? <FieldNote>{fieldError.company}</FieldNote> : null}
                 </label>
                 <label className="block">
-                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">БИН</span>
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">БИН, 12 цифр</span>
                   <input
-                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900 font-mono"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 font-mono text-sm text-slate-900"
                     required
                     inputMode="numeric"
                     autoComplete="off"
+                    data-field="bin"
                     maxLength={12}
-                    placeholder="12 цифр"
+                    aria-invalid={fieldError.bin ? true : undefined}
+                    data-invalid={fieldError.bin ? "true" : undefined}
                     value={companyBin}
                     onChange={(e) => setCompanyBin(e.target.value.replace(/\D/g, "").slice(0, 12))}
                   />
+                  {fieldError.bin ? <FieldNote>{fieldError.bin}</FieldNote> : null}
                 </label>
               </div>
 
-              <div className="grid sm:grid-cols-2 gap-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
-                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Город</span>
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Город</span>
                   <input
-                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900"
                     required
                     autoComplete="address-level2"
+                    data-field="city"
+                    aria-invalid={fieldError.city ? true : undefined}
+                    data-invalid={fieldError.city ? "true" : undefined}
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
                   />
+                  {fieldError.city ? <FieldNote>{fieldError.city}</FieldNote> : null}
                 </label>
                 <label className="block">
-                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">{m.phone}</span>
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">{m.phone}</span>
                   <input
-                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900"
                     required
                     type="tel"
                     autoComplete="tel"
-                    placeholder="+7 707 000 00 00"
+                    data-field="phone"
+                    aria-invalid={fieldError.phone ? true : undefined}
+                    data-invalid={fieldError.phone ? "true" : undefined}
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                   />
+                  {fieldError.phone ? <FieldNote>{fieldError.phone}</FieldNote> : null}
                 </label>
               </div>
 
               <label className="block">
-                <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Контактное лицо</span>
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Контактное лицо</span>
                 <input
-                  className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900"
                   required
                   autoComplete="name"
-                  placeholder="Имя и фамилия"
+                  data-field="name"
+                  aria-invalid={fieldError.name ? true : undefined}
+                  data-invalid={fieldError.name ? "true" : undefined}
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                 />
+                {fieldError.name ? <FieldNote>{fieldError.name}</FieldNote> : null}
               </label>
 
-              <div className="grid sm:grid-cols-2 gap-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
-                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Email</span>
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Email</span>
                   <input
-                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900"
                     type="email"
                     required
                     autoComplete="email"
-                    placeholder="email@company.kz"
+                    data-field="email"
+                    aria-invalid={fieldError.email ? true : undefined}
+                    data-invalid={fieldError.email ? "true" : undefined}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                   />
+                  {fieldError.email ? <FieldNote>{fieldError.email}</FieldNote> : null}
                 </label>
                 <label className="block">
-                  <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">{m.password}</span>
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Пароль, минимум 6 символов</span>
                   <input
-                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900"
                     type="password"
                     required
                     minLength={6}
                     autoComplete="new-password"
-                    placeholder="Минимум 6 символов"
+                    data-field="password"
+                    aria-invalid={fieldError.password ? true : undefined}
+                    data-invalid={fieldError.password ? "true" : undefined}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                   />
+                  {fieldError.password ? <FieldNote>{fieldError.password}</FieldNote> : null}
                 </label>
               </div>
 
@@ -348,18 +360,19 @@ export function LoginView({
               <label className="block">
                 <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Роль</span>
                 <select
-                  className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900"
                   required
                   value={role}
+                  data-field="role"
+                  aria-invalid={fieldError.role ? true : undefined}
+                  data-invalid={fieldError.role ? "true" : undefined}
                   onChange={(e) => setRole(e.target.value as RegRole)}
                 >
-                  <option value="" disabled>
-                    Выберите роль
-                  </option>
                   <option value="buyer">Заказчик</option>
                   <option value="contractor">Подрядчик</option>
                   <option value="supplier">Поставщик — позиция сразу в каталоге</option>
                 </select>
+                {fieldError.role ? <FieldNote>{fieldError.role}</FieldNote> : null}
               </label>
               )}
 
@@ -383,12 +396,15 @@ export function LoginView({
                   <label className="block">
                     <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Название позиции</span>
                     <input
-                      className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900"
                       required
-                      placeholder="Цемент М500"
+                      data-field="sku"
+                      aria-invalid={fieldError.sku ? true : undefined}
+                      data-invalid={fieldError.sku ? "true" : undefined}
                       value={skuTitle}
                       onChange={(e) => setSkuTitle(e.target.value)}
                     />
+                    {fieldError.sku ? <FieldNote>{fieldError.sku}</FieldNote> : null}
                   </label>
                   <div className="grid grid-cols-3 gap-3">
                     <label className="block">
@@ -402,20 +418,22 @@ export function LoginView({
                     <label className="block">
                       <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Цена, ₸</span>
                       <input
-                        className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900"
                         inputMode="numeric"
                         required
-                        placeholder="28500"
+                        data-field="price"
+                        aria-invalid={fieldError.price ? true : undefined}
+                        data-invalid={fieldError.price ? "true" : undefined}
                         value={skuPrice}
                         onChange={(e) => setSkuPrice(e.target.value.replace(/[^\d]/g, ""))}
                       />
+                      {fieldError.price ? <FieldNote>{fieldError.price}</FieldNote> : null}
                     </label>
                     <label className="block">
                       <span className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Остаток</span>
                       <input
                         className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
                         inputMode="decimal"
-                        placeholder="0"
                         value={skuStock}
                         onChange={(e) => setSkuStock(e.target.value.replace(/[^\d.]/g, ""))}
                       />
@@ -436,10 +454,11 @@ export function LoginView({
               </label>
               )}
 
-              <ConsentField locale={locale} checked={pdConsent} onChange={setPdConsent} />
+              <ConsentField locale={locale} checked={pdConsent} onChange={setPdConsent} invalid={Boolean(fieldError.consent)} />
+              {fieldError.consent ? <FieldNote>{fieldError.consent}</FieldNote> : null}
               <AiConsentField locale={locale} checked={aiConsent} onChange={setAiConsent} />
 
-              <button type="submit" disabled={busy || !pdConsent} className="btn-ice w-full font-bold text-sm shadow-navy justify-center mt-1 disabled:opacity-50">
+              <button type="submit" disabled={busy} className="btn-ice mt-1 w-full justify-center text-sm font-bold shadow-navy disabled:opacity-50">
                 {busy ? "Регистрация..." : role === "supplier" ? "Зарегистрировать и открыть каталог" : m.register}
               </button>
             </form>
@@ -464,7 +483,7 @@ export function LoginView({
               ? m.pilotLoginAside
               : "Компания входит по своим реквизитам. Поставщик указывает первую позицию, и она сразу появляется в каталоге материалов."}
           </p>
-          {PILOT_MODE || needsOwner ? null : (
+          {!signUp || needsOwner ? null : (
             <>
               <ul className="mt-5 grid gap-3 text-sm text-slate-700">
                 <li className="flex gap-2">
@@ -516,20 +535,32 @@ function AiConsentField({
   );
 }
 
+function FieldNote({ children }: { children: string }) {
+  return (
+    <p role="alert" className="mt-1 text-xs font-semibold text-red-700">
+      {children}
+    </p>
+  );
+}
+
 function ConsentField({
   locale,
   checked,
   onChange,
+  invalid = false,
 }: {
   locale: Locale;
   checked: boolean;
   onChange: (value: boolean) => void;
+  invalid?: boolean;
 }) {
   return (
     <label className="flex items-start gap-2.5 text-sm text-slate-700">
       <input
         type="checkbox"
         className="mt-1 h-4 w-4 accent-[#2F5B8A]"
+        data-field="consent"
+        aria-invalid={invalid || undefined}
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
       />

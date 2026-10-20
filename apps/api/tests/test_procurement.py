@@ -207,6 +207,8 @@ def _offer(owner: str, line_id: str, supplier: str, price: float, vat: bool | No
         "price_kzt": price,
         "vat_included": vat,
         "confirmed": True,
+        "source_kind": "file",
+        "source_label": "fixtures/kp.pdf",
         **extra,
     }
     res = client.post(f"/v1/procurement/lines/{line_id}/offers", json=payload, headers=_auth(owner))
@@ -261,6 +263,11 @@ def test_sheet_totals_best_price_and_duplicate_invoices():
     assert "price_invalid" in imported_codes
     assert "pos_missing" in imported_codes
     assert offer_import.json()["data"]["created"] == 1
+    held = client.get(f"/v1/procurement/requests/{rid}/sheet", headers=_auth(owner)).json()["data"]
+    lone = next(offer for row in held["lines"] if row["pos_no"] == "3" for offer in row["offers"])
+    assert lone["suspicious"] is True
+    reviewed = client.post(f"/v1/procurement/offers/{lone['id']}/confirm", headers=_auth(owner))
+    assert reviewed.status_code == 200, reviewed.text
 
     sheet = client.get(f"/v1/procurement/requests/{rid}/sheet", headers=_auth(owner))
     assert sheet.status_code == 200, sheet.text
@@ -471,7 +478,14 @@ def test_repeat_order_is_prefilled_and_editable():
     line_id = new_sheet["lines"][0]["id"]
     bid = client.post(
         f"/v1/procurement/lines/{line_id}/offers",
-        json={"supplier_name": "Другой", "price_kzt": 70, "vat_included": True, "confirmed": True},
+        json={
+            "supplier_name": "Другой",
+            "price_kzt": 70,
+            "vat_included": True,
+            "confirmed": True,
+            "source_kind": "url",
+            "source_label": "https://example.com/sup-price",
+        },
         headers=_auth(supplier_token),
     )
     assert bid.status_code == 200, bid.text

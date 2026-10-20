@@ -441,10 +441,18 @@ export type ProcRequestRow = {
   documents: number;
 };
 
+export type ProcPrevious = {
+  id: string;
+  number: number;
+  title: string;
+  lines: number;
+};
+
 export type ProcList = {
   requests: ProcRequestRow[];
   access: ProcAccess;
   vat_rate: number;
+  previous_completed?: ProcPrevious | null;
 };
 
 export type ProcOfferCell = {
@@ -463,6 +471,10 @@ export type ProcOfferCell = {
   is_best: boolean;
   is_selected: boolean;
   short: boolean;
+  price_tiyn?: number;
+  suspicious?: boolean;
+  suspicion_confirmed?: boolean;
+  source_kind?: string;
 };
 
 export type ProcSheetLine = {
@@ -587,6 +599,20 @@ export type ObjectBudgetView = {
   forecast_reason: "no_dates" | "early" | "actual" | "above_bound" | "ok";
   overrun_kzt: number;
   overrun_kind: "actual" | "forecast" | "none";
+  plan_vs_chosen?: {
+    lines: {
+      line_id: string;
+      title: string;
+      unit: string;
+      qty: number;
+      plan_kzt: number;
+      chosen_kzt: number;
+      saved_kzt: number;
+    }[];
+    plan_kzt: number;
+    chosen_kzt: number;
+    total_saved_kzt: number;
+  };
   savings: SavingsTotal;
   company: SavingsTotal & { name: string };
   expenses: ObjectExpenseRow[];

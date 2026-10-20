@@ -15,7 +15,6 @@ export const features = {
   estimateBaseDate: DEMO_MODE,
   land: DEMO_MODE,
   controlPanel: DEMO_MODE,
-  homeStage: DEMO_MODE,
 } as const;
 
 export const DEMO_ONLY_TABS = ["sub", "draw", "ks"] as const;

@@ -12,7 +12,8 @@ export default async function LoginPage({
   const { locale: raw } = await params;
   const query = await searchParams;
   const locale = raw as Locale;
-  const initialMode = PILOT_MODE || query.mode === "login" ? "login" : "register";
+  const initialMode =
+    query.mode === "register" ? "register" : query.mode === "login" || PILOT_MODE ? "login" : "register";
   return (
     <div>
       <LoginView locale={locale} initialMode={initialMode} />

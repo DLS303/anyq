@@ -239,30 +239,7 @@ textarea {
   background: rgba(255, 255, 255, 0.88);
 }
 
-/* The veil overlaps the pinned scene. A negative margin under
-   prefers-reduced-motion would cover the hero, so it stays gated. */
-.home-veil {
-  height: 5rem;
-  background: linear-gradient(to bottom, #101726, #f8fafc);
-}
-
 @media (prefers-reduced-motion: no-preference) {
-  .home-flow {
-    margin-top: -46vh;
-  }
-
-  .home-veil {
-    height: 46vh;
-    background: linear-gradient(
-      to bottom,
-      transparent 0%,
-      rgba(248, 250, 252, 0) 16%,
-      rgba(248, 250, 252, 0.42) 46%,
-      #f8fafc 76%,
-      #f8fafc 100%
-    );
-  }
-
   html.js-rise .home-rise {
     opacity: 0;
     transform: translateY(22px);

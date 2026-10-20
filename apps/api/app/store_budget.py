@@ -11,6 +11,7 @@ from app.budget_calc import (
     forecast_overrun,
     manual_actual,
     merge_fact,
+    plan_vs_chosen,
     planned_window,
     procurement_actual,
     signal_for,
@@ -173,6 +174,15 @@ def object_budget_view(store, project, user) -> dict:
     forecast = forecast_overrun(planned if plan else 0, fact, start, finish, today_date())
     savings = project_savings(store, project.id)
     company = company_savings(store, user)
+    compared = plan_vs_chosen(lines, offers, settings.vat_rate)
+    if not compared["lines"] and plan is not None and plan.materials_kzt is not None:
+        chosen = int(procured.get("materials") or 0)
+        compared = {
+            "lines": [],
+            "plan_kzt": int(plan.materials_kzt),
+            "chosen_kzt": chosen,
+            "total_saved_kzt": int(plan.materials_kzt) - chosen,
+        }
     return {
         "plan": {
             "set": plan is not None,
@@ -200,6 +210,7 @@ def object_budget_view(store, project, user) -> dict:
         "forecast_reason": forecast["forecast_reason"],
         "overrun_kzt": forecast["overrun_kzt"],
         "overrun_kind": forecast["overrun_kind"],
+        "plan_vs_chosen": compared,
         "savings": _savings_brief(savings),
         "company": {"name": company["company"], **_savings_brief(company)},
         "expenses": [_public_expense(item) for item in expenses],

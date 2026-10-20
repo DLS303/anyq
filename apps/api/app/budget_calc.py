@@ -53,7 +53,7 @@ def procurement_actual(
         materials += offer_spend(offer.price_kzt, offer.vat_included, line.qty, vat_rate)
         covered.add(line.request_id)
     for doc in documents:
-        if doc.duplicate_of or not doc.is_actual or doc.amount_kzt is None:
+        if doc.duplicate_of or not doc.is_actual or doc.amount_kzt is None or doc.deleted:
             continue
         if doc.request_id in covered:
             continue
@@ -196,6 +196,45 @@ def forecast_overrun(plan: int, fact: int, start: date | None, finish: date | No
             forecast_raw_kzt=raw,
         )
     return _forecast_payload(**window, forecast_kzt=raw, forecast_reason="ok", forecast_raw_kzt=raw)
+
+
+def plan_vs_chosen(lines: list[ProcLine], offers: list[ProcOffer], vat_rate: float) -> dict:
+    """Savings is the planned price minus the chosen offer, and the total of those gaps.
+
+    A line counts only when it has a plan price and a chosen offer that is allowed
+    into the comparison. Rounding happens once, on each line, then the totals add those.
+    """
+    by_id = {offer.id: offer for offer in offers}
+    rows: list[dict] = []
+    for line in lines:
+        if line.reference_price_kzt is None or not line.selected_offer_id:
+            continue
+        offer = by_id.get(line.selected_offer_id)
+        if offer is None or offer.line_id != line.id:
+            continue
+        if offer.suspicious and not offer.suspicion_confirmed:
+            continue
+        plan = round_kzt(offer_spend(line.reference_price_kzt, line.reference_vat_included, line.qty, vat_rate))
+        chosen = round_kzt(offer_spend(offer.price_kzt, offer.vat_included, line.qty, vat_rate))
+        rows.append(
+            {
+                "line_id": line.id,
+                "title": line.title,
+                "unit": line.unit,
+                "qty": line.qty,
+                "plan_kzt": plan,
+                "chosen_kzt": chosen,
+                "saved_kzt": plan - chosen,
+            }
+        )
+    plan_total = sum(row["plan_kzt"] for row in rows)
+    chosen_total = sum(row["chosen_kzt"] for row in rows)
+    return {
+        "lines": rows,
+        "plan_kzt": plan_total,
+        "chosen_kzt": chosen_total,
+        "total_saved_kzt": plan_total - chosen_total,
+    }
 
 
 def combine_savings(parts: list[dict]) -> dict:
