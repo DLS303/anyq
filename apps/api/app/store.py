@@ -3,10 +3,11 @@ import hmac
 import json
 import os
 import re
+import threading
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import get_args
 from uuid import uuid4
 
@@ -108,6 +109,24 @@ from app.site_models import (
     Timesheet,
     VoiceNote,
 )
+from app.sql_backend import (
+    COLLECTION_OF,
+    DICT_ATTRS,
+    Record,
+    SqlRuntime,
+    TrackedDict,
+    TrackedList,
+    _dump,
+    _production,
+    alloc_seq,
+    bump_revisions,
+    consent_event_from_record,
+    index_values,
+    json_db_file,
+    lock_meta,
+    utc_now,
+)
+from app.store_budget import dump_budget, load_budget
 from app.store_procurement import dump_lists, load_into
 from app.transitions import (
     MATERIAL_ORDER_TRANSITIONS,
@@ -115,6 +134,31 @@ from app.transitions import (
     assert_transition,
 )
 from app.trust import trust_score
+
+# Reads that hit indexed SQL and must not take the process lock or reload memory.
+SQL_DIRECT = frozenset(
+    {
+        "page_plots",
+        "page_materials",
+        "page_specialists",
+        "page_queue",
+        "page_deals",
+        "page_contacts",
+        "page_threads",
+        "get_user",
+        "get_user_by_email",
+        "has_current_pd_consent",
+        "has_ai_consent",
+        "login",
+        "material_public",
+        "specialist_public",
+        "public_materials",
+        "public_specialists",
+        "has_verification",
+        "rating_of",
+        "accept_invitation",
+    }
+)
 
 CADASTRE = re.compile(r"^\d{2}-\d{3}-\d{3}-\d{3}$")
 DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -241,10 +285,7 @@ class ConsentRequired(Exception):
 
 
 def db_file() -> Path:
-    override = os.getenv("ANYQ_DB_PATH", "").strip()
-    if override:
-        return Path(override)
-    return Path(__file__).resolve().parents[3] / "data" / "db.json"
+    return json_db_file()
 
 
 def mask_email(email: str) -> str:
@@ -276,54 +317,115 @@ def _now() -> str:
 
 class MemoryStore:
     def __init__(self) -> None:
-        self._lock = Lock()
-        self.users: dict[str, User] = {}
-        self.users_by_id: dict[str, User] = {}
-        self.plots: dict[str, Plot] = {}
-        self.inquiries: dict[str, Inquiry] = {}
-        self.favorites: list[Favorite] = []
-        self.searches: dict[str, SavedSearch] = {}
-        self.specialists: dict[str, Specialist] = {}
-        self.orders: dict[str, ServiceOrder] = {}
-        self.reviews: dict[str, Review] = {}
-        self.deals: dict[str, Deal] = {}
-        self.threads: dict[str, ChatThread] = {}
-        self.messages: dict[str, ChatMessage] = {}
-        self.credentials: dict[str, str] = {}
-        self.materials: dict[str, Material] = {}
-        self.material_orders: dict[str, MaterialOrder] = {}
-        self.projects: dict[str, Project] = {}
-        self.daily_logs: dict[str, DailyLog] = {}
-        self.rfis: dict[str, RFI] = {}
-        self.submittals: dict[str, Submittal] = {}
-        self.punches: dict[str, PunchItem] = {}
-        self.inspections: dict[str, Inspection] = {}
-        self.incidents: dict[str, Incident] = {}
-        self.drawings: dict[str, Drawing] = {}
-        self.schedule: dict[str, ScheduleTask] = {}
-        self.budget_lines: dict[str, BudgetLine] = {}
-        self.change_orders: dict[str, ChangeOrder] = {}
-        self.timesheets: dict[str, Timesheet] = {}
-        self.meetings: dict[str, Meeting] = {}
-        self.directory: dict[str, DirectoryRow] = {}
-        self.leads: dict[str, Lead] = {}
-        self.crm_contacts: dict[str, CrmContact] = {}
-        self.crm_activities: dict[str, CrmActivity] = {}
-        self.crm_invoices: dict[str, CrmInvoice] = {}
-        self.files: dict[str, StoredUpload] = {}
-        self.consents: list[ConsentRecord] = []
-        self.verifications: dict[str, VerificationRecord] = {}
-        self.proc_requests = {}
-        self.proc_lines = {}
-        self.proc_offers = {}
-        self.proc_docs = {}
-        self._load()
-        if demo_mode():
-            self._ensure_seed_users()
-            self._ensure_demo_passwords()
-            self._ensure_materials()
-            self._ensure_site()
-            self._ensure_crm()
+        object.__setattr__(self, "_ready", False)
+        self._lock = RLock()
+        self._local = threading.local()
+        self._seen_rev = -1
+        self._wraps: dict = {}
+        for name in DICT_ATTRS:
+            object.__setattr__(self, name, TrackedDict())
+        object.__setattr__(self, "favorites", TrackedList(lambda item: f"{item.user_id}:{item.plot_id}"))
+        object.__setattr__(self, "consents", TrackedList(lambda item: item.id))
+        self._sql = SqlRuntime()
+        self._bind_reads()
+        if _production() and not self._sql.schema_at_head():
+            object.__setattr__(self, "_schema_ok", False)
+            object.__setattr__(self, "_ready", True)
+            return
+        object.__setattr__(self, "_schema_ok", True)
+        boot = self._sql.bootstrap_lock()
+        try:
+            self._load()
+            if demo_mode():
+                self._ensure_seed_users()
+                self._ensure_demo_passwords()
+                self._ensure_materials()
+                self._ensure_site()
+                self._ensure_crm()
+        finally:
+            self._sql.bootstrap_unlock(boot)
+        self._stamp_revs(self._sql.revisions())
+        object.__setattr__(self, "_ready", True)
+
+    def _bind_reads(self) -> None:
+        def hook(bag) -> None:
+            self._sync_bag(bag)
+
+        for name in DICT_ATTRS:
+            bag = object.__getattribute__(self, name)
+            bag.on_read = hook
+            bag.collection = COLLECTION_OF[name]
+        for name in ("favorites", "consents"):
+            bag = object.__getattribute__(self, name)
+            bag.on_read = hook
+            bag.collection = name
+
+    def _collection_of(self, bag, name: str | None = None) -> str | None:
+        collection = getattr(bag, "collection", None)
+        if collection:
+            return collection
+        if name:
+            return COLLECTION_OF.get(name)
+        return None
+
+    def _stamp_revs(self, revs: dict) -> None:
+        for name in DICT_ATTRS:
+            bag = object.__getattribute__(self, name)
+            collection = self._collection_of(bag, name)
+            bag.synced_rev = int(revs.get(collection, revs.get("rev", 0)))
+        for name in ("favorites", "consents"):
+            bag = object.__getattribute__(self, name)
+            bag.synced_rev = int(revs.get(name, revs.get("rev", 0)))
+
+    def _mark_synced(self, collections: set[str], revs: dict) -> None:
+        if not collections:
+            return
+        for name in DICT_ATTRS:
+            bag = object.__getattribute__(self, name)
+            collection = self._collection_of(bag, name)
+            if collection in collections:
+                bag.synced_rev = int(revs.get(collection, 0))
+        for name in ("favorites", "consents"):
+            if name in collections:
+                bag = object.__getattribute__(self, name)
+                bag.synced_rev = int(revs.get(name, 0))
+
+    def _sync_bag(self, bag) -> None:
+        local = object.__getattribute__(self, "_local")
+        if getattr(local, "suspend", False):
+            return
+        revs = getattr(local, "revs", None)
+        if not revs:
+            return
+        collection = getattr(bag, "collection", None)
+        if not collection:
+            return
+        current = int(revs.get(collection, 0))
+        if getattr(bag, "synced_rev", None) == current:
+            return
+        if collection == "users":
+            by_id = object.__getattribute__(self, "users_by_id")
+            emails = object.__getattribute__(self, "users")
+            if by_id.dirty or by_id.deleted or emails.dirty or emails.deleted:
+                bag.synced_rev = current
+                return
+            target = by_id
+        elif isinstance(bag, TrackedDict) and (bag.dirty or bag.deleted) or isinstance(bag, TrackedList) and bag.mutated:
+            bag.synced_rev = current
+            return
+        else:
+            target = bag
+        local.suspend = True
+        try:
+            since = int(getattr(target, "last_seq", 0) or 0)
+            object.__getattribute__(self, "_sql").load_changes(self, collection, since)
+        finally:
+            local.suspend = False
+        if collection == "users":
+            object.__getattribute__(self, "users_by_id").synced_rev = current
+            object.__getattribute__(self, "users").synced_rev = current
+        else:
+            bag.synced_rev = current
 
     def _index_user(self, user: User) -> None:
         self.users[user.email.lower()] = user
@@ -404,6 +506,105 @@ class MemoryStore:
         if saved:
             self._save()
 
+    def __setattr__(self, name, value) -> None:
+        current = self.__dict__.get(name)
+        if isinstance(current, TrackedDict) and isinstance(value, dict) and not isinstance(value, TrackedDict):
+            current.replace(value)
+            return
+        if isinstance(current, TrackedList) and isinstance(value, list) and not isinstance(value, TrackedList):
+            current.replace(value)
+            return
+        object.__setattr__(self, name, value)
+
+    def __getattribute__(self, name):
+        attr = object.__getattribute__(self, name)
+        if name.startswith("_") or not callable(attr):
+            return attr
+        if not object.__getattribute__(self, "_ready"):
+            return attr
+        wraps = object.__getattribute__(self, "_wraps")
+        cached = wraps.get(name)
+        if cached is not None:
+            return cached
+
+        def wrapped(*args, **kwargs):
+            if name in SQL_DIRECT:
+                return attr(*args, **kwargs)
+            self._enter()
+            try:
+                return attr(*args, **kwargs)
+            finally:
+                self._leave()
+
+        wraps[name] = wrapped
+        return wrapped
+
+    def _pending(self) -> bool:
+        for name in DICT_ATTRS:
+            if name == "users":
+                continue
+            bag = object.__getattribute__(self, name)
+            if bag.dirty or bag.deleted:
+                return True
+        favorites = object.__getattribute__(self, "favorites")
+        consents = object.__getattribute__(self, "consents")
+        return bool(favorites.mutated or consents.mutated)
+
+    def _enter(self) -> None:
+        local = object.__getattribute__(self, "_local")
+        depth = getattr(local, "depth", 0)
+        if depth == 0:
+            self._lock.acquire()
+            local.depth = 1
+            try:
+                if self._pending():
+                    self._save_unlocked()
+                local.revs = object.__getattribute__(self, "_sql").revisions()
+                local.rev = int(local.revs.get("rev", 0))
+            except Exception:
+                local.depth = 0
+                local.rev = None
+                local.revs = None
+                self._lock.release()
+                raise
+            return
+        local.depth = depth + 1
+
+    def _leave(self) -> None:
+        local = object.__getattribute__(self, "_local")
+        local.depth = max(0, getattr(local, "depth", 1) - 1)
+        if local.depth == 0:
+            local.rev = None
+            local.revs = None
+            self._lock.release()
+
+    def _reload_if_stale(self) -> None:
+        sql = object.__getattribute__(self, "_sql")
+        revs = sql.revisions()
+        local = object.__getattribute__(self, "_local")
+        previous = getattr(local, "suspend", False)
+        local.suspend = True
+        try:
+            for name in DICT_ATTRS:
+                bag = object.__getattribute__(self, name)
+                collection = self._collection_of(bag, name)
+                if not collection or bag.dirty or bag.deleted:
+                    continue
+                current = int(revs.get(collection, 0))
+                if bag.synced_rev != current:
+                    sql.load_changes(self, collection, int(bag.last_seq or 0))
+                    bag.synced_rev = current
+            for name in ("favorites", "consents"):
+                bag = object.__getattribute__(self, name)
+                current = int(revs.get(name, 0))
+                if bag.mutated or bag.synced_rev == current:
+                    continue
+                sql.load_changes(self, name, int(bag.last_seq or 0))
+                bag.synced_rev = current
+        finally:
+            local.suspend = previous
+        object.__setattr__(self, "_seen_rev", int(revs.get("rev", 0)))
+
     def _seed_phase2(self) -> None:
         self.specialists = {s.id: deepcopy(s) for s in SPECIALISTS}
         self.orders = {o.id: deepcopy(o) for o in ORDERS}
@@ -413,6 +614,18 @@ class MemoryStore:
         self.messages = {m.id: deepcopy(m) for m in MESSAGES}
 
     def _load(self) -> None:
+        if self._sql.count() > 0:
+            self._sql.load_into(self)
+            self._seen_rev = self._sql.revision()
+            return
+        if _production():
+            self._seen_rev = self._sql.revision()
+            return
+        self._load_json()
+        self._save_unlocked()
+        self._seen_rev = self._sql.revision()
+
+    def _load_json(self) -> None:
         path = db_file()
         if not path.exists():
             if demo_mode():
@@ -449,6 +662,7 @@ class MemoryStore:
         self.budget_lines = {item["id"]: BudgetLine.model_validate(item) for item in raw.get("budget_lines", [])}
         self.change_orders = {item["id"]: ChangeOrder.model_validate(item) for item in raw.get("change_orders", [])}
         load_into(self, raw)
+        load_budget(self, raw)
         self.timesheets = {item["id"]: Timesheet.model_validate(item) for item in raw.get("timesheets", [])}
         self.meetings = {item["id"]: Meeting.model_validate(item) for item in raw.get("meetings", [])}
         self.directory = {item["id"]: DirectoryRow.model_validate(item) for item in raw.get("directory", [])}
@@ -479,9 +693,23 @@ class MemoryStore:
             self._save_unlocked()
 
     def _save_unlocked(self) -> None:
-        path = db_file()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
+        touched = self._sql.flush(self)
+        revs = self._sql.revisions()
+        self._seen_rev = int(revs.get("rev", 0))
+        self._mark_synced(touched, revs)
+
+    def _save(self) -> None:
+        with self._lock:
+            self._save_unlocked()
+
+    def db_path(self) -> str:
+        if self._sql.path:
+            return self._sql.path
+        return self._sql.url
+
+    def snapshot(self) -> dict:
+        """JSON-shaped export used by the one-time import report and backups."""
+        return {
             "plots": [p.model_dump() for p in self.plots.values()],
             "inquiries": [i.model_dump() for i in self.inquiries.values()],
             "favorites": [f.model_dump() for f in self.favorites],
@@ -497,7 +725,7 @@ class MemoryStore:
             "threads": [t.model_dump() for t in self.threads.values()],
             "messages": [m.model_dump() for m in self.messages.values()],
             "users": [u.model_dump() for u in self.users_by_id.values()],
-            "credentials": self.credentials,
+            "credentials": dict(self.credentials),
             "materials": [m.model_dump() for m in self.materials.values()],
             "material_orders": [o.model_dump() for o in self.material_orders.values()],
             "projects": [p.model_dump() for p in self.projects.values()],
@@ -518,23 +746,36 @@ class MemoryStore:
             "consents": [x.model_dump() for x in self.consents],
             "verifications": [x.model_dump() for x in self.verifications.values()],
             **dump_lists(self),
+            **dump_budget(self),
         }
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
-
-    def _save(self) -> None:
-        with self._lock:
-            self._save_unlocked()
-
-    def db_path(self) -> str:
-        return str(db_file())
 
     def get_user_by_email(self, email: str) -> User | None:
-        return self.users.get(email.lower().strip())
+        key = email.lower().strip()
+        emails = object.__getattribute__(self, "users")
+        if key in emails.deleted:
+            return None
+        if key in emails.dirty:
+            return emails.peek(key)
+        by_id = object.__getattribute__(self, "users_by_id")
+        for user_id in by_id.dirty:
+            user = by_id.peek(user_id)
+            if user is not None and user.email.lower() == key:
+                return user
+        payload = self._sql.fetch_user_by_email(key)
+        if payload is None:
+            return None
+        return User.model_validate(payload)
 
     def get_user(self, user_id: str) -> User | None:
-        return self.users_by_id.get(user_id)
+        by_id = object.__getattribute__(self, "users_by_id")
+        if user_id in by_id.deleted:
+            return None
+        if user_id in by_id.dirty:
+            return by_id.peek(user_id)
+        payload = self._sql.fetch_payload("users", user_id)
+        if payload is None:
+            return None
+        return User.model_validate(payload)
 
     def list_plots(
         self,
@@ -847,27 +1088,41 @@ class MemoryStore:
 
 
     def rating_of(self, specialist_id: str) -> tuple[float, int]:
-        stars = [r.stars for r in self.reviews.values() if r.specialist_id == specialist_id]
-        if not stars:
+        total, count = self._sql.review_stats([specialist_id]).get(specialist_id, (0, 0))
+        if not count:
             return 0.0, 0
-        return round(sum(stars) / len(stars), 2), len(stars)
+        return round(total / count, 2), count
 
     def specialist_public(self, spec: Specialist) -> dict:
-        avg, n = self.rating_of(spec.id)
-        data = spec.model_dump()
-        data["license_verified"] = self.has_verification("specialist", spec.id, "license")
-        return {**data, "rating": avg, "reviews_count": n}
+        return self.public_specialists([spec])[0]
+
+    def public_specialists(self, items: list[Specialist]) -> list[dict]:
+        ids = [item.id for item in items]
+        flagged = self._sql.subject_ids("specialist", "license", ids)
+        stats = self._sql.review_stats(ids)
+        out = []
+        for item in items:
+            data = item.model_dump()
+            data["license_verified"] = item.id in flagged
+            total, count = stats.get(item.id, (0, 0))
+            avg = round(total / count, 2) if count else 0.0
+            out.append({**data, "rating": avg, "reviews_count": count})
+        return out
 
     def material_public(self, item: Material) -> dict:
-        data = item.model_dump()
-        data["certified_rk"] = self.has_verification("material", item.id, "certification_rk")
-        return data
+        return self.public_materials([item])[0]
+
+    def public_materials(self, items: list[Material]) -> list[dict]:
+        flagged = self._sql.subject_ids("material", "certification_rk", [item.id for item in items])
+        out = []
+        for item in items:
+            data = item.model_dump()
+            data["certified_rk"] = item.id in flagged
+            out.append(data)
+        return out
 
     def has_verification(self, subject_type: str, subject_id: str, kind: str) -> bool:
-        return any(
-            row.subject_type == subject_type and row.subject_id == subject_id and row.kind == kind
-            for row in self.verifications.values()
-        )
+        return subject_id in self._sql.subject_ids(subject_type, kind, [subject_id])
 
     def grant_verification(self, user: User, body: VerificationCreate) -> VerificationRecord:
         if user.role not in ("admin", "moderator"):
@@ -1818,11 +2073,26 @@ class MemoryStore:
     def _consent_is_active(self, row: ConsentRecord | None) -> bool:
         return row is not None and row.action == "grant" and not row.revoked_at
 
+    def _consent_active(self, user_id: str, kind: str, version: str) -> bool:
+        consents = object.__getattribute__(self, "consents")
+        if consents.mutated:
+            return self._consent_is_active(self._latest_consent(user_id, kind, version))
+        latest = None
+        for payload in self._sql.consent_payloads(user_id):
+            if payload.get("user_id") != user_id or payload.get("type") != kind:
+                continue
+            if payload.get("text_version") != version:
+                continue
+            latest = payload
+        if latest is None:
+            return False
+        return latest.get("action") == "grant" and not latest.get("revoked_at")
+
     def has_current_pd_consent(self, user_id: str) -> bool:
-        return self._consent_is_active(self._latest_consent(user_id, "offer_pd", PD_VERSION))
+        return self._consent_active(user_id, "offer_pd", PD_VERSION)
 
     def has_ai_consent(self, user_id: str) -> bool:
-        return self._consent_is_active(self._latest_consent(user_id, "ai", ai_document().version))
+        return self._consent_active(user_id, "ai", ai_document().version)
 
     def _append_consent_unlocked(self, user: User, ip: str, user_agent: str) -> ConsentRecord:
         privacy = privacy_document()
@@ -1956,7 +2226,7 @@ class MemoryStore:
             raise ValueError("БИН должен быть из 12 цифр")
         if len(phone) < 6:
             raise ValueError("Укажите телефон")
-        first_owner = not self.users_by_id
+        first_owner = self._sql.count_collection("users") == 0
         if first_owner:
             role = "owner"
         elif body.role not in ("buyer", "contractor", "supplier"):
@@ -1973,7 +2243,10 @@ class MemoryStore:
         if self.get_user_by_email(email):
             raise ValueError("Такой email уже зарегистрирован")
         pilot = _pilot_flag(body.pilot)
+        password_hash = hash_password(body.password)
         with self._lock:
+            if self.get_user_by_email(email):
+                raise ValueError("Такой email уже зарегистрирован")
             uid = f"u-{uuid4().hex[:8]}"
             user = User(
                 id=uid,
@@ -1987,7 +2260,7 @@ class MemoryStore:
                 pilot=pilot,
             )
             self._index_user(user)
-            self.credentials[uid] = hash_password(body.password)
+            self.credentials[uid] = password_hash
             if role == "supplier":
                 mid = f"mat-{uuid4().hex[:8]}"
                 title = body.sku_title.strip()
@@ -2027,10 +2300,18 @@ class MemoryStore:
         ip: str = "",
         user_agent: str = "",
     ) -> tuple[User, str]:
+        if self._pending():
+            with self._lock:
+                if self._pending():
+                    self._save_unlocked()
         user = self.get_user_by_email(email)
         if not user:
             raise ValueError("Неверный email или пароль")
-        stored = self.credentials.get(user.id, "")
+        if user.id in object.__getattribute__(self, "credentials").dirty:
+            stored = object.__getattribute__(self, "credentials").peek(user.id, "")
+        else:
+            payload = self._sql.fetch_payload("credentials", user.id) or {}
+            stored = str(payload.get("password_hash") or "")
         if not stored or not verify_password(password, stored):
             raise ValueError("Неверный email или пароль")
         if not self.has_current_pd_consent(user.id):
@@ -2572,6 +2853,237 @@ class MemoryStore:
             self.change_orders[item.id] = item
             self._save_unlocked()
             return item
+
+    def page_plots(self, *, limit: int, offset: int, **kwargs):
+        return self._sql.page(
+            self,
+            "plots",
+            limit=limit,
+            offset=offset,
+            order="price",
+            status=kwargs.get("status"),
+            owner_id=kwargs.get("owner_id"),
+            category=kwargs.get("purpose"),
+            district=kwargs.get("district"),
+            gas=kwargs.get("gas"),
+            electricity=kwargs.get("electricity"),
+            water=kwargs.get("water"),
+            verified=kwargs.get("verified"),
+            q=kwargs.get("q"),
+            lat=kwargs.get("lat"),
+            lng=kwargs.get("lng"),
+            radius_km=kwargs.get("radius_km"),
+        )
+
+    def page_materials(self, *, limit: int, offset: int, category: str | None = None, q: str | None = None):
+        return self._sql.page(
+            self,
+            "materials",
+            limit=limit,
+            offset=offset,
+            order="price",
+            category=category,
+            q=q,
+            published=True,
+        )
+
+    def page_specialists(self, *, limit: int, offset: int, category: str | None = None, q: str | None = None):
+        return self._sql.page(self, "specialists", limit=limit, offset=offset, category=category, q=q)
+
+    def page_queue(self, *, limit: int, offset: int):
+        return self._sql.page(
+            self,
+            "plots",
+            limit=limit,
+            offset=offset,
+            status=("pending", "needs_revision"),
+        )
+
+    def page_deals(self, user: User, *, limit: int, offset: int, funnel: str | None = None, q: str | None = None):
+        filters: dict = {"order": "created_desc", "category": funnel, "q": q}
+        if user.role != "admin":
+            filters["company_key_via_links"] = company_key(user)
+        return self._sql.page(self, "deals", limit=limit, offset=offset, **filters)
+
+    def page_contacts(self, user: User, *, limit: int, offset: int, q: str | None = None, ctype: str | None = None):
+        filters: dict = {"order": "created_desc", "category": ctype, "q": q}
+        if user.role != "admin":
+            filters["company_key"] = company_key(user)
+        return self._sql.page(self, "crm_contacts", limit=limit, offset=offset, **filters)
+
+    def accept_invitation(
+        self,
+        row,
+        *,
+        email: str,
+        password: str,
+        full_name: str,
+        phone: str,
+        ip: str = "",
+        user_agent: str = "",
+    ) -> tuple[User, str]:
+        from sqlalchemy import select, text
+        from sqlalchemy.exc import IntegrityError
+
+        from app.invitations import InvitationClosed
+        from app.sql_backend import InvitationRow
+
+        normalized = email.lower().strip()
+        contact = full_name.strip()
+        phone_text = phone.strip()
+        if "@" not in normalized or "." not in normalized:
+            raise ValueError("Некорректный email")
+        if len(password) < 6:
+            raise ValueError("Пароль минимум 6 символов")
+        if len(contact) < 2:
+            raise ValueError("Укажите контактное лицо")
+        if len(phone_text) < 6:
+            raise ValueError("Укажите телефон")
+        password_hash = hash_password(password)
+        uid = f"u-{uuid4().hex[:8]}"
+        user = User(
+            id=uid,
+            email=normalized,
+            full_name=contact,
+            role=row.role,  # type: ignore[arg-type]
+            phone=phone_text,
+            company=row.company or "",
+            company_bin=row.company_bin or "",
+            city="Алматы",
+        )
+        privacy = privacy_document()
+        consent = ConsentRecord(
+            id=f"c-{uuid4().hex[:12]}",
+            user_id=uid,
+            type="offer_pd",
+            text_version=PD_VERSION,
+            text_sha256=pd_sha256(),
+            granted_at=_now(),
+            action="grant",
+            ip=ip,
+            user_agent=user_agent,
+            login=user.email,
+            privacy_version=privacy.version,
+            privacy_sha256=privacy.sha256,
+        )
+        directory = None
+        if row.project_id:
+            directory = DirectoryRow(
+                id=f"dir-{uuid4().hex[:8]}",
+                project_id=row.project_id,
+                user_id=uid,
+                company=row.company or "",
+                role_on_site=row.role,
+            )
+        now = utc_now()
+        session = self._sql.factory()
+        user_seq = cred_seq = dir_seq = consent_seq = 0
+        try:
+            result = session.execute(
+                text(
+                    """
+                    UPDATE invitations
+                    SET used_at = :now, used_by = :uid
+                    WHERE id = :id
+                      AND used_at IS NULL
+                      AND revoked_at IS NULL
+                      AND expires_at > :now
+                    """
+                ),
+                {"now": now, "uid": uid, "id": row.id},
+            )
+            if result.rowcount != 1:
+                current = session.get(InvitationRow, row.id)
+                if current is not None and current.revoked_at:
+                    code = "revoked"
+                    message = "Приглашение отозвано"
+                elif current is not None and current.used_at:
+                    code = "used"
+                    message = "Приглашение уже использовано"
+                else:
+                    code = "expired"
+                    message = "Срок приглашения истёк"
+                session.rollback()
+                raise InvitationClosed(code, message)
+            taken = session.scalar(
+                select(Record.doc_id).where(Record.collection == "users", Record.email == normalized).limit(1)
+            )
+            if taken:
+                session.rollback()
+                raise ValueError("Такой email уже зарегистрирован")
+            needed = {"rev", "users", "credentials", "consents"}
+            if directory is not None:
+                needed.add("directory")
+            lock_meta(session, needed)
+
+            def put(collection: str, doc_id: str, value) -> int:
+                seq = alloc_seq(session, collection)
+                payload = _dump(value)
+                fields = index_values(self, collection, doc_id, payload)
+                session.add(
+                    Record(
+                        collection=collection,
+                        doc_id=doc_id,
+                        seq=seq,
+                        row_version=1,
+                        payload=payload,
+                        **fields,
+                    )
+                )
+                return seq
+
+            user_seq = put("users", uid, user)
+            cred_seq = put("credentials", uid, password_hash)
+            company_id = company_key(user)
+            consent_seq = alloc_seq(session, "consents")
+            event = consent_event_from_record(consent, company_id)
+            event.seq = consent_seq
+            session.add(event)
+            if directory is not None:
+                dir_seq = put("directory", directory.id, directory)
+            session.flush()
+            collections = {"users", "credentials", "consents"}
+            allocated = {"users", "credentials", "consents"}
+            if directory is not None:
+                collections.add("directory")
+                allocated.add("directory")
+            bump_revisions(session, collections, seq_collections=allocated)
+            session.commit()
+        except (InvitationClosed, ValueError):
+            raise
+        except IntegrityError as exc:
+            session.rollback()
+            raise ValueError("Такой email уже зарегистрирован") from exc
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+        with self._lock:
+            local = self._local
+            local.suspend = True
+            try:
+                self.users_by_id.adopt(uid, user, 1, user_seq)
+                self.users.adopt(normalized, user, 1, user_seq)
+                self.credentials.adopt(uid, password_hash, 1, cred_seq)
+                self.consents.adopt_item(consent, consent_seq)
+                if directory is not None:
+                    self.directory.adopt(directory.id, directory, 1, dir_seq)
+                self._mark_synced({"users", "credentials", "consents", "directory"}, self._sql.revisions())
+            finally:
+                local.suspend = False
+        return user, make_token(uid)
+
+    def page_threads(self, user: User, *, limit: int, offset: int):
+        items, total = self._sql.page(
+            self,
+            "threads",
+            limit=limit,
+            offset=offset,
+            order="created_desc",
+            participant_id=user.id,
+        )
+        return items, total
 
 
 store = MemoryStore()

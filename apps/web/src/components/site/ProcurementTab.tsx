@@ -8,6 +8,7 @@ import {
   downloadProc,
   fetchProcPicker,
   fetchProcRequests,
+  fetchProcSavings,
   fetchProcSheet,
   fetchProjects,
   importProcLines,
@@ -17,6 +18,7 @@ import {
   quickProcRequest,
   repeatProcRequest,
   selectProcBest,
+  selectProcOffer,
   setProcDocumentActual,
   uploadProcDocument,
 } from "@/lib/api";
@@ -24,7 +26,9 @@ import { useAuth } from "@/lib/auth";
 import { ErrorRetry, LoadingSkeleton, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { toast } from "@/lib/toast";
 import { t } from "@/i18n/messages";
-import type { Locale, ProcImportResult, ProcOfferCell, ProcSheet, ProcSheetLine } from "@/lib/types";
+import type { Locale, Overprice, ProcImportResult } from "@/lib/types";
+import { PriceCompare } from "./PriceCompare";
+import { SavingsBanner } from "./SavingsBanner";
 
 const field = "w-full min-h-12 border border-ink/15 bg-white px-3 text-sm";
 const primary =
@@ -80,29 +84,10 @@ function issueText(code: string, m: Copy) {
   }
 }
 
-function statusText(code: ProcSheetLine["status_code"], m: Copy) {
-  switch (code) {
-    case "no_price":
-      return m.procNoOffers;
-    case "one_offer":
-      return m.procOneOffer;
-    case "no_compare":
-      return m.procNoCompare;
-    default:
-      return m.procCompared;
-  }
-}
-
 function requestStatus(status: string, m: Copy) {
   if (status === "decided") return m.procStatusDecided;
   if (status === "collecting") return m.procStatusCollecting;
   return m.procStatusDraft;
-}
-
-function vatText(value: boolean | null, m: Copy) {
-  if (value === true) return m.procVatYes;
-  if (value === false) return m.procVatNo;
-  return m.procVatUnknown;
 }
 
 function StatementImport({
@@ -231,6 +216,7 @@ export function ProcurementTab({
   const listQuery = useAsync(() => fetchProcRequests(projectId), [projectId]);
   const priceId = screen.kind === "prices" ? screen.requestId : null;
   const sheetQuery = useAsync(() => (priceId ? fetchProcSheet(priceId) : Promise.resolve(null)), [priceId]);
+  const savingsQuery = useAsync(() => (priceId ? fetchProcSavings(priceId) : Promise.resolve(null)), [priceId]);
   const pickerQuery = useAsync(() => fetchProcPicker(projectId, needle), [projectId, needle]);
   const projectsQuery = useAsync(async () => {
     const rows = await fetchProjects();
@@ -249,14 +235,20 @@ export function ProcurementTab({
   const reload = () => {
     listQuery.reload();
     sheetQuery.reload();
+    savingsQuery.reload();
     pickerQuery.reload();
   };
   const sendForm = useGuardedSubmit(m.procSent, m.hubSaveError, reload);
   const repeatForm = useGuardedSubmit(m.procRepeated, m.hubSaveError, reload);
   const saveForm = useGuardedSubmit(m.procSaveQty, m.hubSaveError, reload);
   const offerForm = useGuardedSubmit(m.procSavedOffer, m.hubSaveError, reload);
-  const winnerForm = useGuardedSubmit(m.procSelected, m.hubSaveError, () => sheetQuery.reload());
+  const winnerForm = useGuardedSubmit(m.procSelected, m.hubSaveError, () => {
+    sheetQuery.reload();
+    savingsQuery.reload();
+  });
   const sheet = sheetQuery.data;
+  const savings = savingsQuery.data;
+  const overByOffer = new Map((savings?.overprice || []).map((item) => [item.offer_id, item]));
 
   useEffect(() => {
     if (sheet?.lines[0] && !sheet.lines.some((line) => line.id === lineId)) setLineId(sheet.lines[0].id);
@@ -317,21 +309,12 @@ export function ProcurementTab({
     }
   }
 
-  function priceCell(offer: ProcOfferCell | null, lineQty: number) {
-    if (!offer) return <span className="text-ink/40">—</span>;
-    return (
-      <span className="block">
-        <span className={offer.is_best ? "font-semibold" : ""}>{tenge(offer.price_kzt, locale)}</span>
-        <span className="mt-1 block text-xs text-ink/60">
-          {vatText(offer.vat_included, m)}
-          {offer.is_best ? ` · ${m.procBest}` : ""}
-          {offer.is_selected ? " · ✓" : ""}
-        </span>
-        {offer.short && offer.qty_available != null ? (
-          <span className="mt-1 block text-xs text-ink/60">{fill(m.procShort, { n: offer.qty_available, m: lineQty })}</span>
-        ) : null}
-      </span>
-    );
+  function aboveMarket(item: Overprice) {
+    return fill(m.savingsAbove, {
+      per: Math.round(item.per_unit),
+      unit: item.unit,
+      pct: Math.round(item.pct * 100),
+    });
   }
 
   let stepLabel = "";
@@ -555,6 +538,7 @@ export function ProcurementTab({
                   })}
                 </p>
               </div>
+              {savings ? <SavingsBanner locale={locale} savings={savings} /> : null}
               {access.can_decide ? (
                 <button
                   type="button"
@@ -569,52 +553,22 @@ export function ProcurementTab({
                   {m.procWinnerBtn}
                 </button>
               ) : null}
-              <div className="max-w-full overflow-x-auto rounded-2xl border border-ink/10">
-                <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
-                  <thead>
-                    <tr>
-                      <th className="sticky left-0 z-20 min-w-[8rem] max-w-[10rem] bg-paper px-3 py-3 text-left">{m.procLine}</th>
-                      {sheet.suppliers.map((item) => (
-                        <th key={item.name} className="min-w-36 bg-paper px-3 py-3 text-left font-medium">
-                          {item.name}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sheet.lines.map((line) => (
-                      <tr key={line.id}>
-                        <th className="sticky left-0 z-10 min-w-[8rem] max-w-[10rem] bg-paper px-3 py-3 text-left align-top font-normal">
-                          <span className="block break-words font-medium">{line.title}</span>
-                          <span className="text-xs text-ink/60">
-                            {line.qty} {line.unit} · {statusText(line.status_code, m)}
-                          </span>
-                        </th>
-                        {sheet.suppliers.map((item) => {
-                          const offer = line.cells[item.name] || null;
-                          return (
-                            <td
-                              key={item.name}
-                              className={`px-3 py-3 align-top ${offer?.is_best ? "bg-emerald-100" : ""}`}
-                            >
-                              {priceCell(offer, line.qty)}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                    <tr>
-                      <th className="sticky left-0 z-10 bg-paper px-3 py-3 text-left">{m.procTotal}</th>
-                      {sheet.suppliers.map((item) => (
-                        <td key={item.name} className="px-3 py-3 font-medium">
-                          {tenge(item.total_kzt, locale)}
-                          {item.vat_mixed ? <span className="mt-1 block text-xs font-normal text-ink/60">{m.procVatMixed}</span> : null}
-                        </td>
-                      ))}
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              <PriceCompare
+                locale={locale}
+                lines={sheet.lines}
+                suppliers={sheet.suppliers}
+                canDecide={access.can_decide}
+                pending={winnerForm.submitting}
+                warnOf={(offerId) => {
+                  const warn = overByOffer.get(offerId);
+                  return warn ? aboveMarket(warn) : undefined;
+                }}
+                onSelect={(lineId, offerId) =>
+                  void winnerForm.submit(async (key) => {
+                    await selectProcOffer(lineId, offerId, key);
+                  })
+                }
+              />
               <details className="rounded-2xl border border-ink/10 bg-white/70 px-4 py-1">
                 <summary className="cursor-pointer py-3 text-sm">{m.procMore}</summary>
                 <div className="grid gap-4 pb-4">

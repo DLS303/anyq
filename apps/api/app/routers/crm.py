@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.deps import require_user
 from app.schemas import (
@@ -14,6 +14,7 @@ from app.schemas import (
     LeadCreate,
     User,
 )
+from app.sql_backend import page_body
 from app.store import store
 
 router = APIRouter(prefix="/v1/crm", tags=["crm"])
@@ -36,8 +37,30 @@ def funnels():
 
 
 @router.get("/deals")
-def deals(funnel: str | None = None, user: User = Depends(require_user)):
-    return {"ok": True, "data": store.list_deals(user, funnel)}
+def deals(
+    funnel: str | None = None,
+    q: str | None = None,
+    user: User = Depends(require_user),
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    if limit is None and not q:
+        items = store.list_deals(user, funnel)
+        return {"ok": True, "data": items, "total": len(items)}
+    if limit is None:
+        items = store.list_deals(user, funnel)
+        needle = q.lower()
+        items = [
+            deal
+            for deal in items
+            if needle in deal.title.lower()
+            or needle in (deal.client_name or "").lower()
+            or needle in (deal.client_phone or "")
+            or needle in (deal.plot_title or "").lower()
+        ]
+        return {"ok": True, "data": items, "total": len(items)}
+    items, total = store.page_deals(user, limit=limit, offset=offset, funnel=funnel, q=q)
+    return page_body(items, total, limit, offset)
 
 
 @router.post("/deals")
@@ -87,8 +110,18 @@ def convert_lead(lead_id: str, body: LeadConvert, user: User = Depends(require_u
 
 
 @router.get("/contacts")
-def contacts(q: str | None = None, ctype: str | None = None, user: User = Depends(require_user)):
-    return {"ok": True, "data": store.list_crm_contacts(user, q, ctype)}
+def contacts(
+    q: str | None = None,
+    ctype: str | None = None,
+    user: User = Depends(require_user),
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    if limit is None:
+        items = store.list_crm_contacts(user, q, ctype)
+        return {"ok": True, "data": items, "total": len(items)}
+    items, total = store.page_contacts(user, limit=limit, offset=offset, q=q, ctype=ctype)
+    return page_body(items, total, limit, offset)
 
 
 @router.post("/contacts")

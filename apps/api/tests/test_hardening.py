@@ -1,10 +1,17 @@
 import time
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import inspect, text
 
 from app.authutil import hash_password
 from app.main import app
-from app.ratelimit import login_limiter
+from app.ratelimit import (
+    LoginRateLimiter,
+    RateLimited,
+    login_hash_secret,
+    login_limiter,
+)
 from app.store import store
 
 client = TestClient(app)
@@ -41,6 +48,13 @@ def _demo(user_id: str, email: str, password: str) -> str:
     )
     assert res.status_code == 200, res.text
     return res.json()["data"]["token"]
+
+
+def test_healthz_is_liveness_only():
+    res = client.get("/healthz")
+    assert res.status_code == 200
+    body = res.json()
+    assert body == {"ok": True}
 
 
 def test_security_headers_on_api():
@@ -237,15 +251,55 @@ def test_login_rate_limit_is_per_account_and_ip(monkeypatch):
     locked = attempt("secret12")
     assert locked.status_code == 429
 
-    other_ip = attempt("wrong-pass", ip="203.0.113.11")
+    same_bucket = attempt("wrong-pass", ip="203.0.113.50")
+    assert same_bucket.status_code == 429
+    other_ip = attempt("wrong-pass", ip="198.51.100.10")
     assert other_ip.status_code == 401
     other_account = attempt("wrong-pass", account="someone-else@example.com")
     assert other_account.status_code == 401
 
+    shared = False
+    try:
+        LoginRateLimiter().check(email, "203.0.113.10")
+    except RateLimited:
+        shared = True
+    assert shared
+
     clock["now"] += 600
     allowed = attempt("secret12")
     assert allowed.status_code == 200, allowed.text
-    assert login_limiter._failures.get((email, "203.0.113.10"), []) == []
+    assert login_limiter.count(email, "203.0.113.10") == 0
+
+
+def test_login_hash_secret_is_separate_and_required(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "another-jwt-secret-value-with-32-characters")
+    first = login_hash_secret()
+    monkeypatch.setenv("LOGIN_HASH_SECRET", "replacement-login-hash-secret-32-characters")
+    assert login_hash_secret() != first
+    monkeypatch.setenv("ANYQ_ENV", "production")
+    monkeypatch.delenv("LOGIN_HASH_SECRET", raising=False)
+    with pytest.raises(RuntimeError, match="LOGIN_HASH_SECRET"):
+        login_hash_secret()
+
+
+def test_login_failures_store_a_hash_and_expire():
+    login_limiter.record_failure("Person@Example.com", "203.0.113.10")
+    columns = {column["name"] for column in inspect(store._sql.engine).get_columns("login_failures")}
+    assert "account" not in columns
+    assert "ip" not in columns
+    with store._sql.factory() as session:
+        stored = session.execute(text("SELECT key_hash FROM login_failures")).scalar()
+    assert stored
+    assert "example.com" not in stored
+    assert "203.0.113" not in stored
+    assert login_limiter.count("person@example.com", "203.0.113.20") == 1
+    with store._sql.factory() as session:
+        session.execute(text("UPDATE login_failures SET created_at = :old"), {"old": time.time() - 90_000})
+        session.commit()
+    login_limiter.record_failure("other@example.com", "198.51.100.8")
+    with store._sql.factory() as session:
+        left = session.execute(text("SELECT count(*) FROM login_failures")).scalar()
+    assert left == 1
 
 
 def test_cross_border_consent_is_appended():

@@ -250,7 +250,9 @@ export function CrmBoard({ locale }: { locale: Locale }) {
 
       {activeTab === "deals" && viewMode === "list" && (
         <CrmListView
-          deals={deals}
+          email={user?.email ?? ""}
+          funnel={funnel}
+          refreshKey={deals.map((deal) => `${deal.id}:${deal.stage}`).join(",")}
           stages={stages}
           locale={locale}
           onSelectDeal={(d) => setSelectedDeal(d)}

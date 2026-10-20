@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
-import { fetchChatPeers, fetchMessages, fetchThreads, openChatThread, sendChat, type ChatPeer } from "@/lib/api";
-import { PageNav, usePaged } from "@/components/ui/PagedList";
+import { fetchChatPeers, fetchMessages, fetchThreadsPage, openChatThread, sendChat, type ChatPeer } from "@/lib/api";
+import { PageNav, useServerPaged } from "@/components/ui/PagedList";
 import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
 import type { ChatMessage, Locale } from "@/lib/types";
 import { t } from "@/i18n/messages";
@@ -20,11 +20,12 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
   const [starting, setStarting] = useState(false);
   const [extra, setExtra] = useState<ChatMessage[]>([]);
   const [shown, setShown] = useState(MESSAGE_PAGE);
-  const threadsQuery = useAsync(
-    (signal) => (user ? fetchThreads(user.email, signal) : Promise.resolve([])),
-    [user?.email],
+  const threadPages = useServerPaged(
+    user?.email ?? "",
+    (page, signal) => (user ? fetchThreadsPage(user.email, page, 20, signal) : Promise.resolve({ items: [], total: 0 })),
+    20,
   );
-  const threads = threadsQuery.data ?? [];
+  const threads = threadPages.slice;
   const peersQuery = useAsync(
     (signal) => (user ? fetchChatPeers(signal) : Promise.resolve([] as ChatPeer[])),
     [user?.email],
@@ -45,7 +46,6 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
   }, [active]);
   const messages = extra.length && messagesQuery.data ? [...messagesQuery.data, ...extra] : (messagesQuery.data ?? []);
   const visible = messages.slice(Math.max(0, messages.length - shown));
-  const threadPages = usePaged(threads, user?.email ?? "", 20);
 
   if (!user) {
     return (
@@ -77,7 +77,7 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
     setSendError("");
     try {
       const thread = await openChatThread(peer.id, peer.full_name);
-      await threadsQuery.reload();
+      await threadPages.reload();
       window.location.assign(`/${locale}/chat/${thread.id}`);
     } catch (err) {
       setSendError(err instanceof Error ? err.message : m.chatSendError);
@@ -92,13 +92,13 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
   return (
     <div className="grid min-h-[70dvh] min-w-0 gap-3 md:grid-cols-[260px_1fr]">
       <aside className={`overflow-hidden rounded-2xl border border-ink/10 bg-white/40 ${showList ? "block" : "hidden md:block"}`}>
-        {threadsQuery.loading ? <p className="p-4 text-sm text-ink/50">{m.hubLoading}</p> : null}
-        {threadsQuery.status === "error" ? (
+        {threadPages.loading ? <p className="p-4 text-sm text-ink/50">{m.hubLoading}</p> : null}
+        {threadPages.status === "error" ? (
           <div className="p-3">
-            <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={threadsQuery.reload} />
+            <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={threadPages.reload} />
           </div>
         ) : null}
-        {threadsQuery.status !== "error"
+        {threadPages.status !== "error"
           ? threadPages.slice.map((th) => (
               <Link
                 key={th.id}
@@ -109,7 +109,7 @@ export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: strin
               </Link>
             ))
           : null}
-        {!threadsQuery.loading && threadsQuery.status !== "error" && threads.length === 0 ? (
+        {!threadPages.loading && threadPages.status !== "error" && threadPages.total === 0 ? (
           <div className="grid gap-2 p-4">
             <p className="text-sm text-ink/70">{m.chatEmpty}</p>
             {peers.length === 0 ? <p className="text-sm text-ink/50">{m.chatNoPeers}</p> : null}

@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { memo, useState } from "react";
 import { PhotoView } from "@/components/media/PhotoView";
-import { PageNav, usePaged } from "@/components/ui/PagedList";
-import { fetchMaterials } from "@/lib/api";
-import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
+import { PageNav, useServerPaged } from "@/components/ui/PagedList";
+import { fetchMaterialsPage } from "@/lib/api";
+import { ErrorRetry, LoadingSkeleton } from "@/lib/useAsync";
 import { useDebounced } from "@/lib/useDebounced";
 import { MATERIAL_CAT, money } from "@/lib/format";
 import type { Locale, Material, MaterialCat } from "@/lib/types";
@@ -19,12 +19,9 @@ export function MaterialsClient({ locale }: { locale: Locale }) {
   const [category, setCategory] = useState("");
   const [q, setQ] = useState("");
   const debouncedQ = useDebounced(q, 300);
-  const query = useAsync(
-    (signal) => fetchMaterials({ category: category || undefined, q: debouncedQ || undefined }, signal),
-    [category, debouncedQ],
+  const paged = useServerPaged(`${category}:${debouncedQ}`, (page, signal) =>
+    fetchMaterialsPage({ category: category || undefined, q: debouncedQ || undefined }, page, 24, signal),
   );
-  const items = query.data ?? [];
-  const paged = usePaged(items, `${category}:${debouncedQ}`);
 
   return (
     <div className="space-y-6">
@@ -93,11 +90,11 @@ export function MaterialsClient({ locale }: { locale: Locale }) {
         </div>
       </div>
 
-      {query.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
-      {query.status === "error" ? (
-        <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />
+      {paged.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
+      {paged.status === "error" ? (
+        <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={paged.reload} />
       ) : null}
-      {query.status !== "error" && paged.slice.length > 0 ? (
+      {paged.status !== "error" && paged.slice.length > 0 ? (
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {paged.slice.map((item) => (
           <MaterialCard key={item.id} item={item} locale={locale} />
@@ -113,7 +110,7 @@ export function MaterialsClient({ locale }: { locale: Locale }) {
         onPage={paged.setPage}
       />
 
-      {!query.loading && query.status !== "error" && items.length === 0 ? (
+      {!paged.loading && paged.status !== "error" && paged.total === 0 ? (
         <div className="text-center py-12 text-slate-400 text-sm">
           По вашему запросу ничего не найдено. Попробуйте сбросить фильтры.
         </div>

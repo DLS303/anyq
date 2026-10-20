@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { PageNav, usePaged } from "@/components/ui/PagedList";
+import { PageNav, useServerPaged } from "@/components/ui/PagedList";
 import { useAuth } from "@/lib/auth";
-import { fetchQueue, moderatePlot } from "@/lib/api";
+import { fetchQueuePage, moderatePlot } from "@/lib/api";
 import { titleOf } from "@/lib/format";
-import { ErrorRetry, LoadingSkeleton, useAsync, useSubmitLock } from "@/lib/useAsync";
+import { ErrorRetry, LoadingSkeleton, useSubmitLock } from "@/lib/useAsync";
 import type { Locale } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { toast } from "@/lib/toast";
@@ -17,12 +17,9 @@ export function ModerationView({ locale }: { locale: Locale }) {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const actionLock = useSubmitLock();
   const allowed = user?.role === "moderator" || user?.role === "admin";
-  const query = useAsync(
-    (signal) => (user && allowed ? fetchQueue(user.email, signal) : Promise.resolve([])),
-    [user?.email, allowed],
+  const paged = useServerPaged(user?.email ?? "", (page, signal) =>
+    user && allowed ? fetchQueuePage(user.email, page, 24, signal) : Promise.resolve({ items: [], total: 0 }),
   );
-  const plots = query.data ?? [];
-  const paged = usePaged(plots, user?.email ?? "");
 
   if (!user || (user.role !== "moderator" && user.role !== "admin")) {
     return (
@@ -40,7 +37,7 @@ export function ModerationView({ locale }: { locale: Locale }) {
     await actionLock.run(async () => {
       try {
         await moderatePlot(user.email, id, action, notes[id] ?? "");
-        query.reload();
+        paged.reload();
       } catch (err) {
         toast(err instanceof Error ? err.message : m.hubSaveError);
       }
@@ -49,12 +46,12 @@ export function ModerationView({ locale }: { locale: Locale }) {
 
   return (
     <div className="grid min-w-0 gap-4">
-      {query.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
-      {query.status === "error" ? (
-        <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={query.reload} />
+      {paged.loading ? <LoadingSkeleton label={m.hubLoading} /> : null}
+      {paged.status === "error" ? (
+        <ErrorRetry message={m.listLoadError} retryLabel={m.retry} onRetry={paged.reload} />
       ) : null}
-      {!query.loading && query.status !== "error" && plots.length === 0 ? <p className="text-ink/50">{m.queueEmpty}</p> : null}
-      {query.status !== "error"
+      {!paged.loading && paged.status !== "error" && paged.total === 0 ? <p className="text-ink/50">{m.queueEmpty}</p> : null}
+      {paged.status !== "error"
         ? paged.slice.map((plot) => (
         <div key={plot.id} className="border border-ink/10 bg-white/60 p-4">
           <p className="font-serif text-xl">{titleOf(plot, locale)}</p>
