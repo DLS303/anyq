@@ -758,7 +758,8 @@ def test_upgrade_dedupes_emails_and_restores_consents(tmp_path, capsys):
         assert [(row[0], row[1]) for row in events] == [("grant", 1), ("withdraw", 2)]
         assert int(revision) == 2
         assert failures == 0
-        command.downgrade(cfg, "-1")
+        # Later revisions sit above the consent move, so step back to the baseline.
+        command.downgrade(cfg, "20261019_0001")
         with engine.connect() as connection:
             restored = connection.execute(
                 text("SELECT payload FROM records WHERE collection = 'consents' AND doc_id = 'c-1'")
