@@ -118,6 +118,8 @@ from app.sql_backend import (
     TrackedDict,
     TrackedList,
     _dump,
+    _production,
+    alloc_seq,
     bump_revisions,
     consent_event_from_record,
     index_values,
@@ -326,6 +328,11 @@ class MemoryStore:
         object.__setattr__(self, "consents", TrackedList(lambda item: item.id))
         self._sql = SqlRuntime()
         self._bind_reads()
+        if _production() and not self._sql.schema_at_head():
+            object.__setattr__(self, "_schema_ok", False)
+            object.__setattr__(self, "_ready", True)
+            return
+        object.__setattr__(self, "_schema_ok", True)
         boot = self._sql.bootstrap_lock()
         try:
             self._load()
@@ -2912,10 +2919,11 @@ class MemoryStore:
         ip: str = "",
         user_agent: str = "",
     ) -> tuple[User, str]:
-        from sqlalchemy import func, select, text
+        from sqlalchemy import select, text
         from sqlalchemy.exc import IntegrityError
 
         from app.invitations import InvitationClosed
+        from app.sql_backend import InvitationRow
 
         normalized = email.lower().strip()
         contact = full_name.strip()
@@ -2982,19 +2990,26 @@ class MemoryStore:
                 {"now": now, "uid": uid, "id": row.id},
             )
             if result.rowcount != 1:
+                current = session.get(InvitationRow, row.id)
+                if current is not None and current.revoked_at:
+                    code = "revoked"
+                    message = "Приглашение отозвано"
+                elif current is not None and current.used_at:
+                    code = "used"
+                    message = "Приглашение уже использовано"
+                else:
+                    code = "expired"
+                    message = "Срок приглашения истёк"
                 session.rollback()
-                raise InvitationClosed("closed", "Ссылка недействительна")
+                raise InvitationClosed(code, message)
             taken = session.scalar(
                 select(Record.doc_id).where(Record.collection == "users", Record.email == normalized).limit(1)
             )
             if taken:
                 session.rollback()
                 raise ValueError("Такой email уже зарегистрирован")
-            seq = int(session.scalar(select(func.max(Record.seq))) or 0)
-
             def put(collection: str, doc_id: str, value) -> int:
-                nonlocal seq
-                seq += 1
+                seq = alloc_seq(session, collection)
                 payload = _dump(value)
                 fields = index_values(self, collection, doc_id, payload)
                 session.add(
@@ -3020,9 +3035,11 @@ class MemoryStore:
                 session.scalar(select(ConsentEvent.id).where(ConsentEvent.legacy_id == consent.id)) or 0
             )
             collections = {"users", "credentials", "consents"}
+            allocated = {"users", "credentials"}
             if directory is not None:
                 collections.add("directory")
-            bump_revisions(session, collections)
+                allocated.add("directory")
+            bump_revisions(session, collections, seq_collections=allocated)
             session.commit()
         except (InvitationClosed, ValueError):
             raise

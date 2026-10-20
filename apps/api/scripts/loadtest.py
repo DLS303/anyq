@@ -114,6 +114,55 @@ async def run(base: str, users: int, rounds: int) -> dict:
     }
 
 
+def measure_reload_p50(doc_count: int, samples: int = 21) -> float:
+    """Median milliseconds for a second store to see one committed title change.
+
+    The caller chooses the database through DATABASE_URL / ANYQ_DB_PATH. A flat
+    result as doc_count grows means a write does not reload every row.
+    """
+    from copy import deepcopy
+
+    from app.seed import PLOTS
+    from app.store import MemoryStore
+
+    writer = MemoryStore()
+    base = deepcopy(PLOTS[0])
+    target = ""
+    for index in range(doc_count):
+        item = base.model_copy(deep=True)
+        item.id = f"plot-bench-{index}"
+        item.owner_id = "u-bench"
+        item.title_ru = f"ТОО Тест участок {index}"
+        writer.plots[item.id] = item
+        target = item.id
+    writer._save()
+    reader = MemoryStore()
+    loads = reader._sql.full_loads
+    durations: list[float] = []
+    try:
+        for index in range(samples + 3):
+            current = writer.plots.peek(target)
+            title = f"ТОО Тест {index}"
+            writer.plots[target] = current.model_copy(update={"title_ru": title})
+            writer._save()
+            started = time.perf_counter()
+            reader._enter()
+            try:
+                seen = reader.plots[target].title_ru
+            finally:
+                reader._leave()
+            if seen != title:
+                raise RuntimeError("reload missed a committed write")
+            if index >= 3:
+                durations.append((time.perf_counter() - started) * 1000)
+        if reader._sql.full_loads != loads:
+            raise RuntimeError("reload read the whole store")
+        return _pct(durations, 50)
+    finally:
+        writer._sql.engine.dispose()
+        reader._sql.engine.dispose()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://127.0.0.1:8010")

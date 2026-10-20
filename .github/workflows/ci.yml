@@ -24,6 +24,14 @@ jobs:
           pip install -r requirements.txt "ruff==0.17.1"
       - name: Ruff
         run: ruff check .
+      - name: Migrate SQLite
+        run: |
+          rm -f /tmp/anyq-ci.sqlite
+          DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic upgrade head
+          DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic check
+          DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic downgrade -1
+          DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic upgrade head
+          DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic check
       - name: Pytest
         run: python -m pytest -q
         env:

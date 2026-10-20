@@ -74,7 +74,7 @@ fi
 mkdir -p /data/uploads /data/private /data/public
 chown -R anyq:anyq /data
 
-gosu anyq alembic upgrade head
+# Schema changes run once, in the migrate container, before this process starts.
 
 if [ "$#" -eq 0 ] || [ "${1:-}" = "gunicorn" ]; then
   set -- gunicorn app.main:app \

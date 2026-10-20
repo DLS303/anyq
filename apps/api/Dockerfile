@@ -53,7 +53,7 @@ RUN chmod 755 /usr/local/bin/anyq-api-entrypoint
 EXPOSE 8010
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3).read()"
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/ready', timeout=3).read()"
 
 ENTRYPOINT ["anyq-api-entrypoint"]
 CMD ["gunicorn"]

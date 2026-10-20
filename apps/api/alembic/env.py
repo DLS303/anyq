@@ -1,9 +1,9 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 from alembic import context
-from app.sql_backend import Base, resolve_database_url
+from app.sql_backend import MIGRATION_LOCK, Base, resolve_database_url
 
 config = context.config
 if config.config_file_name is not None:
@@ -56,14 +56,23 @@ def run_migrations_online() -> None:
     section["sqlalchemy.url"] = resolve_database_url()
     connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            include_object=include_object,
-            compare_server_default=False,
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+        locked = connection.dialect.name == "postgresql"
+        if locked:
+            connection.execute(text("SELECT pg_advisory_lock(:key)"), {"key": MIGRATION_LOCK})
+            connection.commit()
+        try:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                include_object=include_object,
+                compare_server_default=False,
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+        finally:
+            if locked:
+                connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": MIGRATION_LOCK})
+                connection.commit()
 
 
 if context.is_offline_mode():

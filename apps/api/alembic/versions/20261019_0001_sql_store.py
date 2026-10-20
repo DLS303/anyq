@@ -152,4 +152,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("baseline revision cannot be downgraded")
+    raise RuntimeError("baseline: downgrade not allowed")

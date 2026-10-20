@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.deps import require_user
@@ -31,9 +32,11 @@ class AcceptIn(BaseModel):
     role: str | None = None
 
 
+def _closed(exc: InvitationClosed) -> JSONResponse:
+    return JSONResponse(status_code=410, content={"code": exc.code, "detail": str(exc)})
+
+
 def _fail(exc: Exception) -> None:
-    if isinstance(exc, InvitationClosed):
-        raise HTTPException(410, str(exc)) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(403, str(exc) or "Недостаточно прав") from exc
     if isinstance(exc, LookupError):
@@ -90,7 +93,9 @@ def invitation_accept(token: str, body: AcceptIn, request: Request):
     ip, user_agent = _client(request)
     try:
         user, auth = accept(token, body, ip=ip, user_agent=user_agent)
-    except (InvitationClosed, PermissionError, LookupError, ValueError) as exc:
+    except InvitationClosed as exc:
+        return _closed(exc)
+    except (PermissionError, LookupError, ValueError) as exc:
         _fail(exc)
     return {"ok": True, "data": {"user": user, "token": auth}}
 

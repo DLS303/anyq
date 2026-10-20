@@ -13,7 +13,8 @@ import json
 import sqlalchemy as sa
 
 from alembic import op
-from app.sql_backend import install_consent_triggers
+from app.schemas import ConsentRecord
+from app.sql_backend import install_consent_triggers, legacy_consent_events
 
 revision = "20261019_0001b_store_fixes"
 down_revision = "20261019_0001"
@@ -80,6 +81,7 @@ def upgrade() -> None:
         "consent_events",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("legacy_id", sa.String(length=40), nullable=False),
+        sa.Column("event_uuid", sa.String(length=36), nullable=False),
         sa.Column("company_id", sa.String(length=180), nullable=True),
         sa.Column("subject_user_id", sa.String(length=80), nullable=False),
         sa.Column("purpose", sa.String(length=40), nullable=False),
@@ -95,7 +97,9 @@ def upgrade() -> None:
         sa.Column("country", sa.String(length=80), nullable=False, server_default=""),
         sa.Column("privacy_version", sa.String(length=40), nullable=False, server_default=""),
         sa.Column("privacy_sha256", sa.String(length=64), nullable=False, server_default=""),
+        sa.Column("evidence", sa.JSON(), nullable=False, server_default="{}"),
         sa.UniqueConstraint("legacy_id", name="uq_consent_events_legacy_id"),
+        sa.UniqueConstraint("event_uuid", name="uq_consent_events_event_uuid"),
     )
     op.create_index(
         "ix_consents_subject",
@@ -120,44 +124,53 @@ def upgrade() -> None:
         payload = row["payload"]
         if isinstance(payload, str):
             payload = json.loads(payload or "{}")
-        payload = payload or {}
-        action = payload.get("action") or "grant"
-        occurred = payload.get("granted_at") or ""
-        if action == "revoke" and payload.get("revoked_at"):
-            occurred = payload.get("revoked_at")
-        bind.execute(
-            sa.text(
-                """
-                INSERT INTO consent_events (
-                    legacy_id, company_id, subject_user_id, purpose, text_version, text_sha256,
-                    action, occurred_at, granted_at, ip, user_agent, login, provider, country,
-                    privacy_version, privacy_sha256
-                ) VALUES (
-                    :legacy_id, :company_id, :subject_user_id, :purpose, :text_version, :text_sha256,
-                    :action, :occurred_at, :granted_at, :ip, :user_agent, :login, :provider, :country,
-                    :privacy_version, :privacy_sha256
-                )
-                """
-            ),
-            {
-                "legacy_id": str(payload.get("id") or row["doc_id"]),
-                "company_id": row["company_key"],
-                "subject_user_id": str(payload.get("user_id") or row["user_id"] or ""),
-                "purpose": str(payload.get("type") or "offer_pd"),
-                "text_version": str(payload.get("text_version") or ""),
-                "text_sha256": str(payload.get("text_sha256") or ""),
-                "action": action,
-                "occurred_at": str(occurred),
-                "granted_at": str(payload.get("granted_at") or ""),
-                "ip": str(payload.get("ip") or ""),
-                "user_agent": str(payload.get("user_agent") or ""),
-                "login": str(payload.get("login") or ""),
-                "provider": str(payload.get("provider") or ""),
-                "country": str(payload.get("country") or ""),
-                "privacy_version": str(payload.get("privacy_version") or ""),
-                "privacy_sha256": str(payload.get("privacy_sha256") or ""),
-            },
-        )
+        payload = dict(payload or {})
+        payload["id"] = str(payload.get("id") or row["doc_id"])
+        payload["user_id"] = str(payload.get("user_id") or row["user_id"] or "")
+        payload.setdefault("text_version", "")
+        payload.setdefault("text_sha256", "")
+        payload.setdefault("granted_at", "")
+        if payload.get("type") not in {"offer_pd", "cross_border", "ai"}:
+            payload["type"] = "offer_pd"
+        if payload.get("action") not in {"grant", "revoke"}:
+            payload["action"] = "grant"
+        record = ConsentRecord.model_validate(payload)
+        for event in legacy_consent_events(record, row["company_key"]):
+            bind.execute(
+                sa.text(
+                    """
+                    INSERT INTO consent_events (
+                        legacy_id, event_uuid, company_id, subject_user_id, purpose, text_version,
+                        text_sha256, action, occurred_at, granted_at, ip, user_agent, login,
+                        provider, country, privacy_version, privacy_sha256, evidence
+                    ) VALUES (
+                        :legacy_id, :event_uuid, :company_id, :subject_user_id, :purpose, :text_version,
+                        :text_sha256, :action, :occurred_at, :granted_at, :ip, :user_agent, :login,
+                        :provider, :country, :privacy_version, :privacy_sha256, :evidence
+                    )
+                    """
+                ),
+                {
+                    "legacy_id": event.legacy_id,
+                    "event_uuid": event.event_uuid,
+                    "company_id": event.company_id,
+                    "subject_user_id": event.subject_user_id,
+                    "purpose": event.purpose,
+                    "text_version": event.text_version,
+                    "text_sha256": event.text_sha256,
+                    "action": event.action,
+                    "occurred_at": event.occurred_at,
+                    "granted_at": event.granted_at,
+                    "ip": event.ip,
+                    "user_agent": event.user_agent,
+                    "login": event.login,
+                    "provider": event.provider,
+                    "country": event.country,
+                    "privacy_version": event.privacy_version,
+                    "privacy_sha256": event.privacy_sha256,
+                    "evidence": json.dumps(event.evidence or {}, ensure_ascii=False),
+                },
+            )
     bind.execute(sa.text("DELETE FROM records WHERE collection = 'consents'"))
     if bind.dialect.name == "postgresql":
         op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
