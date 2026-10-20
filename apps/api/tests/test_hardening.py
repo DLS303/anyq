@@ -1,11 +1,17 @@
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect, text
 
 from app.authutil import hash_password
 from app.main import app
-from app.ratelimit import LoginRateLimiter, RateLimited, login_limiter
+from app.ratelimit import (
+    LoginRateLimiter,
+    RateLimited,
+    login_hash_secret,
+    login_limiter,
+)
 from app.store import store
 
 client = TestClient(app)
@@ -263,6 +269,17 @@ def test_login_rate_limit_is_per_account_and_ip(monkeypatch):
     allowed = attempt("secret12")
     assert allowed.status_code == 200, allowed.text
     assert login_limiter.count(email, "203.0.113.10") == 0
+
+
+def test_login_hash_secret_is_separate_and_required(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "another-jwt-secret-value-with-32-characters")
+    first = login_hash_secret()
+    monkeypatch.setenv("LOGIN_HASH_SECRET", "replacement-login-hash-secret-32-characters")
+    assert login_hash_secret() != first
+    monkeypatch.setenv("ANYQ_ENV", "production")
+    monkeypatch.delenv("LOGIN_HASH_SECRET", raising=False)
+    with pytest.raises(RuntimeError, match="LOGIN_HASH_SECRET"):
+        login_hash_secret()
 
 
 def test_login_failures_store_a_hash_and_expire():

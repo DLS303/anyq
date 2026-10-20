@@ -37,6 +37,7 @@ jobs:
         env:
           ANYQ_ENV: development
           JWT_SECRET: test-only-secret-value-with-32-characters
+          LOGIN_HASH_SECRET: test-only-login-hash-secret-value-32ch
           ANYQ_DEMO_PASSWORD: ""
           CORS_ORIGINS: http://localhost:3000
 
@@ -123,6 +124,7 @@ jobs:
           ANYQ_TEST_POSTGRES: "1"
           ANYQ_ENV: development
           JWT_SECRET: test-only-secret-value-with-32-characters
+          LOGIN_HASH_SECRET: test-only-login-hash-secret-value-32ch
           ANYQ_DEMO_PASSWORD: ""
           CORS_ORIGINS: http://localhost:3000
         run: python -m pytest -q -n 2

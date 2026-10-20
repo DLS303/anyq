@@ -182,7 +182,13 @@ services:
     command:
       - sh
       - -c
-      - pg_dump --no-owner --file=/backups/pre-migrate.sql && test -s /backups/pre-migrate.sql
+      - |
+        set -eu
+        umask 077
+        file="/backups/pre-migrate-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+        pg_dump -Fc --no-owner -f "$$file"
+        test -s "$$file"
+        ls -1t /backups/pre-migrate-*.dump | awk 'NR>3' | while read -r old; do rm -f "$$old"; done
     depends_on:
       postgres:
         condition: service_healthy

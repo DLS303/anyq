@@ -7,6 +7,7 @@ import pytest
 _root = Path(tempfile.mkdtemp(prefix="anyq-test-"))
 os.environ["ANYQ_ENV"] = "development"
 os.environ["JWT_SECRET"] = "test-only-secret-value-with-32-characters"
+os.environ["LOGIN_HASH_SECRET"] = "test-only-login-hash-secret-value-32ch"
 
 
 def _prepare_postgres() -> None:

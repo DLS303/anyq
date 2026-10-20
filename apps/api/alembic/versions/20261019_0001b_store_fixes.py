@@ -13,6 +13,8 @@ shape, including a revoked_at value when a withdraw event exists.
 """
 
 import json
+import logging
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import sqlalchemy as sa
@@ -120,6 +122,26 @@ def _load_payload(value):
     return dict(value or {})
 
 
+def _report_email_quarantine(bind, doc_ids: list[str]) -> None:
+    unique = sorted(set(doc_ids))
+    if not unique:
+        return
+    reported_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+    for doc_id in unique:
+        bind.execute(
+            sa.text(
+                "INSERT INTO email_quarantine (doc_id, reason, reported_at) "
+                "VALUES (:doc_id, 'duplicate', :reported_at)"
+            ),
+            {"doc_id": doc_id, "reported_at": reported_at},
+        )
+    logging.getLogger("alembic.runtime.migration").warning(
+        "email_quarantine count=%s doc_id=%s",
+        len(unique),
+        ",".join(unique),
+    )
+
+
 def _normalize_user_emails(bind) -> None:
     bind.execute(
         sa.text(
@@ -137,30 +159,19 @@ def _normalize_user_emails(bind) -> None:
         ).mappings()
     )
     seen: dict[str, str] = {}
-    extras: list[tuple[str, str]] = []
+    extras: list[str] = []
     for row in rows:
         email = str(row["email"])
         if email in seen:
-            extras.append((str(row["doc_id"]), email))
+            extras.append(str(row["doc_id"]))
         else:
             seen[email] = str(row["doc_id"])
-    expr = _payload_expr(bind)
-    for doc_id, email in extras:
-        revised = f"{email}#{doc_id}"[:200]
-        current = bind.execute(
-            sa.text("SELECT payload FROM records WHERE collection = 'users' AND doc_id = :doc_id"),
-            {"doc_id": doc_id},
-        ).one()
-        payload = _load_payload(current[0])
-        if isinstance(payload.get("email"), str):
-            payload["email"] = revised
+    for doc_id in extras:
         bind.execute(
-            sa.text(
-                f"UPDATE records SET email = :email, payload = {expr} "
-                "WHERE collection = 'users' AND doc_id = :doc_id"
-            ),
-            {"email": revised, "payload": json.dumps(payload, ensure_ascii=False), "doc_id": doc_id},
+            sa.text("UPDATE records SET email = NULL WHERE collection = 'users' AND doc_id = :doc_id"),
+            {"doc_id": doc_id},
         )
+    expr = _payload_expr(bind)
     for email, doc_id in seen.items():
         current = bind.execute(
             sa.text("SELECT payload FROM records WHERE collection = 'users' AND doc_id = :doc_id"),
@@ -185,10 +196,12 @@ def _normalize_user_emails(bind) -> None:
         ).scalars()
     )
     for doc_id in empties[1:]:
+        extras.append(str(doc_id))
         bind.execute(
             sa.text("UPDATE records SET email = NULL WHERE collection = 'users' AND doc_id = :doc_id"),
             {"doc_id": doc_id},
         )
+    _report_email_quarantine(bind, extras)
 
 
 def _text(value, default: str = "") -> str:
@@ -376,6 +389,12 @@ def upgrade() -> None:
     for name, columns, unique in NEW_RECORD_INDEXES:
         op.create_index(name, "records", columns, unique=unique)
     op.create_index("ix_records_coll_created", "records", ["collection", "created_at"])
+    op.create_table(
+        "email_quarantine",
+        sa.Column("doc_id", sa.String(length=80), primary_key=True),
+        sa.Column("reason", sa.String(length=40), nullable=False),
+        sa.Column("reported_at", sa.String(length=40), nullable=False),
+    )
     _normalize_user_emails(op.get_bind())
     op.create_index(
         "ux_records_user_email",
@@ -460,6 +479,7 @@ def downgrade() -> None:
         op.execute("DROP INDEX IF EXISTS ix_records_search_trgm")
     _restore_consents(bind)
     _drop_consent_triggers(bind)
+    op.drop_table("email_quarantine")
     op.drop_index("ix_login_failures_key_created", table_name="login_failures")
     op.drop_table("login_failures")
     op.drop_index("ix_tombstones_coll_seq", table_name="record_tombstones")

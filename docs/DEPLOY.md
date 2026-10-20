@@ -96,7 +96,7 @@ chmod 600 deploy/.env
 openssl rand -base64 48
 ```
 
-Вставьте вывод `openssl` в `JWT_SECRET`. Дальше в том же файле:
+Вставьте вывод `openssl` в `JWT_SECRET`. Запустите `openssl rand -base64 48` ещё раз и вставьте второй вывод в `LOGIN_HASH_SECRET`: это отдельный секрет для окна неудачных входов, не замена `JWT_SECRET`. Дальше в том же файле:
 
 - `DOMAIN` — голое имя, например `app.example.kz`.
 - `ACME_EMAIL` — почта для уведомлений выпуска сертификата.
@@ -108,7 +108,7 @@ openssl rand -base64 48
 - `NEXT_PUBLIC_PILOT_MODE=1` включает пилотный интерфейс. Значение попадает в образ сайта на сборке. Смена потребует нового `deploy.sh`.
 - `INTERNAL_API_URL` оставьте `http://api:8010`.
 
-Контейнер API не стартует, если секрет пустой, короче 32 символов или похож на заготовку (`changeme`, `replace-me`, `test-only`, `superapp`, `your-secret` и те же слова в другом регистре). Пустой `CORS_ORIGINS`, символ `*` в нём, непустой демо-пароль и пароль базы по умолчанию тоже останавливают запуск. Тот же набор проверяет `deploy/check_env.sh` до сборки. Процесс Python дополнительно отказывается стартовать без `JWT_SECRET` достаточной длины и без `CORS_ORIGINS`.
+Контейнер API не стартует, если `JWT_SECRET` или `LOGIN_HASH_SECRET` пустой, короче 32 символов или похож на заготовку (`changeme`, `replace-me`, `test-only`, `superapp`, `your-secret` и те же слова в другом регистре). Пустой `CORS_ORIGINS`, символ `*` в нём, непустой демо-пароль и пароль базы по умолчанию тоже останавливают запуск. Тот же набор проверяет `deploy/check_env.sh` до сборки. Процесс Python дополнительно отказывается стартовать без `JWT_SECRET` и `LOGIN_HASH_SECRET` достаточной длины и без `CORS_ORIGINS`.
 
 ```bash
 ./deploy/check_env.sh
@@ -146,7 +146,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml logs --t
 - `anyq-postgres` — данные PostgreSQL. Удаление тома стирает базу.
 - `anyq-caddy-data` и `anyq-caddy-config` — сертификаты. Удаление этих томов заставит Caddy запросить сертификат заново.
 
-Логи контейнеров пишутся драйвером `json-file`: не больше 10 МБ на файл и 5 файлов на сервис. Лимиты ресурсов в compose-файле рассчитаны на 2 vCPU и 4 ГБ: API до 1 CPU и 1536 МБ, PostgreSQL до 0.5 CPU и 512 МБ, сайт до 0.75 CPU и 768 МБ, Caddy до 0.25 CPU и 128 МБ. Политика перезапуска — `unless-stopped`. Сервис `db-backup` снимает `pg_dump` в том `anyq-backups` (`/backups/pre-migrate.sql`) до старта `migrate`. Если дамп не создался, `migrate` не запускается. Сервис `migrate` один раз выполняет `alembic upgrade head` до старта API. API при старте таблицы не создаёт и отвечает 503 на `/ready`, пока версия схемы не совпадает с ожидаемой.
+Логи контейнеров пишутся драйвером `json-file`: не больше 10 МБ на файл и 5 файлов на сервис. Лимиты ресурсов в compose-файле рассчитаны на 2 vCPU и 4 ГБ: API до 1 CPU и 1536 МБ, PostgreSQL до 0.5 CPU и 512 МБ, сайт до 0.75 CPU и 768 МБ, Caddy до 0.25 CPU и 128 МБ. Политика перезапуска — `unless-stopped`. Сервис `db-backup` до старта `migrate` пишет `pg_dump -Fc` в том `anyq-backups`. Имя файла содержит время UTC (`pre-migrate-YYYYMMDDTHHMMSSZ.dump`), поэтому новый запуск не затирает предыдущий. `umask 077` задаёт доступ только владельцу. В томе остаются три последних снимка. Если дамп не создался, `migrate` не запускается. Сервис `migrate` один раз выполняет `alembic upgrade head` до старта API. API при старте таблицы не создаёт и отвечает 503 на `/ready`, пока версия схемы не совпадает с ожидаемой.
 
 ## 5. Проверка HTTPS
 
@@ -175,7 +175,16 @@ ls -lh /var/backups/anyq
 
 Появляются два файла: `anyq-data-<дата>.tar.gz` (каталог `/data`: загрузки и медиа) и `anyq-postgres-<дата>.sql.gz` (`pg_dump` базы `anyq`). Срок хранения задаёт `BACKUP_RETENTION_DAYS` (по умолчанию 14).
 
-Перед каждой миграцией compose дополнительно пишет `/backups/pre-migrate.sql` в томе `anyq-backups`. Это снимок, который делает `pg_dump` из `postgres:16-alpine` с паролем `POSTGRES_PASSWORD`. Файл непустой, иначе сервис `db-backup` завершается с ошибкой и `migrate` не стартует. Восстановление этого снимка: `psql` в уже запущенный PostgreSQL.
+Перед каждой миграцией compose дополнительно пишет `/backups/pre-migrate-<время UTC>.dump` в томе `anyq-backups`. Это снимок `pg_dump -Fc` из `postgres:16-alpine` с паролем `POSTGRES_PASSWORD`, с `umask 077`. Файл непустой, иначе сервис `db-backup` завершается с ошибкой и `migrate` не стартует. Восстановление в уже запущенный PostgreSQL:
+
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml run --rm --no-deps \
+  db-backup \
+  pg_restore --clean --if-exists --no-owner -h postgres -U anyq -d anyq \
+  /backups/pre-migrate-YYYYMMDDTHHMMSSZ.dump
+```
+
+Если при обновлении схемы совпали адреса двух учётных записей, в том числе только регистром, миграция оставляет адрес у более ранней строки и очищает колонку `email` у остальных. В лог сервиса `migrate` и в таблицу `email_quarantine` попадают только `doc_id` и причина `duplicate`, без самого адреса. Пока адрес не назначен заново, вход этой записи недоступен. Разбор: открыть строку `records` с `collection = 'users'` и этим `doc_id`, задать отдельный адрес и сохранить.
 
 Ежедневный запуск в 03:15 UTC от пользователя `deploy`:
 

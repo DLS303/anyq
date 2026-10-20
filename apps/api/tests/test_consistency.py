@@ -11,7 +11,7 @@ from uuid import uuid4
 import pytest
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import DatabaseError
 
@@ -561,6 +561,118 @@ def test_production_start_does_not_create_tables(tmp_path, monkeypatch):
     assert "records" not in names
 
 
+def _lock_order(ids: list[str]) -> list[str]:
+    order: list[str] = []
+    for item in ids:
+        if item not in order:
+            order.append(item)
+    return order
+
+
+def _meta_lock_ids(engine):
+    seen: list[str] = []
+
+    def before(_conn, _cursor, statement, parameters, _context, _executemany):
+        sql = " ".join(statement.split())
+        if "FOR UPDATE" not in sql and "revision = revision WHERE" not in sql:
+            return
+        if isinstance(parameters, dict) and parameters.get("id"):
+            seen.append(str(parameters["id"]))
+        elif parameters:
+            seen.append(str(parameters[0]))
+
+    event.listen(engine, "before_cursor_execute", before)
+    return seen, before
+
+
+def test_meta_locks_follow_one_sorted_order(tmp_path, monkeypatch):
+    _isolated(monkeypatch, tmp_path)
+    store = MemoryStore()
+    seen, hook = _meta_lock_ids(store._sql.engine)
+    try:
+        _run_meta_lock_order(store, seen)
+    finally:
+        event.remove(store._sql.engine, "before_cursor_execute", hook)
+
+
+def _run_meta_lock_order(store, seen) -> None:
+    plot = deepcopy(PLOTS[0])
+    plot.id = "plot-lock-order"
+    plot.owner_id = "u-lock"
+    store.plots[plot.id] = plot
+    store.consents.append(
+        ConsentRecord(
+            id="c-lock-order",
+            user_id="u-lock",
+            type="offer_pd",
+            text_version=PD_VERSION,
+            text_sha256=pd_sha256(),
+            granted_at="2026-10-20T00:00:00+00:00",
+            action="grant",
+            login="lock@example.com",
+        )
+    )
+    seen.clear()
+    store._save()
+    flush_ids = _lock_order(list(seen))
+    assert flush_ids == sorted(flush_ids)
+    assert {"consents", "plots", "rev"} <= set(flush_ids)
+
+    import app.store as store_module
+    from app.sql_backend import InvitationRow
+
+    previous = store_module.store
+    store_module.store = store
+    try:
+        owner, _token = _register(store)
+        created = create_invitation(owner, "foreman", None)
+        with store._sql.factory() as session:
+            row = session.get(InvitationRow, created["id"])
+            session.expunge(row)
+        seen.clear()
+        store.accept_invitation(
+            row,
+            email="invite-lock@example.com",
+            password="secret12",
+            full_name="Тест Пользователь",
+            phone="+77000000041",
+        )
+    finally:
+        store_module.store = previous
+    accept_ids = _lock_order(list(seen))
+    assert accept_ids == sorted(accept_ids)
+    shared = [item for item in flush_ids if item in set(accept_ids)]
+    assert shared == [item for item in accept_ids if item in set(flush_ids)]
+
+    errors: list[BaseException] = []
+
+    def overlap(ids: set[str]) -> None:
+        session = store._sql.factory()
+        try:
+            if session.get_bind().dialect.name == "postgresql":
+                session.execute(text("SET lock_timeout = '3s'"))
+            from app.sql_backend import lock_meta
+
+            lock_meta(session, ids)
+            session.commit()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    threads = [
+        threading.Thread(target=overlap, args=({"users", "consents", "directory", "rev"},)),
+        threading.Thread(target=overlap, args=({"directory", "favorites", "consents", "rev"},)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert not errors
+    assert all(not thread.is_alive() for thread in threads)
+
+
 def test_schema_head_matches_alembic_heads():
     from alembic.script import ScriptDirectory
 
@@ -575,7 +687,7 @@ def test_schema_head_matches_alembic_heads():
     assert "consent_events back into records" in source
 
 
-def test_upgrade_dedupes_emails_and_restores_consents(tmp_path):
+def test_upgrade_dedupes_emails_and_restores_consents(tmp_path, capsys):
     previous = os.environ.get("DATABASE_URL")
 
     def once(url: str) -> None:
@@ -626,6 +738,7 @@ def test_upgrade_dedupes_emails_and_restores_consents(tmp_path):
                 {"payload": json.dumps(consent)},
             )
         command.upgrade(cfg, "head")
+        report = [line for line in capsys.readouterr().err.splitlines() if "email_quarantine" in line]
         command.check(cfg)
         with engine.connect() as connection:
             emails = connection.execute(
@@ -634,7 +747,14 @@ def test_upgrade_dedupes_emails_and_restores_consents(tmp_path):
             events = connection.execute(text("SELECT action, seq FROM consent_events ORDER BY seq")).all()
             revision = connection.execute(text("SELECT revision FROM meta WHERE id = 'consents'")).scalar()
             failures = connection.execute(text("SELECT count(*) FROM login_failures")).scalar()
-        assert [(row[0], row[1]) for row in emails] == [("u-1", "user@example.com"), ("u-2", "user@example.com#u-2")]
+            quarantined = connection.execute(
+                text("SELECT doc_id, reason FROM email_quarantine ORDER BY doc_id")
+            ).all()
+        assert [(row[0], row[1]) for row in emails] == [("u-1", "user@example.com"), ("u-2", None)]
+        assert [(row[0], row[1]) for row in quarantined] == [("u-2", "duplicate")]
+        assert report
+        assert all("@" not in line for line in report)
+        assert any("u-2" in line for line in report)
         assert [(row[0], row[1]) for row in events] == [("grant", 1), ("withdraw", 2)]
         assert int(revision) == 2
         assert failures == 0
@@ -650,6 +770,7 @@ def test_upgrade_dedupes_emails_and_restores_consents(tmp_path):
         assert restored["revoked_at"] == "2026-02-01T00:00:00+00:00"
         assert "consent_events" not in names
         assert "login_failures" not in names
+        assert "email_quarantine" not in names
         command.upgrade(cfg, "head")
         command.check(cfg)
         engine.dispose()

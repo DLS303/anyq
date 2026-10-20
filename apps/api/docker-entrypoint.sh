@@ -30,6 +30,24 @@ case "$folded" in
     ;;
 esac
 
+hash_secret="${LOGIN_HASH_SECRET:-}"
+hash_secret=$(printf '%s' "$hash_secret" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+if [ -z "$hash_secret" ]; then
+  fail "LOGIN_HASH_SECRET is missing"
+fi
+
+if [ "${#hash_secret}" -lt 32 ]; then
+  fail "LOGIN_HASH_SECRET must be at least 32 characters"
+fi
+
+hash_folded=$(printf '%s' "$hash_secret" | tr '[:upper:]' '[:lower:]')
+case "$hash_folded" in
+  *changeme*|*change-me*|*change_me*|*replace-me*|*replace_me*|*replace-with*|*your-secret*|*test-only*|*not-a-secret*|*placeholder*|*jwt-secret*|*jwt_secret*|*superapp*)
+    fail "LOGIN_HASH_SECRET is a placeholder"
+    ;;
+esac
+
 if [ -z "${CORS_ORIGINS:-}" ]; then
   fail "CORS_ORIGINS must be set"
 fi

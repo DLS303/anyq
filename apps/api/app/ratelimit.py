@@ -5,14 +5,31 @@ from __future__ import annotations
 import hashlib
 import hmac
 import ipaddress
+import os
+import secrets
 import time
 
 from sqlalchemy import delete, func, select
 
-from app.authutil import load_secret
 from app.sql_backend import LoginFailure
 
 _RETENTION_S = 86_400
+_dev_secret: str | None = None
+
+
+def login_hash_secret() -> str:
+    """HMAC key for login windows. Production requires LOGIN_HASH_SECRET."""
+    secret = (os.getenv("LOGIN_HASH_SECRET") or "").strip()
+    if os.getenv("ANYQ_ENV", "development").strip().lower() == "production":
+        if len(secret) < 32:
+            raise RuntimeError("LOGIN_HASH_SECRET must be set to at least 32 characters when ANYQ_ENV=production")
+        return secret
+    if len(secret) >= 16:
+        return secret
+    global _dev_secret
+    if not _dev_secret:
+        _dev_secret = secrets.token_urlsafe(32)
+    return _dev_secret
 
 
 class RateLimited(Exception):
@@ -37,7 +54,7 @@ def _ip_bucket(ip: str) -> str:
 
 def login_key(account: str, ip: str) -> str:
     material = f"{account.strip().lower()}|{_ip_bucket(ip)}"
-    return hmac.new(load_secret().encode(), material.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(login_hash_secret().encode(), material.encode(), hashlib.sha256).hexdigest()
 
 
 class LoginRateLimiter:

@@ -123,6 +123,7 @@ from app.sql_backend import (
     consent_event_from_record,
     index_values,
     json_db_file,
+    lock_meta,
     utc_now,
 )
 from app.store_budget import dump_budget, load_budget
@@ -3010,6 +3011,11 @@ class MemoryStore:
             if taken:
                 session.rollback()
                 raise ValueError("Такой email уже зарегистрирован")
+            needed = {"rev", "users", "credentials", "consents"}
+            if directory is not None:
+                needed.add("directory")
+            lock_meta(session, needed)
+
             def put(collection: str, doc_id: str, value) -> int:
                 seq = alloc_seq(session, collection)
                 payload = _dump(value)

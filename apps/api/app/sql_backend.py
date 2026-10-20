@@ -151,6 +151,16 @@ class InvitationRow(Base):
     revoked_at: Mapped[str | None] = mapped_column(String(40))
 
 
+class EmailQuarantine(Base):
+    """Accounts left for a manual email fix. The row stores an id, not the address."""
+
+    __tablename__ = "email_quarantine"
+
+    doc_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(40))
+    reported_at: Mapped[str] = mapped_column(String(40))
+
+
 class LoginFailure(Base):
     """Failed login attempts. Shared by every worker so the window is global."""
 
@@ -943,14 +953,28 @@ def copy_legacy_consents(session: Session) -> None:
     session.execute(delete(Record).where(Record.collection == "consents"))
 
 
-def bump_revisions(session: Session, collections: set[str], *, seq_collections: set[str] | None = None) -> int:
-    """One global flush counter, plus a signal for collections that do not take seq numbers."""
-    skip = seq_collections or set()
-    names = ["rev", *sorted(name for name in collections if name not in skip)]
+def lock_meta(session: Session, ids: set[str]) -> None:
+    """Lock meta rows in id order so two transactions cannot deadlock."""
+    names = sorted(name for name in ids if name)
+    if not names:
+        return
     session.execute(
         text("INSERT INTO meta (id, revision) VALUES (:id, 0) ON CONFLICT (id) DO NOTHING"),
         [{"id": name} for name in names],
     )
+    if session.get_bind().dialect.name == "postgresql":
+        statement = "SELECT id FROM meta WHERE id = :id FOR UPDATE"
+    else:
+        statement = "UPDATE meta SET revision = revision WHERE id = :id"
+    for name in names:
+        session.execute(text(statement), {"id": name})
+
+
+def bump_revisions(session: Session, collections: set[str], *, seq_collections: set[str] | None = None) -> int:
+    """One global flush counter, plus a signal for collections that do not take seq numbers."""
+    skip = seq_collections or set()
+    names = sorted({"rev", *(name for name in collections if name not in skip)})
+    lock_meta(session, set(names))
     current = 0
     for name in names:
         row = session.execute(
@@ -1422,6 +1446,18 @@ class SqlRuntime:
             bag = getattr(store, attr)
             snapshots.append((bag, None, bag.last_seq))
         try:
+            needed: set[str] = set()
+            for attr, collection in PERSISTED:
+                bag = getattr(store, attr)
+                if bag.dirty or bag.deleted:
+                    needed.add(collection)
+            if store.favorites.mutated:
+                needed.add("favorites")
+            if store.consents.mutated:
+                needed.add("consents")
+            if needed:
+                needed.add("rev")
+                lock_meta(session, needed)
             allocated: set[str] = set()
             for attr, collection in PERSISTED:
                 bag = getattr(store, attr)

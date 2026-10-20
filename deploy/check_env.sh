@@ -69,6 +69,25 @@ validate_env() {
       ;;
   esac
 
+  hash_secret="${LOGIN_HASH_SECRET:-}"
+  hash_secret="${hash_secret#"${hash_secret%%[![:space:]]*}"}"
+  hash_secret="${hash_secret%"${hash_secret##*[![:space:]]}"}"
+  if [ -z "$hash_secret" ]; then
+    echo "anyq: LOGIN_HASH_SECRET is missing" >&2
+    return 1
+  fi
+  if [ "${#hash_secret}" -lt 32 ]; then
+    echo "anyq: LOGIN_HASH_SECRET must be at least 32 characters" >&2
+    return 1
+  fi
+  hash_folded="$(printf '%s' "$hash_secret" | tr '[:upper:]' '[:lower:]')"
+  case "$hash_folded" in
+    *changeme*|*change-me*|*change_me*|*replace-me*|*replace_me*|*replace-with*|*your-secret*|*test-only*|*not-a-secret*|*placeholder*|*jwt-secret*|*jwt_secret*|*superapp*)
+      echo "anyq: LOGIN_HASH_SECRET is a placeholder" >&2
+      return 1
+      ;;
+  esac
+
   if [ -z "${CORS_ORIGINS:-}" ]; then
     echo "anyq: CORS_ORIGINS must be set" >&2
     return 1
