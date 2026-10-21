@@ -12,7 +12,7 @@ from typing import get_args
 from uuid import uuid4
 
 from app.authutil import hash_password, make_token, verify_password
-from app.config import demo_mode
+from app.config import DEMO_EMAIL_REJECTION, DEMO_EMAIL_SUFFIX, demo_mode
 from app.geo import centroid, haversine_km
 from app.legal import PD_VERSION, ai_document, pd_sha256, privacy_document
 from app.schemas import (
@@ -278,6 +278,10 @@ def _pilot_flag(value: str) -> str:
 class ConsentRequired(Exception):
     def __init__(self) -> None:
         super().__init__("Нужно согласие на обработку персональных данных")
+
+
+class DemoRegistrationError(ValueError):
+    """Demo mode refused this registration. The API answers 422."""
 
 
 def db_file() -> Path:
@@ -2241,7 +2245,11 @@ class MemoryStore:
             raise ValueError("Укажите компанию")
         if len(bin_no) != 12:
             raise ValueError("БИН должен быть из 12 цифр")
-        if len(phone) < 6:
+        if demo_mode():
+            if not email.endswith(DEMO_EMAIL_SUFFIX):
+                raise DemoRegistrationError(DEMO_EMAIL_REJECTION)
+            phone = ""
+        elif len(phone) < 6:
             raise ValueError("Укажите телефон")
         if not body.consent_offer_pd:
             raise ValueError("Нужно согласие на обработку персональных данных")

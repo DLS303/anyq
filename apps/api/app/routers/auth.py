@@ -3,7 +3,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config import demo_mode
+from app.config import demo_mode, registration_enabled
 from app.deps import require_roles, require_user
 from app.legal import consent_documents
 from app.ratelimit import RateLimited, login_limiter
@@ -16,7 +16,14 @@ from app.signup import (
     start_signup,
     update_profile,
 )
-from app.store import ConsentRequired, store
+from app.store import ConsentRequired, DemoRegistrationError, store
+
+_REGISTRATION_CLOSED = "Регистрация недоступна"
+
+
+def _require_registration() -> None:
+    if not registration_enabled():
+        raise HTTPException(status_code=403, detail=_REGISTRATION_CLOSED)
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -65,6 +72,7 @@ class ProfileIn(BaseModel):
 
 @router.post("/signup")
 def signup(body: SignupIn, request: Request):
+    _require_registration()
     ip, ua = _client_meta(request)
     try:
         data = start_signup(
@@ -124,9 +132,12 @@ def patch_profile(body: ProfileIn, user: User = Depends(require_user)):
 
 @router.post("/register")
 def register(body: RegisterBody, request: Request):
+    _require_registration()
     ip, ua = _client_meta(request)
     try:
         user, token = store.register(body, ip=ip, user_agent=ua)
+    except DemoRegistrationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "data": {"user": user, "token": token}}

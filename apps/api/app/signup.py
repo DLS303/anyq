@@ -24,7 +24,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.authutil import load_secret, make_token, verify_password
-from app.config import demo_mode, refuse_stub_code_in_production
+from app.config import (
+    DEMO_EMAIL_REJECTION,
+    DEMO_EMAIL_SUFFIX,
+    DEMO_PHONE_REJECTION,
+    demo_mode,
+    refuse_stub_code_in_production,
+)
 from app.legal import PD_VERSION, pd_sha256, privacy_document
 from app.permissions import PHONE_PENDING_ACCESS, SIGNUP_ROLES
 from app.ratelimit import RateLimited, signup_limiter
@@ -47,10 +53,7 @@ from app.store import store
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _CODE_TTL = timedelta(minutes=10)
 _MAX_ATTEMPTS = 5
-_DEMO_SUFFIX = "@demo.superapp"
 _SMS_LATER = "Подтверждение по SMS появится позже"
-_DEMO_EMAIL = "В демо-версии регистрация только для адресов @demo.superapp"
-_DEMO_PHONE = "В демо-версии телефон не сохраняется. Укажите почту @demo.superapp"
 _VAT_UNSET = "НДС не указан"
 log = logging.getLogger("anyq.mail")
 
@@ -95,9 +98,9 @@ def _demo_guard(channel: str, value: str) -> None:
     if not demo_mode():
         return
     if channel == "phone":
-        raise SignupError(_DEMO_PHONE, 422)
-    if not value.endswith(_DEMO_SUFFIX):
-        raise SignupError(_DEMO_EMAIL, 422)
+        raise SignupError(DEMO_PHONE_REJECTION, 422)
+    if not value.endswith(DEMO_EMAIL_SUFFIX):
+        raise SignupError(DEMO_EMAIL_REJECTION, 422)
 
 
 def issue_code() -> str:

@@ -53,6 +53,7 @@ os.environ["ANYQ_UPLOADS_DIR"] = str(_root / "uploads")
 os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 os.environ["ANYQ_DEMO_PASSWORD"] = ""
 os.environ["ANYQ_DEMO_MODE"] = "1"
+os.environ["REGISTRATION_ENABLED"] = "1"
 if os.environ.get("ANYQ_TEST_POSTGRES") != "1":
     from alembic.config import Config
 

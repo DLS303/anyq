@@ -690,7 +690,7 @@ def test_failed_register_does_not_keep_the_bin(monkeypatch):
     with pytest.raises(RuntimeError):
         store.register(
             RegisterBody(
-                email=f"fail-{bin_no}@example.com",
+                email=f"fail-{bin_no}@demo.superapp",
                 password="secret12",
                 full_name="Fail User",
                 phone="+77001112233",

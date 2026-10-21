@@ -89,7 +89,7 @@ def test_legacy_db_without_procurement_keys():
 
 
 def test_membership_blocks_outsiders():
-    outsider = _register("proc-outsider@example.com")
+    outsider = _register("proc-outsider@demo.superapp")
     denied = client.get("/v1/procurement/projects/pr-besagash/requests", headers=_auth(outsider))
     assert denied.status_code == 403
     missing = client.get("/v1/procurement/projects/missing-project/requests", headers=_auth(outsider))
@@ -216,7 +216,7 @@ def _offer(owner: str, line_id: str, supplier: str, price: float, vat: bool | No
 
 def test_sheet_totals_best_price_and_duplicate_invoices():
     owner = _owner()
-    outsider = _register("proc-sheet-out@example.com")
+    outsider = _register("proc-sheet-out@demo.superapp")
     created = client.post(
         "/v1/procurement/projects/pr-besagash/requests",
         json={"title": "Сравнение цен"},
@@ -369,7 +369,7 @@ def test_sheet_totals_best_price_and_duplicate_invoices():
 
 def test_repeat_order_is_prefilled_and_editable():
     owner = _owner()
-    outsider = _register("repeat-out@example.com")
+    outsider = _register("repeat-out@demo.superapp")
     created = client.post(
         "/v1/procurement/projects/pr-besagash/requests",
         json={"title": "Заявка на повтор"},
@@ -446,7 +446,7 @@ def test_repeat_order_is_prefilled_and_editable():
 
     supplier = User(
         id="u-sup-repeat",
-        email="sup-repeat@example.com",
+        email="sup-repeat@demo.superapp",
         full_name="Поставщик C",
         role="supplier",
         company="Поставщик C",
