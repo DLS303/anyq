@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -154,7 +155,7 @@ class PriceObservation(Base):
     price_tiyn: Mapped[int] = mapped_column(Integer, nullable=False)
     vat_included: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     vat_rate: Mapped[int] = mapped_column(Integer, nullable=False, default=16)
-    source_kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(40), nullable=False)
     source_id: Mapped[str] = mapped_column(technical_string(80), nullable=False)
     company_id: Mapped[str] = mapped_column(technical_string(40), nullable=False)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False, default="")
@@ -164,6 +165,33 @@ class PriceObservation(Base):
         Index("ix_price_observations_catalog", "catalog_id"),
         Index("ix_price_observations_company", "company_id"),
     )
+
+
+def _reject_observation_mutation(_mapper, _connection, _target) -> None:
+    """ORM updates and deletes stop here. The migration trigger covers raw SQL."""
+
+    raise ValueError("append-only")
+
+
+event.listen(PriceObservation, "before_update", _reject_observation_mutation)
+event.listen(PriceObservation, "before_delete", _reject_observation_mutation)
+
+
+class PriceIndexDaily(Base):
+    """One market snapshot per item, city, and day. The job replaces that day."""
+
+    __tablename__ = "price_index_daily"
+
+    item_id: Mapped[str] = mapped_column(technical_string(40), primary_key=True)
+    city: Mapped[str] = mapped_column(String(80), primary_key=True)
+    day: Mapped[str] = mapped_column(String(20), primary_key=True)
+    median_tiyn: Mapped[int | None] = mapped_column(Integer)
+    p25_tiyn: Mapped[int | None] = mapped_column(Integer)
+    p75_tiyn: Mapped[int | None] = mapped_column(Integer)
+    n_observations: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_suppliers: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (Index("ix_price_index_daily_item_city_day", "item_id", "city", "day"),)
 
 
 class MarketRequest(Base):

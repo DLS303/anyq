@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 from openpyxl import load_workbook
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from app.marketplace_models import (
     MarketRequestLine,
     Offer,
     OfferLine,
+    PriceIndexDaily,
     PriceItem,
     PriceObservation,
     SupplierProfile,
@@ -31,12 +32,19 @@ from app.marketplace_models import (
 from app.marketplace_price import (
     HAS_MEDIAN,
     LOW_DATA,
+    MIN_SUPPLIERS,
+    SOURCE_TYPES,
+    WINDOW_DAYS,
+    PricePoint,
+    excl_tiyn,
     has_source,
     incl_tiyn,
     in_window,
-    index_for,
     judge_price,
+    market_label,
     market_today,
+    overpay_parts,
+    summarize,
 )
 from app.marketplace_score import (
     NEUTRAL_RATING,
@@ -229,6 +237,43 @@ def recompute_all(session: Session, as_of: date | None = None) -> int:
     return len(ids)
 
 
+def recompute_price_index(session: Session, as_of: date | None = None) -> int:
+    """Replace one day's index from append-only observations.
+
+    Suspicious prices are left out. A city with fewer than three distinct
+    suppliers keeps its counts and an empty median.
+    """
+
+    as_of = as_of or _today()
+    day = as_of.isoformat()
+    grouped: dict[tuple[str, str], list[PricePoint]] = {}
+    for row in session.scalars(select(PriceObservation)).all():
+        if row.source_type not in SOURCE_TYPES or not has_source(row.source_type, row.source_id):
+            continue
+        if not in_window(row.observed_on, as_of):
+            continue
+        grouped.setdefault((row.item_id, row.city or ""), []).append(
+            PricePoint(row.company_id, row.price_tiyn, row.vat_included, row.vat_rate)
+        )
+    session.execute(delete(PriceIndexDaily).where(PriceIndexDaily.day == day))
+    for (item_id, city), points in grouped.items():
+        snap = summarize(points)
+        session.add(
+            PriceIndexDaily(
+                item_id=item_id,
+                city=city,
+                day=day,
+                median_tiyn=snap.median_tiyn,
+                p25_tiyn=snap.p25_tiyn,
+                p75_tiyn=snap.p75_tiyn,
+                n_observations=snap.n_observations,
+                n_suppliers=snap.n_suppliers,
+            )
+        )
+    session.flush()
+    return len(grouped)
+
+
 def _catalog_index(session: Session) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for item in session.scalars(select(PriceItem)).all():
@@ -245,45 +290,87 @@ def _observations(session: Session, item_ids: set[str]) -> list[PriceObservation
     )
 
 
+def _empty_market() -> dict:
+    return {
+        "median_tiyn": None,
+        "median_label": LOW_DATA,
+        "market_city": "",
+        "market_label": "",
+        "points": 0,
+        "n_suppliers": 0,
+        "p25_tiyn": None,
+        "p75_tiyn": None,
+    }
+
+
+def _index_row(session: Session, item_id: str, city: str, as_of: date) -> PriceIndexDaily | None:
+    start = (as_of - timedelta(days=WINDOW_DAYS)).isoformat()
+    return session.scalar(
+        select(PriceIndexDaily)
+        .where(
+            PriceIndexDaily.item_id == item_id,
+            PriceIndexDaily.city == city,
+            PriceIndexDaily.day >= start,
+            PriceIndexDaily.day <= as_of.isoformat(),
+        )
+        .order_by(PriceIndexDaily.day.desc())
+        .limit(1)
+    )
+
+
+def _market_from_row(row: PriceIndexDaily | None) -> dict:
+    if row is None or row.median_tiyn is None or row.n_suppliers < MIN_SUPPLIERS:
+        return _empty_market()
+    return {
+        "median_tiyn": row.median_tiyn,
+        "median_label": HAS_MEDIAN,
+        "market_city": row.city,
+        "market_label": market_label(row.city),
+        "points": row.n_observations,
+        "n_suppliers": row.n_suppliers,
+        "p25_tiyn": row.p25_tiyn,
+        "p75_tiyn": row.p75_tiyn,
+    }
+
+
 def medians_by_catalog(session: Session, catalog_ids: list[str], as_of: date | None = None) -> dict[str, dict]:
     as_of = as_of or _today()
     mapping = _catalog_index(session)
-    item_ids = {mapping[cid] for cid in catalog_ids if cid in mapping}
-    grouped: dict[str, list[int]] = {item_id: [] for item_id in item_ids}
-    for row in _observations(session, item_ids):
-        if not has_source(row.source_kind, row.source_id):
-            continue
-        if not in_window(row.observed_on, as_of):
-            continue
-        grouped.setdefault(row.item_id, []).append(incl_tiyn(row.price_tiyn, row.vat_included, row.vat_rate))
-    indexes = {item_id: index_for(values) for item_id, values in grouped.items()}
     out: dict[str, dict] = {}
     for catalog_id in catalog_ids:
+        item = session.get(CatalogItem, catalog_id)
         item_id = mapping.get(catalog_id)
-        if item_id and indexes.get(item_id, {}).get("median_tiyn") is not None:
-            out[catalog_id] = indexes[item_id]
-        else:
-            out[catalog_id] = {"median_tiyn": None, "median_label": LOW_DATA, "points": 0}
+        city = item.city if item is not None else ""
+        row = _index_row(session, item_id, city, as_of) if item_id else None
+        out[catalog_id] = _market_from_row(row)
     return out
+
+
+def _last_confirmed(session: Session, item_id: str, city: str) -> int | None:
+    last: tuple[str, int] | None = None
+    for row in _observations(session, {item_id}):
+        if row.city != city or not has_source(row.source_type, row.source_id):
+            continue
+        value = incl_tiyn(row.price_tiyn, row.vat_included, row.vat_rate)
+        if last is None or row.observed_on > last[0]:
+            last = (row.observed_on, value)
+    return last[1] if last else None
 
 
 def _judge_line(session: Session, catalog_id: str | None, name: str, price_incl: int, as_of: date) -> dict:
     mapping = _catalog_index(session)
     item_id = mapping.get(catalog_id or "")
-    rows: list[PriceObservation] = []
-    if item_id:
-        rows = _observations(session, {item_id})
-    window: list[int] = []
-    last: tuple[str, int] | None = None
-    for row in rows:
-        if not has_source(row.source_kind, row.source_id):
-            continue
-        value = incl_tiyn(row.price_tiyn, row.vat_included, row.vat_rate)
-        if in_window(row.observed_on, as_of):
-            window.append(value)
-        if last is None or row.observed_on > last[0]:
-            last = (row.observed_on, value)
-    judged = judge_price(price_incl, window, last[1] if last else None)
+    catalog = session.get(CatalogItem, catalog_id) if catalog_id else None
+    city = catalog.city if catalog is not None else ""
+    row = _index_row(session, item_id, city, as_of) if item_id else None
+    last = _last_confirmed(session, item_id, city) if item_id else None
+    judged = judge_price(
+        price_incl,
+        [],
+        last,
+        index_median=row.median_tiyn if row is not None else None,
+        index_suppliers=row.n_suppliers if row is not None else 0,
+    )
     judged["name"] = name
     return judged
 
@@ -316,6 +403,8 @@ def stars_of(rating: SupplierRating | None, profile: SupplierProfile | None = No
 
 def card_from(item: CatalogItem, profile: SupplierProfile, rating: SupplierRating | None, median: dict) -> dict:
     expired = stale(item)
+    shown = incl_tiyn(item.price_tiyn, item.vat_included, item.vat_rate)
+    overpay_pct, overpay_label = overpay_parts(shown, median.get("median_tiyn"))
     return {
         "id": item.id,
         "name": item.name,
@@ -340,6 +429,10 @@ def card_from(item: CatalogItem, profile: SupplierProfile, rating: SupplierRatin
         "hidden": item.hidden,
         "median_tiyn": median.get("median_tiyn"),
         "median_label": median.get("median_label") or LOW_DATA,
+        "market_city": median.get("market_city") or "",
+        "market_label": median.get("market_label") or "",
+        "overpay_pct": overpay_pct,
+        "overpay_label": overpay_label,
         **stars_of(rating, profile),
     }
 
@@ -910,6 +1003,7 @@ def _offer_card(session: Session, offer: Offer) -> dict:
     profile = session.get(SupplierProfile, offer.supplier_company_id)
     rating = _rating_row(session, offer.supplier_company_id)
     as_of = _today()
+    markets = medians_by_catalog(session, [line.catalog_id for line in lines if line.catalog_id])
     rendered = []
     total = 0
     suspicious = False
@@ -922,6 +1016,8 @@ def _offer_card(session: Session, offer: Offer) -> dict:
         item = session.get(CatalogItem, line.catalog_id) if line.catalog_id else None
         expired = stale(item) if item is not None else False
         judged = _judge_line(session, line.catalog_id, line.name, incl, as_of)
+        market = markets.get(line.catalog_id or "", _empty_market())
+        overpay_pct, overpay_label = overpay_parts(incl, market.get("median_tiyn"))
         if expired:
             stale_price = True
             comparable_ready = False
@@ -949,9 +1045,15 @@ def _offer_card(session: Session, offer: Offer) -> dict:
                 "stale_label": "цена устарела" if expired else "",
                 "suspicious": judged["suspicious"],
                 "manual_review": judged["manual_review"],
-                "median_label": LOW_DATA if judged["manual_review"] else HAS_MEDIAN,
+                "median_tiyn": market.get("median_tiyn"),
+                "median_label": market.get("median_label") or LOW_DATA,
+                "market_city": market.get("market_city") or "",
+                "market_label": market.get("market_label") or "",
+                "overpay_pct": overpay_pct,
+                "overpay_label": overpay_label,
             }
         )
+    header = rendered[0] if len(rendered) == 1 else None
     return {
         "id": offer.id,
         "supplier_id": offer.supplier_company_id,
@@ -970,6 +1072,11 @@ def _offer_card(session: Session, offer: Offer) -> dict:
         "esf_label": "" if profile and profile.esf else "без ЭСФ",
         "best": False,
         "eligible_best": comparable_ready and not stale_price and not suspicious,
+        "median_tiyn": header.get("median_tiyn") if header else None,
+        "market_city": header.get("market_city") if header else "",
+        "market_label": header.get("market_label") if header else "",
+        "overpay_pct": header.get("overpay_pct") if header else None,
+        "overpay_label": header.get("overpay_label") if header else "",
         "lines": rendered,
         **stars_of(rating, profile),
     }
@@ -1037,6 +1144,7 @@ def submit_offer(session: Session, user, body: dict) -> dict:
     raw_lines = list(body.get("lines") or [])
     if not raw_lines:
         raise MarketError("Укажите цены по позициям")
+    wrote_observation = False
     request_lines = {
         line.id: line
         for line in session.scalars(select(MarketRequestLine).where(MarketRequestLine.request_id == request_id)).all()
@@ -1073,23 +1181,39 @@ def submit_offer(session: Session, user, body: dict) -> dict:
                 source=line_source,
             )
         )
-        if catalog_id:
-            _append_observation(
-                session,
-                catalog_id=catalog_id,
-                company_id=profile.company_id,
-                price_tiyn=price,
-                vat_included=vat_included,
-                vat_rate=vat_rate,
-                source_id=offer.id,
-                name=name,
-                unit=str(raw.get("unit") or "шт"),
-            )
+        unit = str(raw.get("unit") or (request_line.unit if request_line else "шт"))
+        if catalog_id and _append_observation(
+            session,
+            catalog_id=catalog_id,
+            company_id=profile.company_id,
+            price_tiyn=price,
+            vat_included=vat_included,
+            vat_rate=vat_rate,
+            source_type="offer",
+            source_id=offer.id,
+            name=name,
+            unit=unit,
+        ):
+            wrote_observation = True
     try:
         session.flush()
     except IntegrityError as exc:
         raise MarketError("По этой заявке уже есть предложение", 409) from exc
+    if wrote_observation:
+        recompute_price_index(session, _today())
     return _offer_card(session, offer)
+
+
+def _position_id(session: Session, catalog_id: str, name: str, unit: str) -> str:
+    """Normalized price item when one exists, otherwise the catalog item itself."""
+
+    mapped = _catalog_index(session).get(catalog_id)
+    if mapped:
+        return mapped
+    if session.get(PriceItem, catalog_id) is None:
+        session.add(PriceItem(id=catalog_id, name=name[:200] or catalog_id, unit=unit[:20], catalog_ids=[catalog_id]))
+        session.flush()
+    return catalog_id
 
 
 def _append_observation(
@@ -1099,33 +1223,40 @@ def _append_observation(
     price_tiyn: int,
     vat_included: bool,
     vat_rate: int,
+    source_type: str,
     source_id: str,
     name: str,
     unit: str,
-) -> None:
-    mapping = _catalog_index(session)
-    item_id = mapping.get(catalog_id)
-    if not item_id:
-        return
-    item = session.get(PriceItem, item_id)
+) -> bool:
+    """Insert one excl-VAT observation. Returns false when there is no source."""
+
+    if source_type not in SOURCE_TYPES or not has_source(source_type, source_id) or price_tiyn <= 0:
+        return False
+    catalog = session.get(CatalogItem, catalog_id)
+    profile = session.get(SupplierProfile, company_id)
+    city = (catalog.city if catalog is not None and catalog.city else "") or (profile.city if profile is not None else "")
+    item_id = _position_id(session, catalog_id, name, unit)
+    position = session.get(PriceItem, item_id)
+    stored_rate = vat_rate if vat_rate > 0 else 0
     session.add(
         PriceObservation(
             id=uuid4().hex[:16],
             item_id=item_id,
             catalog_id=catalog_id,
-            item_name=item.name if item else name,
-            city="Алматы",
+            item_name=position.name if position is not None else name,
+            city=city,
             observed_on=_today().isoformat(),
-            unit=unit,
-            price_tiyn=price_tiyn,
-            vat_included=vat_included,
-            vat_rate=vat_rate,
-            source_kind="offer",
+            unit=unit[:20],
+            price_tiyn=excl_tiyn(price_tiyn, vat_included, vat_rate),
+            vat_included=False,
+            vat_rate=stored_rate,
+            source_type=source_type,
             source_id=source_id,
             company_id=company_id,
             created_at=_now(),
         )
     )
+    return True
 
 
 def select_offer(session: Session, user, offer_id: str) -> dict:
@@ -1195,9 +1326,46 @@ def accept_deal(session: Session, user, deal_id: str, body: dict) -> dict:
     deal.acceptance_ok = bool(body.get("acceptance_ok", True))
     profile = session.get(SupplierProfile, deal.supplier_company_id)
     deal.esf_ok = bool(body.get("esf_ok", bool(profile.esf) if profile else False))
+    if _record_invoice(session, deal, body):
+        session.flush()
+        recompute_price_index(session, _today())
     session.flush()
     recompute_supplier(session, deal.supplier_company_id)
     return {"id": deal.id, "accepted_at": deal.accepted_at}
+
+
+def _record_invoice(session: Session, deal: Deal, body: dict) -> bool:
+    """Write invoice prices in the acceptance transaction, and only with a source."""
+
+    source_id = str(body.get("invoice_source_id") or "").strip()
+    if not has_source("invoice", source_id):
+        return False
+    lines = list(session.scalars(select(OfferLine).where(OfferLine.offer_id == deal.offer_id)).all())
+    override = body.get("invoice_price_tiyn")
+    wrote = False
+    for line in lines:
+        if not line.catalog_id:
+            continue
+        price = line.price_tiyn
+        if override is not None and len(lines) == 1:
+            try:
+                price = int(override)
+            except (TypeError, ValueError) as exc:
+                raise MarketError("Цена в тиынах, целое число") from exc
+        if _append_observation(
+            session,
+            catalog_id=line.catalog_id,
+            company_id=deal.supplier_company_id,
+            price_tiyn=price,
+            vat_included=line.vat_included,
+            vat_rate=line.vat_rate,
+            source_type="invoice",
+            source_id=source_id,
+            name=line.name,
+            unit=line.unit,
+        ):
+            wrote = True
+    return wrote
 
 
 def _scores(body: dict) -> dict[str, int]:
