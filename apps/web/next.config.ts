@@ -26,6 +26,17 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  webpack: (config, { isServer, webpack }) => {
+    if (!isServer) {
+      config.plugins.push(
+        new webpack.NormalModuleReplacementPlugin(
+          /[\\/]i18n[\\/]messages\.ts$/,
+          path.join(__dirname, "src/i18n/messages.client.ts"),
+        ),
+      );
+    }
+    return config;
+  },
   reactStrictMode: true,
   compress: true,
   poweredByHeader: false,

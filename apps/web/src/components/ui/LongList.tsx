@@ -39,9 +39,7 @@ export function LongList<T>({
   return (
     <>
       {items.slice(0, count).map((item) => (
-        <div key={getKey(item)} className="long-row">
-          {render(item)}
-        </div>
+        <div key={getKey(item)}>{render(item)}</div>
       ))}
       {count < items.length ? <div ref={sentinel} className="h-8" aria-hidden /> : null}
     </>

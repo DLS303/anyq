@@ -10,6 +10,7 @@ const TOKEN_KEY = "superapp_token";
 type AuthState = {
   user: User | null;
   token: string;
+  ready: boolean;
   login: (user: User, token: string) => void;
   logout: () => void;
 };
@@ -19,17 +20,20 @@ const Ctx = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState("");
+  const [ready, setReady] = useState(false);
 
   useLayoutEffect(() => {
     const tok = localStorage.getItem(TOKEN_KEY) || "";
+    let next: User | null = null;
     try {
       const raw = localStorage.getItem(USER_KEY);
-      if (raw) setUser(JSON.parse(raw) as User);
+      if (raw && tok) next = JSON.parse(raw) as User;
     } catch {
       /* ignore */
     }
     setToken(tok);
-    if (!tok) setUser(null);
+    setUser(next);
+    setReady(true);
   }, []);
 
   useEffect(() => {
@@ -59,20 +63,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => ({
       user,
       token,
+      ready,
       login: (next, tok) => {
         localStorage.setItem(USER_KEY, JSON.stringify(next));
         localStorage.setItem(TOKEN_KEY, tok);
         setUser(next);
         setToken(tok);
+        setReady(true);
       },
       logout: () => {
         localStorage.removeItem(USER_KEY);
         localStorage.removeItem(TOKEN_KEY);
         setUser(null);
         setToken("");
+        setReady(true);
       },
     }),
-    [user, token],
+    [user, token, ready],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

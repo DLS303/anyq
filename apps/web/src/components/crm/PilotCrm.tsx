@@ -1,6 +1,5 @@
 "use client";
 
-import { useLayoutEffect, useState } from "react";
 import Link from "next/link";
 import { ChunkFallback } from "@/components/ui/ChunkFallback";
 import { useAuth } from "@/lib/auth";
@@ -10,16 +9,9 @@ import { CrmBoard } from "./CrmBoard";
 
 export function PilotCrm({ locale }: { locale: Locale }) {
   const m = useMessages();
-  const { user } = useAuth();
-  const [checked, setChecked] = useState(false);
-  const [hasToken, setHasToken] = useState(false);
+  const { user, token, ready } = useAuth();
 
-  useLayoutEffect(() => {
-    setHasToken(Boolean(localStorage.getItem("superapp_token")));
-    setChecked(true);
-  }, []);
-
-  if (!checked || (hasToken && !user)) {
+  if (!ready || (Boolean(token) && !user)) {
     return (
       <div className="min-h-[100dvh]">
         <ChunkFallback />

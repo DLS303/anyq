@@ -6,6 +6,7 @@ import type { Msg } from "@/i18n/messages";
 const Ctx = createContext<Msg | null>(null);
 
 export function I18nProvider({ messages, children }: { messages: Msg; children: React.ReactNode }) {
+  (globalThis as { __ANYQ_MESSAGES?: Msg }).__ANYQ_MESSAGES = messages;
   return <Ctx.Provider value={messages}>{children}</Ctx.Provider>;
 }
 

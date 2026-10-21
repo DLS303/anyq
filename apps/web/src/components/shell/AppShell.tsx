@@ -75,9 +75,12 @@ function navItems(locale: Locale, m: Msg, role?: Role) {
   ];
 }
 
+const authSlot = "inline-flex h-9 w-[7.5rem] shrink-0 items-center gap-2 rounded-full px-2.5 text-xs font-medium";
+
 function Header({ locale }: { locale: Locale }) {
   const m = useMessages();
-  const { user, logout } = useAuth();
+  const { user, token, ready, logout } = useAuth();
+  const pending = !ready || (Boolean(token) && !user);
   const pathname = usePathname();
   const link = (path: string) => `/${locale}${path}`;
   const nav = navItems(locale, m, user?.role);
@@ -129,7 +132,7 @@ function Header({ locale }: { locale: Locale }) {
         </button>
 
         {/* Brand Logo */}
-        <Link href={link("")} className="flex items-center gap-2.5 shrink-0 group">
+        <a href={link("")} className="flex items-center gap-2.5 shrink-0 group">
           <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-pine to-ice text-[11px] font-bold tracking-[0.14em] text-white shadow-navy group-hover:scale-105 transition-transform">
             AQ
           </span>
@@ -142,13 +145,13 @@ function Header({ locale }: { locale: Locale }) {
               PREMIUM PROPTECH
             </span>
           </span>
-        </Link>
+        </a>
 
         {/* Luxury Desktop Nav with sliding glass capsule and haptic physics */}
         <LuxuryNavTabs items={nav} />
 
         {/* Right side actions */}
-        <div className="ml-auto flex items-center gap-2 text-sm">
+        <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2 text-sm">
           {/* Language Switch */}
           <Link
             href={swapLocale(pathname, locale)}
@@ -158,12 +161,17 @@ function Header({ locale }: { locale: Locale }) {
           </Link>
 
           {/* User Auth or Menu */}
-          {user ? (
+          {pending ? (
+            <span className={`${authSlot} border border-slate-200 bg-white`} aria-hidden>
+              <span className="h-2 w-2 rounded-full bg-slate-200" />
+              <span className="h-2 flex-1 rounded bg-slate-100" />
+            </span>
+          ) : user ? (
             <div className="relative" ref={userMenuRef}>
               <button
                 type="button"
                 onClick={() => setUserMenuOpen((v) => !v)}
-                className="flex min-w-0 items-center gap-2 pl-2.5 pr-3 py-1 rounded-full bg-white border border-slate-200 shadow-xs hover:border-slate-300 transition-all text-xs font-medium text-slate-700 max-w-[7.5rem] sm:max-w-[11rem]"
+                className={`${authSlot} border border-slate-200 bg-white text-slate-700 shadow-xs hover:border-slate-300`}
               >
                 <span className="h-2 w-2 rounded-full bg-emerald-500" />
                 <span className="truncate">{user.full_name}</span>
@@ -219,7 +227,7 @@ function Header({ locale }: { locale: Locale }) {
               )}
             </div>
           ) : (
-            <Link href={link(PILOT_MODE ? "/login" : "/login?mode=register")} className="btn-ice text-xs !py-1.5 !px-4 !min-h-9 font-semibold">
+            <Link href={link(PILOT_MODE ? "/login" : "/login?mode=register")} prefetch={false} className={`${authSlot} btn-ice justify-center !min-h-0 !px-2 !py-0 text-xs whitespace-nowrap`}>
               {PILOT_MODE ? m.navLogin : m.register}
             </Link>
           )}
@@ -375,9 +383,12 @@ function Footer({ locale }: { locale: Locale }) {
   );
 }
 
+const SHELL_TABS = 5;
+
 function BottomNav({ locale }: { locale: Locale }) {
   const m = useMessages();
-  const { user } = useAuth();
+  const { user, token, ready } = useAuth();
+  const pending = !ready || (Boolean(token) && !user);
   const pathname = usePathname();
   const onProject = /\/site\/[^/]+/.test(pathname);
   const items = !DEMO_MODE || PILOT_MODE
@@ -394,10 +405,21 @@ function BottomNav({ locale }: { locale: Locale }) {
         { href: `/${locale}/estimates`, label: m.navEstimates, match: (p: string) => p.includes("/estimates") },
         { href: `/${locale}/cabinet`, label: m.navCabinet, match: (p: string) => p.includes("/cabinet") || p.includes("/login") },
       ];
+  const columns = pending ? SHELL_TABS : items.length;
   return (
     <nav className={`anyq-tabbar lg:hidden fixed bottom-0 inset-x-0 z-40 border-t border-slate-200/80 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-luxury ${(!DEMO_MODE || PILOT_MODE) && onProject ? "max-sm:hidden" : ""}`}>
-      <div className="grid" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
-        {items.map((item) => {
+      <div className="grid" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+        {pending
+          ? Array.from({ length: SHELL_TABS }, (_, index) => (
+              <div key={index} className="flex min-h-14 flex-col items-center justify-center gap-1 px-1" aria-hidden>
+                <span className="h-1 w-6 rounded-full bg-transparent" />
+                <span className="h-2 w-10 rounded bg-slate-100" />
+              </div>
+            ))
+          : null}
+        {pending
+          ? null
+          : items.map((item) => {
           const on = item.match(pathname);
           return (
             <Link
