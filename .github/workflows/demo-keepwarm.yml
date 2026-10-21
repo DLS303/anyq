@@ -1,0 +1,352 @@
+# Warm the public demo during the show window.
+# A failed check opens or updates one GitHub issue and fails the job.
+
+name: Demo keep-warm
+
+on:
+  schedule:
+    # GitHub cron is UTC, best-effort and may be delayed or skipped.
+    # 03:00–16:59 UTC is 08:00–21:59 Asia/Almaty (UTC+5, no DST), Monday–Saturday.
+    - cron: "*/10 3-16 * * 1-6"
+  workflow_dispatch:
+    inputs:
+      check_content:
+        description: Run content checks
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  issues: write
+
+concurrency:
+  group: demo-keepwarm
+  cancel-in-progress: true
+
+env:
+  DEMO_API_URL: ${{ vars.DEMO_API_URL || 'https://anyq-demo-api.onrender.com' }}
+  DEMO_WEB_URL: ${{ vars.DEMO_WEB_URL || 'https://anyq-demo.vercel.app' }}
+  DEMO_CHECK_CONTENT: ${{ vars.DEMO_CHECK_CONTENT }}
+  CHECK_CONTENT_INPUT: ${{ inputs.check_content }}
+
+jobs:
+  keep-warm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: API /healthz
+        id: api
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="$(printf '%s' "${DEMO_API_URL:-}" | tr -d '[:space:]')"
+          api="${api%/}"
+          if ! printf '%s' "$api" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "detail=DEMO_API_URL is not an https origin" >> "$GITHUB_OUTPUT"
+            echo "DEMO_API_URL is not an https origin" >&2
+            exit 1
+          fi
+          # --max-time 45 and --retry 3 fit inside timeout 200, so retries still run.
+          code="$(timeout 200 curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --retry 3 --retry-all-errors --retry-delay 2 --max-time 45 \
+            -A anyq-demo-keepwarm \
+            "${api}/healthz" || true)"
+          code="$(printf '%s' "$code" | tr -cd '0-9')"
+          if [ "${code:-000}" = "200" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "detail=" >> "$GITHUB_OUTPUT"
+            echo "api /healthz HTTP 200"
+            exit 0
+          fi
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "detail=api /healthz HTTP ${code:-000}" >> "$GITHUB_OUTPUT"
+          echo "api /healthz HTTP ${code:-000}" >&2
+          exit 1
+
+      - name: Web /ru
+        id: web
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          web="$(printf '%s' "${DEMO_WEB_URL:-}" | tr -d '[:space:]')"
+          web="${web%/}"
+          if ! printf '%s' "$web" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "detail=DEMO_WEB_URL is not an https origin" >> "$GITHUB_OUTPUT"
+            echo "DEMO_WEB_URL is not an https origin" >&2
+            exit 1
+          fi
+          code="$(timeout 90 curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --retry 3 --retry-delay 2 --max-time 20 \
+            -A anyq-demo-keepwarm \
+            "${web}/ru" || true)"
+          code="$(printf '%s' "$code" | tr -cd '0-9')"
+          if [ "${code:-000}" = "200" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "detail=" >> "$GITHUB_OUTPUT"
+            echo "web /ru HTTP 200"
+            exit 0
+          fi
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "detail=web /ru HTTP ${code:-000}" >> "$GITHUB_OUTPUT"
+          echo "web /ru HTTP ${code:-000}" >&2
+          exit 1
+
+      - name: Content checks
+        id: content
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Off unless DEMO_CHECK_CONTENT is true or the workflow_dispatch input is set.
+          # Registration, the demo banner, CORS, and /docs come from separate pull requests.
+          if [ "${DEMO_CHECK_CONTENT:-}" != "true" ] && [ "${CHECK_CONTENT_INPUT:-}" != "true" ]; then
+            echo "Content checks are off"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "detail=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          api="$(printf '%s' "${DEMO_API_URL:-}" | tr -d '[:space:]')"
+          api="${api%/}"
+          web="$(printf '%s' "${DEMO_WEB_URL:-}" | tr -d '[:space:]')"
+          web="${web%/}"
+          result="$(mktemp)"
+          export RESULT_FILE="$result"
+          export KEEP_API="$api"
+          export KEEP_WEB="$web"
+          record() {
+            printf '%s\n' "$1" >> "$RESULT_FILE"
+            echo "$1" >&2
+          }
+          if ! printf '%s' "$api" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
+            record "DEMO_API_URL is not an https origin"
+          fi
+          if ! printf '%s' "$web" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
+            record "DEMO_WEB_URL is not an https origin"
+          fi
+          status=0
+          if [ ! -s "$RESULT_FILE" ]; then
+            set +e
+            timeout 100 bash -euo pipefail <<'INNER'
+          record() {
+            printf '%s\n' "$1" >> "$RESULT_FILE"
+            echo "$1" >&2
+          }
+          api="$KEEP_API"
+          web="$KEEP_WEB"
+          page="$(mktemp)"
+          trap 'rm -f "$page"' EXIT
+          code="$(curl --silent --show-error --output "$page" --write-out '%{http_code}' \
+            --max-time 20 -A anyq-demo-keepwarm \
+            "${web}/ru" || true)"
+          code="$(printf '%s' "$code" | tr -cd '0-9')"
+          if [ "${code:-000}" != "200" ] || ! grep -F 'ДЕМО' "$page" >/dev/null; then
+            record "web /ru missing ДЕМО (HTTP ${code:-000})"
+          fi
+          rm -f "$page"
+          trap - EXIT
+          email="keepwarm-$(openssl rand -hex 12)@example.com"
+          password="$(openssl rand -base64 32 | tr -d '\n')"
+          payload="$(
+            EMAIL="$email" PASSWORD="$password" python3 -c 'import json,os; print(json.dumps({"email":os.environ["EMAIL"],"password":os.environ["PASSWORD"],"full_name":"Keep Warm","company":"Example Check","company_bin":"000000000000","phone":"000000","role":"buyer","consent_offer_pd":True}))'
+          )"
+          code="$(
+            printf '%s' "$payload" | curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --max-time 20 -A anyq-demo-keepwarm \
+              -X POST -H 'Content-Type: application/json' -H 'Accept: application/json' \
+              --data-binary @- \
+              "${api}/v1/auth/register" || true
+          )"
+          unset password payload
+          code="$(printf '%s' "$code" | tr -cd '0-9')"
+          if [ "${code:-000}" = "000" ] || printf '%s' "${code:-000}" | grep -Eq '^2'; then
+            record "POST /v1/auth/register HTTP ${code:-000}"
+          fi
+          headers="$(mktemp)"
+          code="$(curl --silent --show-error --dump-header "$headers" --output /dev/null --write-out '%{http_code}' \
+            --max-time 20 -A anyq-demo-keepwarm \
+            -H 'Origin: https://example.org' \
+            "${api}/healthz" || true)"
+          code="$(printf '%s' "$code" | tr -cd '0-9')"
+          if [ "${code:-000}" = "000" ] || grep -qi '^access-control-allow-origin:' "$headers"; then
+            record "Origin https://example.org Access-Control-Allow-Origin (HTTP ${code:-000})"
+          fi
+          rm -f "$headers"
+          code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --max-time 20 -A anyq-demo-keepwarm \
+            "${api}/docs" || true)"
+          code="$(printf '%s' "$code" | tr -cd '0-9')"
+          if [ "${code:-000}" != "404" ]; then
+            record "GET /docs HTTP ${code:-000}"
+          fi
+          INNER
+            status=$?
+            set -e
+          fi
+          if [ "$status" -eq 124 ]; then
+            record "content checks timed out"
+          elif [ "$status" -ne 0 ] && [ ! -s "$RESULT_FILE" ]; then
+            record "content checks failed"
+          fi
+          failed="$(awk 'NF { printf "%s%s", sep, $0; sep="; " }' "$RESULT_FILE")"
+          rm -f "$RESULT_FILE"
+          if [ -n "$failed" ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "detail=${failed}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+          echo "detail=" >> "$GITHUB_OUTPUT"
+
+      - name: Open or close the Demo down issue
+        if: success() || failure() || cancelled()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          API_OK: ${{ steps.api.outputs.ok }}
+          API_DETAIL: ${{ steps.api.outputs.detail }}
+          WEB_OK: ${{ steps.web.outputs.ok }}
+          WEB_DETAIL: ${{ steps.web.outputs.detail }}
+          CONTENT_OK: ${{ steps.content.outputs.ok }}
+          CONTENT_DETAIL: ${{ steps.content.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          # github.token is GITHUB_TOKEN. No repository secret is used.
+          github-token: ${{ github.token }}
+          script: |
+            const title = "Demo down";
+            const labelName = "demo-alert";
+            const runUrl = process.env.RUN_URL || "";
+            const { owner, repo } = context.repo;
+
+            function statusOf(error) {
+              if (error && typeof error.status === "number") return error.status;
+              if (error && error.response && typeof error.response.status === "number") {
+                return error.response.status;
+              }
+              return 0;
+            }
+
+            function isAlert(issue) {
+              if (!issue || issue.pull_request) return false;
+              const login = issue.user && issue.user.login;
+              if (login !== "github-actions[bot]") return false;
+              const labels = (issue.labels || []).map((item) => (typeof item === "string" ? item : item.name));
+              return labels.includes(labelName);
+            }
+
+            function failingLine(body) {
+              const line = String(body || "")
+                .split(/\r?\n/)
+                .map((item) => item.trim())
+                .find((item) => item.startsWith("Failing check:"));
+              return line || "";
+            }
+
+            async function listAlerts(state) {
+              const found = [];
+              for (let page = 1; page <= 20; page += 1) {
+                const { data } = await github.rest.issues.listForRepo({
+                  owner,
+                  repo,
+                  state,
+                  labels: labelName,
+                  creator: "github-actions[bot]",
+                  per_page: 100,
+                  page,
+                  sort: "updated",
+                  direction: "desc",
+                });
+                for (const issue of data) {
+                  if (isAlert(issue)) found.push(issue);
+                }
+                if (data.length < 100) break;
+              }
+              return found;
+            }
+
+            async function ensureLabel() {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: labelName });
+              } catch (error) {
+                if (statusOf(error) !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: labelName,
+                  color: "B60205",
+                  description: "Demo availability alert",
+                });
+              }
+            }
+
+            const failed = [
+              process.env.API_OK === "true" ? "" : process.env.API_DETAIL || "api /healthz",
+              process.env.WEB_OK === "true" ? "" : process.env.WEB_DETAIL || "web /ru",
+              process.env.CONTENT_OK === "true" ? "" : process.env.CONTENT_DETAIL || "content checks",
+            ].filter(Boolean);
+
+            const passed = `Checks passed.\n\nRun: ${runUrl}`;
+            if (failed.length === 0) {
+              const open = await listAlerts("open");
+              for (const issue of open) {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  state: "closed",
+                  state_reason: "completed",
+                });
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  body: passed,
+                });
+              }
+              return;
+            }
+
+            await ensureLabel();
+            const nextLine = `Failing check: ${failed.join("; ")}`;
+            const body = `${nextLine}\n\nRun: ${runUrl}`;
+            const open = await listAlerts("open");
+            const targets = open.length > 0 ? open : (await listAlerts("closed")).slice(0, 1);
+            if (targets.length === 0) {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+                labels: [labelName],
+              });
+            } else {
+              for (const issue of targets) {
+                const wasClosed = issue.state === "closed";
+                const changed = failingLine(issue.body) !== nextLine;
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  title,
+                  body,
+                  state: "open",
+                });
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  labels: [labelName],
+                });
+                if (wasClosed || changed) {
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: issue.number,
+                    body,
+                  });
+                }
+              }
+            }
+            core.setFailed(body);
