@@ -23,7 +23,7 @@ from app.marketplace_models import (
 )
 from app.marketplace_score import FIXTURE_AS_OF
 from app.marketplace_service import e164, recompute_all, recompute_price_index, search_text_of
-from app.recipient_stub import RequestRecipient
+from app.sql_backend import RequestRecipient
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "anyq_marketplace_demo_fake.json"
 BUYER_USER = "u-market-buyer"
@@ -188,18 +188,16 @@ def _seed_deal(session: Session, deal: dict, review: dict | None) -> None:
                 category="",
             )
         )
-    if session.scalar(
-        select(RequestRecipient.id).where(
-            RequestRecipient.request_id == request_id,
-            RequestRecipient.company_id == deal["supplier_id"],
-        )
-    ) is None:
+    stamp = f"{deal['completed_at']}T08:00:00+00:00"
+    if session.get(RequestRecipient, (request_id, deal["supplier_id"])) is None:
         session.add(
             RequestRecipient(
-                id=f"seed-rcpt-{deal['id']}",
                 request_id=request_id,
-                company_id=deal["supplier_id"],
-                created_at=f"{deal['completed_at']}T08:00:00+00:00",
+                supplier_company_id=deal["supplier_id"],
+                status="sent",
+                sent_at=stamp,
+                created_at=stamp,
+                updated_at=stamp,
             )
         )
     if session.get(Offer, offer_id) is None:

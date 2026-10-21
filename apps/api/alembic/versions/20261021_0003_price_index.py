@@ -9,9 +9,8 @@ source_type with ALTER RENAME, which does not rewrite rows and does not fire
 the append-only trigger. price_index_daily is rebuilt by the daily job, so the
 application role keeps ordinary row privileges on that table.
 
-This file revises 20261021_0002_marketplace, so the branch keeps one head.
-That revision's parent is still provisional: it will become the registration
-revision, which sits on 20261019_0002_pf0.
+This file revises 20261021_0002_marketplace. That revision revises
+20261021_0003_recipient_status. The single head is 20261021_0003_price_index.
 """
 
 import sqlalchemy as sa

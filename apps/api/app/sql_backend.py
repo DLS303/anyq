@@ -970,8 +970,7 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-# One alembic head. 20261021_0002_marketplace will revise the registration
-# revision (itself on 20261019_0002_pf0) when that id is published.
+# One alembic head. 20261021_0002_marketplace revises 20261021_0003_recipient_status.
 SCHEMA_HEAD = "20261021_0003_price_index"
 MIGRATION_LOCK = 21419007
 
@@ -1336,7 +1335,6 @@ class SqlRuntime:
         for attempt in range(8):
             try:
                 import app.marketplace_models  # noqa: F401
-                import app.recipient_stub  # noqa: F401
 
                 Base.metadata.create_all(self.engine)
                 install_consent_triggers(self.engine)
