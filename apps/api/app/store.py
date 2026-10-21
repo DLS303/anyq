@@ -319,6 +319,91 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+_LAND_WORD = re.compile(r"участ(?!ник)|земл", re.IGNORECASE)
+_DEMO_LAND_ORDERS = frozenset({"ord-topo"})
+_DEMO_LAND_DEALS = frozenset({"deal-land-1", "deal-design-1"})
+_DEMO_LAND_THREADS = frozenset({"th-topo"})
+_LAND_SKIP = frozenset(
+    {
+        "id",
+        "email",
+        "phone",
+        "slug",
+        "bin",
+        "iin",
+        "license_no",
+        "bin_iin",
+        "payer_iin_bin",
+        "number",
+        "code",
+    }
+)
+_LAND_SWAPS = (
+    ("земельный участок", "строительный объект"),
+    ("Земельный участок", "Строительный объект"),
+    ("земельным", "строительным"),
+    ("земельного", "строительного"),
+    ("земельные", "строительные"),
+    ("Земляные", "Котлован"),
+    ("земляные", "котлован"),
+    ("землек.", "бригада"),
+    ("участков", "объектов"),
+    ("Участков", "Объектов"),
+    ("участки", "объекты"),
+    ("участком", "объектом"),
+    ("участку", "объекту"),
+    ("участке", "объекте"),
+    ("участка", "объекта"),
+    ("Участка", "Объекта"),
+    ("Участок", "Объект"),
+    ("участок", "объект"),
+    ("Land Development", "Development"),
+    ("Legal Land", "Legal"),
+)
+
+
+def _land_words(text: str) -> bool:
+    return bool(_LAND_WORD.search(text or ""))
+
+
+def _rewrite_land_text(text: str) -> str:
+    for old, new in _LAND_SWAPS:
+        text = text.replace(old, new)
+    return text
+
+
+def _is_model(value) -> bool:
+    return isinstance(getattr(type(value), "model_fields", None), dict)
+
+
+def _clean_land_model(model) -> bool:
+    changed = False
+    for name in type(model).model_fields:
+        value = getattr(model, name)
+        if name == "plot_id" and value is not None:
+            setattr(model, name, None)
+            changed = True
+            continue
+        if name == "plot_title" and isinstance(value, str) and _land_words(value):
+            setattr(model, name, "")
+            changed = True
+            continue
+        if isinstance(value, str) and name not in _LAND_SKIP:
+            cleaned = _rewrite_land_text(value)
+            if cleaned != value:
+                setattr(model, name, cleaned)
+                changed = True
+            continue
+        if isinstance(value, list):
+            for item in value:
+                if _is_model(item) and _clean_land_model(item):
+                    changed = True
+            continue
+        if _is_model(value) and _clean_land_model(value):
+            changed = True
+    return changed
+
+
 class MemoryStore:
     def __init__(self) -> None:
         assert_demo_password_policy()
@@ -347,6 +432,8 @@ class MemoryStore:
                 self._ensure_materials()
                 self._ensure_site()
                 self._ensure_crm()
+                if current_env() == "demo":
+                    self._strip_demo_land()
         finally:
             self._sql.bootstrap_unlock(boot)
         self._stamp_revs(self._sql.revisions())
@@ -631,6 +718,51 @@ class MemoryStore:
         self.deals = {d.id: deepcopy(d) for d in DEALS}
         self.threads = {t.id: deepcopy(t) for t in THREADS}
         self.messages = {m.id: deepcopy(m) for m in MESSAGES}
+        self._save_unlocked()
+
+    def _strip_demo_land(self) -> None:
+        """Drop land rows from the demo store and clear plot ids on what remains."""
+        land_orders = {
+            item_id
+            for item_id, item in self.orders.items()
+            if item_id in _DEMO_LAND_ORDERS or _land_words(item.message)
+        }
+        land_deals = {
+            item_id
+            for item_id, item in self.deals.items()
+            if item.funnel == "land_sale" or item_id in _DEMO_LAND_DEALS or _land_words(item.title)
+        }
+        for item_id in land_orders:
+            del self.orders[item_id]
+        for item_id in land_deals:
+            del self.deals[item_id]
+        land_threads = {
+            item_id
+            for item_id, item in self.threads.items()
+            if item.order_id in land_orders or item_id in _DEMO_LAND_THREADS
+        }
+        for item_id in land_threads:
+            del self.threads[item_id]
+        for item_id, item in list(self.messages.items()):
+            if item.thread_id in land_threads:
+                del self.messages[item_id]
+        for item_id, item in list(self.leads.items()):
+            if item.funnel_target == "land_sale" or _land_words(item.title):
+                del self.leads[item_id]
+        for name in ("crm_activities", "crm_invoices"):
+            bag = getattr(self, name)
+            for item_id, item in list(bag.items()):
+                if getattr(item, "deal_id", None) in land_deals:
+                    del bag[item_id]
+        for item_id in list(self.plots):
+            del self.plots[item_id]
+        for name in DICT_ATTRS:
+            bag = getattr(self, name)
+            for item_id, item in list(bag.items()):
+                if not _is_model(item):
+                    continue
+                if _clean_land_model(item):
+                    bag[item_id] = item
         self._save_unlocked()
 
     def _load(self) -> None:

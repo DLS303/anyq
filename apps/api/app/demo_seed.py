@@ -41,7 +41,7 @@ _SPECS = (
         "id": "demo-prj-almaty-2",
         "slug": "demo-almaty-slope",
         "title": "Вымышленный дом на склоне, 180 м²",
-        "address": "Алматы, проезд Несуществующий-0, участок 0 (вымышл.)",
+        "address": "Алматы, проезд Несуществующий-0, дом 0 (вымышл.)",
         "start": "2026-12-01",
         "finish": "2027-11-30",
         "area_m2": 180,
@@ -207,7 +207,7 @@ def _lines(store, project: Project, lines) -> None:
 
 def _tasks(store, project: Project) -> None:
     rows = (
-        ("1", "Вымышленные земляные работы", project.start, "2026-12-15", 15, "in_progress"),
+        ("1", "Вымышленный котлован", project.start, "2026-12-15", 15, "in_progress"),
         ("2", "Вымышленный фундамент", "2026-12-16", project.finish, 0, "not_started"),
     )
     changed = False

@@ -29,6 +29,7 @@ from app.sql_backend import guard_json_store_read, read_json_store
 from app.store import MemoryStore
 
 FICTIONAL_PHONE = re.compile(r"^\+7 000 000 00 \d{2}$")
+LAND_WORD = re.compile(r"участ(?!ник)|земл", re.IGNORECASE)
 PHONE = re.compile(r"\+\d[\d\s()\-]{6,}\d")
 EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 ALLOWED_EMAIL = re.compile(r"^[^@\s]+@(?:demo\.superapp|example\.com)$", re.IGNORECASE)
@@ -307,6 +308,24 @@ def _seed_ids(store) -> dict[str, list]:
     }
 
 
+def _land_texts(value, found: list[str]) -> None:
+    if isinstance(value, str):
+        if LAND_WORD.search(value):
+            found.append(value)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _land_texts(item, found)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _land_texts(item, found)
+        return
+    dump = getattr(value, "model_dump", None)
+    if dump is not None:
+        _land_texts(dump(), found)
+
+
 def test_demo_seeds_construction_without_plots_or_db_json(monkeypatch, tmp_path):
     path = tmp_path / "db.json"
     path.write_text(
@@ -338,10 +357,48 @@ def test_demo_seeds_construction_without_plots_or_db_json(monkeypatch, tmp_path)
         assert "u-from-json" not in fresh.users_by_id
         assert list(fresh.reviews) == []
         assert "sp-arch" in fresh.specialists
-        assert "ord-topo" in fresh.orders
+        assert "ord-topo" not in fresh.orders
+        assert "deal-land-1" not in fresh.deals
+        assert "deal-design-1" not in fresh.deals
+        assert "ord-arch" in fresh.orders
+        assert fresh.orders["ord-arch"].plot_id is None
         assert "deal-smr-1" in fresh.deals
-        assert "th-topo" in fresh.threads
-        assert "m1" in fresh.messages
+        assert fresh.deals["deal-smr-1"].plot_id is None
+        assert fresh.deals["deal-design-2"].plot_id is None
+        assert "th-topo" not in fresh.threads
+        assert "m1" not in fresh.messages
+        assert "th-arch" in fresh.threads
+        assert fresh.threads["th-arch"].plot_id is None
+        assert "m3" in fresh.messages
+        assert run_demo_seed(fresh) == "created"
+        assert "demo-prj-almaty-1-task-1" in fresh.schedule
+        assert "demo-doc-estimate" in fresh.files
+        found: list[str] = []
+        for name in (
+            "specialists",
+            "orders",
+            "deals",
+            "threads",
+            "messages",
+            "projects",
+            "schedule",
+            "budget_lines",
+            "rfis",
+            "leads",
+            "crm_contacts",
+            "crm_activities",
+            "crm_invoices",
+            "timesheets",
+            "daily_logs",
+            "files",
+            "proc_requests",
+        ):
+            _land_texts(getattr(fresh, name), found)
+        assert found == []
+        for order in fresh.orders.values():
+            assert order.plot_id is None
+        for deal in fresh.deals.values():
+            assert deal.plot_id is None
     finally:
         _close(fresh)
 
@@ -350,7 +407,10 @@ def test_demo_seeds_construction_without_plots_or_db_json(monkeypatch, tmp_path)
         assert list(again.plots) == []
         assert "sp-arch" in again.specialists
         assert "ord-arch" in again.orders
+        assert again.orders["ord-arch"].plot_id is None
+        assert "deal-land-1" not in again.deals
         assert "deal-design-2" in again.deals
+        assert again.deals["deal-design-2"].plot_id is None
         assert "th-arch" in again.threads
         assert "m3" in again.messages
         assert "u-from-json" not in again.users_by_id
