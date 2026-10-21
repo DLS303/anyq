@@ -80,13 +80,17 @@ def test_keepwarm_workflow_contract():
     assert "check_content:" in text
     assert "type: boolean" in text
     assert "default: false" in text
-    assert "contents: read" in text
+    assert "contents: read" not in text
     assert "issues: write" in text
     assert "group: demo-keepwarm" in text
     assert "cancel-in-progress: true" in text
-    assert "timeout-minutes: 5" in text
-    assert "--max-time 120" in text
+    assert "timeout-minutes: 8" in text
+    assert "timeout 200" in text
+    assert "timeout 90" in text
+    assert "timeout 100" in text
+    assert "--max-time 45" in text
     assert "--retry 3" in text
+    assert "failure() || cancelled()" in text
     assert "https://anyq-demo-api.onrender.com" in text
     assert "https://anyq-demo.vercel.app" in text
     assert "vars.DEMO_API_URL" in text
@@ -102,6 +106,9 @@ def test_keepwarm_workflow_contract():
     assert "/docs" in text
     assert 'title = "Demo down"' in text
     assert 'labelName = "demo-alert"' in text
+    assert 'creator: "github-actions[bot]"' in text
+    assert "issue.title" not in text
+    assert "wasClosed || changed" in text
     assert "github.token" in text
     assert "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" in text
     assert "secrets." not in text
@@ -141,6 +148,12 @@ def test_demo_ops_covers_hours_alerts_and_rollback():
         "the owner merges it, so alerts go to them",
         "GitHub cron is UTC, best-effort and may be delayed or skipped.",
         "off by default",
+        "this file must be on main",
+        "DEMO_CHECK_CONTENT=true only after REGISTRATION_ENABLED is merged",
+        "create real accounts every 10 min",
+        "the owner should Watch the repo",
+        "60 days without activity",
+        "~15 min after the window",
     ):
         assert phrase in text
     assert "data/db.json" not in text
@@ -285,7 +298,7 @@ def test_workflow_shell_matches_health_and_content_results(tmp_path: Path):
     up = _run_step(tmp_path / "up", api, {})
     assert up.returncode == 0, up.stderr
     assert up.outputs["ok"] == "true"
-    assert "--max-time 120" in up.curl_log
+    assert "--max-time 45" in up.curl_log
     assert "--retry 3" in up.curl_log
     assert up.curl_log.strip().endswith("/healthz") or "/healthz " in up.curl_log
 

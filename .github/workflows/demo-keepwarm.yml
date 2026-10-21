@@ -17,7 +17,6 @@ on:
         default: false
 
 permissions:
-  contents: read
   issues: write
 
 concurrency:
@@ -33,7 +32,7 @@ env:
 jobs:
   keep-warm:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - name: API /healthz
         id: api
@@ -48,9 +47,9 @@ jobs:
             echo "DEMO_API_URL is not an https origin" >&2
             exit 1
           fi
-          # Leave time inside the 5 minute job for the alert step if every attempt is slow.
-          code="$(timeout 150 curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-            --retry 3 --retry-all-errors --retry-delay 2 --max-time 120 \
+          # --max-time 45 and --retry 3 fit inside timeout 200, so retries still run.
+          code="$(timeout 200 curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --retry 3 --retry-all-errors --retry-delay 2 --max-time 45 \
             -A anyq-demo-keepwarm \
             "${api}/healthz" || true)"
           code="$(printf '%s' "$code" | tr -cd '0-9')"
@@ -79,8 +78,8 @@ jobs:
             echo "DEMO_WEB_URL is not an https origin" >&2
             exit 1
           fi
-          code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-            --retry 3 --retry-delay 2 --max-time 60 \
+          code="$(timeout 90 curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --retry 3 --retry-delay 2 --max-time 20 \
             -A anyq-demo-keepwarm \
             "${web}/ru" || true)"
           code="$(printf '%s' "$code" | tr -cd '0-9')"
@@ -113,70 +112,86 @@ jobs:
           api="${api%/}"
           web="$(printf '%s' "${DEMO_WEB_URL:-}" | tr -d '[:space:]')"
           web="${web%/}"
-          failed=""
-          note() {
-            if [ -n "$failed" ]; then
-              failed="${failed}; "
-            fi
-            failed="${failed}$1"
+          result="$(mktemp)"
+          export RESULT_FILE="$result"
+          export KEEP_API="$api"
+          export KEEP_WEB="$web"
+          record() {
+            printf '%s\n' "$1" >> "$RESULT_FILE"
             echo "$1" >&2
           }
           if ! printf '%s' "$api" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
-            note "DEMO_API_URL is not an https origin"
+            record "DEMO_API_URL is not an https origin"
           fi
           if ! printf '%s' "$web" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
-            note "DEMO_WEB_URL is not an https origin"
+            record "DEMO_WEB_URL is not an https origin"
           fi
-          if [ -z "$failed" ]; then
-            page="$(mktemp)"
-            trap 'rm -f "$page"' EXIT
-            code="$(curl --silent --show-error --output "$page" --write-out '%{http_code}' \
-              --max-time 30 -A anyq-demo-keepwarm \
-              "${web}/ru" || true)"
-            code="$(printf '%s' "$code" | tr -cd '0-9')"
-            if [ "${code:-000}" != "200" ] || ! grep -F 'ДЕМО' "$page" >/dev/null; then
-              note "web /ru missing ДЕМО (HTTP ${code:-000})"
-            fi
-            rm -f "$page"
-            trap - EXIT
-
-            email="keepwarm-$(openssl rand -hex 12)@example.com"
-            password="$(openssl rand -base64 32 | tr -d '\n')"
-            payload="$(
-              EMAIL="$email" PASSWORD="$password" python3 -c 'import json,os; print(json.dumps({"email":os.environ["EMAIL"],"password":os.environ["PASSWORD"],"full_name":"Keep Warm","company":"Example Check","company_bin":"000000000000","phone":"000000","role":"buyer","consent_offer_pd":True}))'
-            )"
-            code="$(
-              printf '%s' "$payload" | curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-                --max-time 30 -A anyq-demo-keepwarm \
-                -X POST -H 'Content-Type: application/json' -H 'Accept: application/json' \
-                --data-binary @- \
-                "${api}/v1/auth/register" || true
-            )"
-            unset password payload
-            code="$(printf '%s' "$code" | tr -cd '0-9')"
-            if [ "${code:-000}" = "000" ] || printf '%s' "${code:-000}" | grep -Eq '^2'; then
-              note "POST /v1/auth/register HTTP ${code:-000}"
-            fi
-
-            headers="$(mktemp)"
-            code="$(curl --silent --show-error --dump-header "$headers" --output /dev/null --write-out '%{http_code}' \
-              --max-time 30 -A anyq-demo-keepwarm \
-              -H 'Origin: https://example.org' \
-              "${api}/healthz" || true)"
-            code="$(printf '%s' "$code" | tr -cd '0-9')"
-            if [ "${code:-000}" = "000" ] || grep -qi '^access-control-allow-origin:' "$headers"; then
-              note "Origin https://example.org Access-Control-Allow-Origin (HTTP ${code:-000})"
-            fi
-            rm -f "$headers"
-
-            code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-              --max-time 30 -A anyq-demo-keepwarm \
-              "${api}/docs" || true)"
-            code="$(printf '%s' "$code" | tr -cd '0-9')"
-            if [ "${code:-000}" != "404" ]; then
-              note "GET /docs HTTP ${code:-000}"
-            fi
+          status=0
+          if [ ! -s "$RESULT_FILE" ]; then
+            set +e
+            timeout 100 bash -euo pipefail <<'INNER'
+          record() {
+            printf '%s\n' "$1" >> "$RESULT_FILE"
+            echo "$1" >&2
+          }
+          api="$KEEP_API"
+          web="$KEEP_WEB"
+          page="$(mktemp)"
+          trap 'rm -f "$page"' EXIT
+          code="$(curl --silent --show-error --output "$page" --write-out '%{http_code}' \
+            --max-time 20 -A anyq-demo-keepwarm \
+            "${web}/ru" || true)"
+          code="$(printf '%s' "$code" | tr -cd '0-9')"
+          if [ "${code:-000}" != "200" ] || ! grep -F 'ДЕМО' "$page" >/dev/null; then
+            record "web /ru missing ДЕМО (HTTP ${code:-000})"
           fi
+          rm -f "$page"
+          trap - EXIT
+          email="keepwarm-$(openssl rand -hex 12)@example.com"
+          password="$(openssl rand -base64 32 | tr -d '\n')"
+          payload="$(
+            EMAIL="$email" PASSWORD="$password" python3 -c 'import json,os; print(json.dumps({"email":os.environ["EMAIL"],"password":os.environ["PASSWORD"],"full_name":"Keep Warm","company":"Example Check","company_bin":"000000000000","phone":"000000","role":"buyer","consent_offer_pd":True}))'
+          )"
+          code="$(
+            printf '%s' "$payload" | curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --max-time 20 -A anyq-demo-keepwarm \
+              -X POST -H 'Content-Type: application/json' -H 'Accept: application/json' \
+              --data-binary @- \
+              "${api}/v1/auth/register" || true
+          )"
+          unset password payload
+          code="$(printf '%s' "$code" | tr -cd '0-9')"
+          if [ "${code:-000}" = "000" ] || printf '%s' "${code:-000}" | grep -Eq '^2'; then
+            record "POST /v1/auth/register HTTP ${code:-000}"
+          fi
+          headers="$(mktemp)"
+          code="$(curl --silent --show-error --dump-header "$headers" --output /dev/null --write-out '%{http_code}' \
+            --max-time 20 -A anyq-demo-keepwarm \
+            -H 'Origin: https://example.org' \
+            "${api}/healthz" || true)"
+          code="$(printf '%s' "$code" | tr -cd '0-9')"
+          if [ "${code:-000}" = "000" ] || grep -qi '^access-control-allow-origin:' "$headers"; then
+            record "Origin https://example.org Access-Control-Allow-Origin (HTTP ${code:-000})"
+          fi
+          rm -f "$headers"
+          code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --max-time 20 -A anyq-demo-keepwarm \
+            "${api}/docs" || true)"
+          code="$(printf '%s' "$code" | tr -cd '0-9')"
+          if [ "${code:-000}" != "404" ]; then
+            record "GET /docs HTTP ${code:-000}"
+          fi
+          INNER
+            status=$?
+            set -e
+          fi
+          if [ "$status" -eq 124 ]; then
+            record "content checks timed out"
+          elif [ "$status" -ne 0 ] && [ ! -s "$RESULT_FILE" ]; then
+            record "content checks failed"
+          fi
+          failed="$(awk 'NF { printf "%s%s", sep, $0; sep="; " }' "$RESULT_FILE")"
+          rm -f "$RESULT_FILE"
           if [ -n "$failed" ]; then
             echo "ok=false" >> "$GITHUB_OUTPUT"
             echo "detail=${failed}" >> "$GITHUB_OUTPUT"
@@ -186,7 +201,7 @@ jobs:
           echo "detail=" >> "$GITHUB_OUTPUT"
 
       - name: Open or close the Demo down issue
-        if: success() || failure()
+        if: success() || failure() || cancelled()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           API_OK: ${{ steps.api.outputs.ok }}
@@ -213,24 +228,38 @@ jobs:
               return 0;
             }
 
-            function isMatch(issue) {
-              return Boolean(issue) && !issue.pull_request && issue.title === title;
+            function isAlert(issue) {
+              if (!issue || issue.pull_request) return false;
+              const login = issue.user && issue.user.login;
+              if (login !== "github-actions[bot]") return false;
+              const labels = (issue.labels || []).map((item) => (typeof item === "string" ? item : item.name));
+              return labels.includes(labelName);
             }
 
-            async function listIssues(state) {
+            function failingLine(body) {
+              const line = String(body || "")
+                .split(/\r?\n/)
+                .map((item) => item.trim())
+                .find((item) => item.startsWith("Failing check:"));
+              return line || "";
+            }
+
+            async function listAlerts(state) {
               const found = [];
               for (let page = 1; page <= 20; page += 1) {
                 const { data } = await github.rest.issues.listForRepo({
                   owner,
                   repo,
                   state,
+                  labels: labelName,
+                  creator: "github-actions[bot]",
                   per_page: 100,
                   page,
                   sort: "updated",
                   direction: "desc",
                 });
                 for (const issue of data) {
-                  if (isMatch(issue)) found.push(issue);
+                  if (isAlert(issue)) found.push(issue);
                 }
                 if (data.length < 100) break;
               }
@@ -260,7 +289,7 @@ jobs:
 
             const passed = `Checks passed.\n\nRun: ${runUrl}`;
             if (failed.length === 0) {
-              const open = await listIssues("open");
+              const open = await listAlerts("open");
               for (const issue of open) {
                 await github.rest.issues.update({
                   owner,
@@ -280,9 +309,10 @@ jobs:
             }
 
             await ensureLabel();
-            const body = `Failing check: ${failed.join("; ")}\n\nRun: ${runUrl}`;
-            const open = await listIssues("open");
-            const targets = open.length > 0 ? open : (await listIssues("closed")).slice(0, 1);
+            const nextLine = `Failing check: ${failed.join("; ")}`;
+            const body = `${nextLine}\n\nRun: ${runUrl}`;
+            const open = await listAlerts("open");
+            const targets = open.length > 0 ? open : (await listAlerts("closed")).slice(0, 1);
             if (targets.length === 0) {
               await github.rest.issues.create({
                 owner,
@@ -293,6 +323,8 @@ jobs:
               });
             } else {
               for (const issue of targets) {
+                const wasClosed = issue.state === "closed";
+                const changed = failingLine(issue.body) !== nextLine;
                 await github.rest.issues.update({
                   owner,
                   repo,
@@ -307,12 +339,14 @@ jobs:
                   issue_number: issue.number,
                   labels: [labelName],
                 });
-                await github.rest.issues.createComment({
-                  owner,
-                  repo,
-                  issue_number: issue.number,
-                  body,
-                });
+                if (wasClosed || changed) {
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: issue.number,
+                    body,
+                  });
+                }
               }
             }
             core.setFailed(body);
