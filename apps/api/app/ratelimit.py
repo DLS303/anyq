@@ -17,12 +17,21 @@ _RETENTION_S = 86_400
 _dev_secret: str | None = None
 
 
+def production_login_secret_required() -> bool:
+    """Production refuses to start without LOGIN_HASH_SECRET. Demo and development do not."""
+    anyq = os.getenv("ANYQ_ENV", "development").strip().lower()
+    app_env = os.getenv("APP_ENV", "").strip().lower()
+    return anyq == "production" or app_env in {"prod", "production"}
+
+
 def login_hash_secret() -> str:
     """HMAC key for login windows. Production requires LOGIN_HASH_SECRET."""
     secret = (os.getenv("LOGIN_HASH_SECRET") or "").strip()
-    if os.getenv("ANYQ_ENV", "development").strip().lower() == "production":
+    if production_login_secret_required():
         if len(secret) < 32:
-            raise RuntimeError("LOGIN_HASH_SECRET must be set to at least 32 characters when ANYQ_ENV=production")
+            raise RuntimeError(
+                "LOGIN_HASH_SECRET must be set to at least 32 characters when ANYQ_ENV=production or APP_ENV=prod"
+            )
         return secret
     if len(secret) >= 16:
         return secret
@@ -30,6 +39,12 @@ def login_hash_secret() -> str:
     if not _dev_secret:
         _dev_secret = secrets.token_urlsafe(32)
     return _dev_secret
+
+
+def require_login_hash_secret() -> None:
+    """Fail at process start in production. Demo and development keep the previous behaviour."""
+    if production_login_secret_required():
+        login_hash_secret()
 
 
 class RateLimited(Exception):

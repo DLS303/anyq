@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.authutil import load_secret
 from app.config import settings
+from app.ratelimit import require_login_hash_secret
 from app.routers import (
     acts,
     auth,
@@ -29,6 +30,7 @@ from app.security import PublicRobotsMiddleware, SecurityHeadersMiddleware
 from app.sql_backend import ChangedByOther
 
 load_secret()
+require_login_hash_secret()
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 
