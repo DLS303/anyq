@@ -266,7 +266,7 @@ docker logs anyq-api --tail 50
 
 В поле `ref` укажите ветку, которая уже запушена и которую сервер может получить из `origin`. На сервере репозиторий должен быть в `/opt/anyq`. Workflow выполняет там `deploy/deploy.sh`.
 
-Существующий `.github/workflows/ci.yml` этот файл не заменяет. Проверки pull request идут через него и через `.github/workflows/backup-check.yml`. Локальные команды для тех же проверок перечислены в описании соответствующего pull request и в `docs/BACKUPS.md` для круга backup/restore.
+Существующий `.github/workflows/ci.yml` этот файл не заменяет. Проверки pull request идут через него и через `.github/workflows/backup-check.yml`. Сканер образов печатает HIGH и CRITICAL. Сборка падает только на CRITICAL, для которых уже есть исправление. Записи без исправления остаются в отчёте и сборку не останавливают. Локальные команды для тех же проверок перечислены в описании соответствующего pull request и в `docs/BACKUPS.md` для круга backup/restore.
 
 ## 10. Что скрипты не делают
 

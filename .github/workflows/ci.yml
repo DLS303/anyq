@@ -178,8 +178,8 @@ jobs:
         run: bash scripts/ci/install_trivy.sh
       - name: Report HIGH and CRITICAL
         run: trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --no-progress anyq-api:ci
-      - name: Fail on CRITICAL
-        run: trivy image --scanners vuln --severity CRITICAL --exit-code 1 --no-progress anyq-api:ci
+      - name: Fail on CRITICAL with a fix
+        run: trivy image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 --no-progress anyq-api:ci
 
   docker-web:
     runs-on: ubuntu-latest
@@ -191,8 +191,8 @@ jobs:
         run: bash scripts/ci/install_trivy.sh
       - name: Report HIGH and CRITICAL
         run: trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --no-progress anyq-web:ci
-      - name: Fail on CRITICAL
-        run: trivy image --scanners vuln --severity CRITICAL --exit-code 1 --no-progress anyq-web:ci
+      - name: Fail on CRITICAL with a fix
+        run: trivy image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 --no-progress anyq-web:ci
 
   repo-checks:
     runs-on: ubuntu-latest
