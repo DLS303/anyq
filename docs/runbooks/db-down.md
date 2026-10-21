@@ -256,13 +256,18 @@ rm -f /var/backups/anyq/anyq-postgres-<штамп>.dump
 
 Смена имён — только если оба запроса сошлись. Сессия открыта
 в базе `postgres`: базу, к которой подключены, переименовать нельзя.
-Сначала останавливают API, чтобы он не держал соединение с `anyq`.
-Имени `anyq_old` ещё не должно быть. Этот запуск API не вызывает
-сервис `migrate`.
+Сначала останавливают API. Затем из базы `postgres` закрывают
+оставшиеся соединения с `anyq` и `anyq_restore`. После этого
+переименовывают. Имени `anyq_old` ещё не должно быть. Этот запуск
+API не вызывает сервис `migrate`.
 
 ```bash
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml stop api
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname postgres -v ON_ERROR_STOP=1 \
+  -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('anyq','anyq_restore') AND pid <> pg_backend_pid();"
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T postgres \
   psql --username anyq --dbname postgres -v ON_ERROR_STOP=1 \
