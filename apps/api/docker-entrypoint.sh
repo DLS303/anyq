@@ -73,14 +73,17 @@ case "${DATABASE_URL:-}" in
   *) fail "DATABASE_URL must be a PostgreSQL URL" ;;
 esac
 
-is_migrate=0
+owner_task=0
 if [ "${1:-}" = "python" ] && [ "${3:-}" = "app.migrate" ]; then
-  is_migrate=1
+  owner_task=1
 fi
-if [ "$is_migrate" -eq 1 ]; then
+if [ "${1:-}" = "python" ] && [ "${2:-}" = "scripts/ensure_audit_partition.py" ]; then
+  owner_task=1
+fi
+if [ "$owner_task" -eq 1 ]; then
   case "${DATABASE_URL}" in
     *://anyq:*@*) ;;
-    *) fail "migrate must use the owner role anyq" ;;
+    *) fail "schema changes must use the owner role anyq" ;;
   esac
 else
   case "${DATABASE_URL}" in

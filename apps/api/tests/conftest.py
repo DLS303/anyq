@@ -53,6 +53,12 @@ os.environ["ANYQ_UPLOADS_DIR"] = str(_root / "uploads")
 os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 os.environ["ANYQ_DEMO_PASSWORD"] = ""
 os.environ["ANYQ_DEMO_MODE"] = "1"
+if os.environ.get("ANYQ_TEST_POSTGRES") != "1":
+    from alembic.config import Config
+
+    from alembic import command
+
+    command.upgrade(Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head")
 
 
 @pytest.fixture(autouse=True)

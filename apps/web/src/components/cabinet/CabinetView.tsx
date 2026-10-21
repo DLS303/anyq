@@ -217,6 +217,14 @@ export function CabinetView({ locale }: { locale: Locale }) {
 
       </div>
 
+      {user.role === "owner" ? (
+        <Link href={`/${locale}/settings/features`} className="inline-flex min-h-12 items-center text-sm font-semibold text-pine underline">
+          {m.settings}
+          {" · "}
+          {m.objectFeatures}
+        </Link>
+      ) : null}
+
       {user.role === "owner" || user.role === "admin" ? <InvitePanel locale={locale} /> : null}
 
       {error ? <p className="text-sm font-semibold text-red-600 bg-red-50 p-3 rounded-xl border border-red-200">{error}</p> : null}

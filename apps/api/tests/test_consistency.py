@@ -62,7 +62,10 @@ def _isolated(monkeypatch, tmp_path):
         monkeypatch.setenv("DATABASE_URL", _fresh_postgres())
         return
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("ANYQ_DB_PATH", str(tmp_path / "db.json"))
+    db_path = Path(tmp_path) / "db.json"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ANYQ_DB_PATH", str(db_path))
+    command.upgrade(Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head")
 
 
 def _register(store: MemoryStore):
@@ -703,7 +706,9 @@ def test_schema_head_matches_alembic_heads():
     assert "CONCURRENTLY" in current
     assert "SET lock_timeout = '5s'" in (root / "alembic" / "env.py").read_text()
     assert database_revision_ready(SCHEMA_HEAD)
+    assert database_revision_ready(SCHEMA_HEAD, expected="20261021_0001c_app_role")
     assert database_revision_ready(SCHEMA_HEAD, expected="20261019_0001b_store_fixes")
+    assert not database_revision_ready("20261021_0001c_app_role")
     assert not database_revision_ready("20261019_0001b_store_fixes")
     assert not database_revision_ready("20261019_0001")
 
@@ -779,6 +784,12 @@ def test_upgrade_dedupes_emails_and_restores_consents(tmp_path, capsys):
         assert [(row[0], row[1]) for row in events] == [("grant", 1), ("withdraw", 2)]
         assert int(revision) == 2
         assert failures == 0
+        command.downgrade(cfg, "-1")
+        names = set(inspect(engine).get_table_names())
+        assert "companies" not in names
+        assert "company_features" not in names
+        assert "audit_log" not in names
+        assert "consent_events" in names
         command.downgrade(cfg, "20261019_0001")
         with engine.connect() as connection:
             restored = connection.execute(
@@ -1133,5 +1144,31 @@ def test_app_role_cannot_rewrite_consent_events(tmp_path, monkeypatch):
                 text("SELECT count(*) FROM consent_events WHERE legacy_id = 'c-app-role'")
             ).scalar()
         assert stored == 1
+        for statement in (
+            "TRUNCATE TABLE companies",
+            "TRUNCATE TABLE company_features",
+            "TRUNCATE TABLE audit_log",
+            "UPDATE audit_log SET action = 'nope'",
+            "DELETE FROM audit_log",
+            "CREATE TABLE app_role_must_not_create (id int)",
+        ):
+            with pytest.raises(DatabaseError), app_engine.begin() as connection:
+                connection.execute(text(statement))
+        with app_engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO companies (id, legacy_key) VALUES (:id, :key)"),
+                {"id": str(uuid4()), "key": "user:app-role-probe"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO audit_log (occurred_at, actor_kind, action, row_hash) "
+                    "VALUES (CURRENT_TIMESTAMP, 'system', 'feature.enable', :row_hash)"
+                ),
+                {"row_hash": b"\x11"},
+            )
+            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert version == "20261019_0002_pf0"
+        with pytest.raises(DatabaseError), app_engine.begin() as connection:
+            connection.execute(text("UPDATE alembic_version SET version_num = 'stale'"))
     finally:
         app_engine.dispose()

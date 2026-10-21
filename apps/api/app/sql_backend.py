@@ -10,10 +10,10 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -44,6 +44,7 @@ from sqlalchemy.exc import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.geo import centroid, haversine_km
+from app.tenant import company_key as tenant_company_key
 
 
 class Base(DeclarativeBase):
@@ -598,16 +599,6 @@ def sqlite_path_from_url(url: str) -> str | None:
     return None
 
 
-def _company_key(company: str, company_bin: str, user_id: str) -> str:
-    digits = re.sub(r"\D", "", company_bin or "")
-    if len(digits) == 12:
-        return f"bin:{digits}"
-    name = re.sub(r"\s+", " ", (company or "").strip().casefold())
-    if name:
-        return f"name:{name}"
-    return f"user:{user_id}"
-
-
 def _dump(value) -> dict:
     if isinstance(value, str):
         return {"password_hash": value}
@@ -648,11 +639,11 @@ def index_values(store, collection: str, doc_id: str, payload: dict) -> dict:
     email = _blank((payload.get("email") or "").lower()) if collection == "users" else _blank(payload.get("email"))
     company_key = None
     if collection == "users":
-        company_key = _company_key(str(payload.get("company") or ""), str(payload.get("company_bin") or ""), doc_id)
+        company_key = tenant_company_key(SimpleNamespace(id=doc_id, company_key=payload.get("company_key") or ""))
     elif collection == "projects" and owner_id or collection == "crm_contacts" and owner_id:
         owner = store.users_by_id.get(owner_id)
         if owner is not None:
-            company_key = _company_key(owner.company, owner.company_bin, owner.id)
+            company_key = tenant_company_key(owner)
     category = _blank(payload.get("category") or payload.get("purpose") or payload.get("funnel") or payload.get("contact_type"))
     district = _blank(payload.get("district"))
     gas = _blank(payload.get("gas"))
@@ -836,7 +827,7 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-SCHEMA_HEAD = "20261021_0001c_app_role"
+SCHEMA_HEAD = "20261019_0002_pf0"
 MIGRATION_LOCK = 21419007
 
 
@@ -1192,7 +1183,8 @@ class SqlRuntime:
     def _create_schema(self) -> None:
         if _production():
             return
-        # PostgreSQL schema, triggers, and consent copy belong to Alembic.
+        # PostgreSQL schema and consent triggers belong to Alembic. Startup DDL
+        # races when several workers import the app together.
         if not self.url.startswith("sqlite"):
             return
         last: Exception | None = None
@@ -1521,10 +1513,12 @@ class SqlRuntime:
             raise last
         return set()
 
-    def _flush_once(self, store) -> set[str]:
+    def _flush_once(self, store, session: Session | None = None) -> set[str]:
+        own_session = session is None
         local = store._local
         local.suspend = True
-        session = self.factory()
+        if session is None:
+            session = self.factory()
         touched: set[str] = set()
         snapshots = []
         for attr, _collection in PERSISTED:
@@ -1587,7 +1581,8 @@ class SqlRuntime:
                 bag.pending_del.clear()
             return touched
         finally:
-            session.close()
+            if own_session:
+                session.close()
             local.suspend = False
 
     def _flush_dict(self, session: Session, store, collection: str, bag: TrackedDict) -> None:
@@ -1709,13 +1704,7 @@ class SqlRuntime:
             if legacy in known:
                 continue
             user = store.users_by_id.peek(getattr(item, "user_id", ""))
-            company_id = None
-            if user is not None:
-                company_id = _company_key(
-                    getattr(user, "company", ""),
-                    getattr(user, "company_bin", ""),
-                    getattr(user, "id", ""),
-                )
+            company_id = tenant_company_key(user) if user is not None else None
             event = consent_event_from_record(item, company_id)
             event.seq = alloc_seq(session, "consents")
             session.add(event)

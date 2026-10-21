@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useLayoutEffect, useState, useRef } from "react";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { FeatureProvider } from "@/lib/useFeature";
 import { CompareProvider } from "@/lib/compare";
 import type { Locale, Role } from "@/lib/types";
 import { t } from "@/i18n/messages";
@@ -414,6 +415,7 @@ function BottomNav({ locale }: { locale: Locale }) {
 export function AppShell({ locale, children }: { locale: Locale; children: React.ReactNode }) {
   return (
     <AuthProvider>
+      <FeatureProvider>
       <CompareProvider>
         <LuxuryProgressBar />
         <Header locale={locale} />
@@ -425,6 +427,7 @@ export function AppShell({ locale, children }: { locale: Locale; children: React
         <RouteWash />
         <GlobalToast />
       </CompareProvider>
+      </FeatureProvider>
     </AuthProvider>
   );
 }
