@@ -8,12 +8,7 @@ import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
 
-from alembic.config import Config
-from alembic.runtime.migration import MigrationContext
-from alembic.script import ScriptDirectory
-from alembic.util import CommandError
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, text
@@ -21,6 +16,7 @@ from sqlalchemy.pool import NullPool
 
 from app.config import settings
 from app.paths import uploads_path
+from app.sql_backend import database_revision_ready
 from app.store import store
 
 logger = logging.getLogger(__name__)
@@ -59,13 +55,6 @@ def version():
     }
 
 
-def _script_directory() -> ScriptDirectory:
-    api_root = Path(__file__).resolve().parents[2]
-    cfg = Config()
-    cfg.set_main_option("script_location", str(api_root / "alembic"))
-    return ScriptDirectory.from_config(cfg)
-
-
 def _probe_connect_args(url: str) -> dict:
     if url.startswith("sqlite"):
         return {"timeout": _PROBE_SECONDS, "check_same_thread": False}
@@ -99,55 +88,30 @@ def _probe_connection() -> Iterator:
         yield conn
 
 
-def _known_revision_ids(script: ScriptDirectory) -> set[str]:
-    # Exact ids only. get_revision() treats a unique prefix as a match.
-    return {revision.revision for revision in script.walk_revisions()}
-
-
-def _is_ancestor(script: ScriptDirectory, ancestor: str, descendant: str) -> bool:
-    if ancestor == descendant:
-        return False
-    try:
-        seen = {step.revision for step in script.walk_revisions(base=ancestor, head=descendant)}
-    except CommandError:
-        return False
-    return ancestor in seen
-
-
-def _head_applied(script: ScriptDirectory, head: str, current: set[str]) -> bool:
-    for revision in current:
-        if revision == head or _is_ancestor(script, head, revision):
-            return True
-    return False
-
-
-def _schema_matches(script: ScriptDirectory, current: set[str]) -> bool:
-    """True when every code head is applied, or the database is newer than this code.
-
-    Any revision this code does not know means the database is ahead.
-    Otherwise each head must equal a database revision or be an ancestor of one.
-    """
-    heads = set(script.get_heads())
-    if not heads or not current:
-        return False
-    known = _known_revision_ids(script)
-    if any(revision not in known for revision in current):
-        return True
-    return all(_head_applied(script, head, current) for head in heads)
+def _current_revision(conn) -> str:
+    if conn.dialect.name == "sqlite":
+        found = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'alembic_version'"
+            )
+        ).scalar()
+    else:
+        found = conn.execute(text("SELECT to_regclass('public.alembic_version')")).scalar()
+    if not found:
+        return ""
+    version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+    return str(version or "")
 
 
 def _database_checks() -> list[str]:
     """Read alembic_version once. A failed read is a database failure, not a schema failure."""
     try:
-        script = _script_directory()
-    except Exception:  # noqa: BLE001 - failure details stay off the response
-        return [_CHECK_SCHEMA]
-    try:
         with _probe_connection() as conn:
-            current = set(MigrationContext.configure(conn).get_current_heads())
+            version = _current_revision(conn)
     except Exception:  # noqa: BLE001 - failure details stay off the response
         return [_CHECK_DB]
-    if not _schema_matches(script, current):
+    if not database_revision_ready(version):
         return [_CHECK_SCHEMA]
     return []
 
@@ -167,6 +131,7 @@ def _uploads_ok() -> bool:
 
 
 @router.get("/v1/health/ready")
+@router.get("/ready")
 def ready():
     failed: list[str] = []
     for name in _database_checks():

@@ -85,14 +85,36 @@ def test_health_and_version_omit_sensitive_fields(monkeypatch):
 
 
 def test_ready_ok_when_dependencies_pass():
+    from app.sql_backend import SCHEMA_HEAD
+
     _stamp_head()
     res = client.get("/v1/health/ready")
     assert res.status_code == 200, res.text
     assert res.json() == {"ok": True}
     lowered = res.text.lower()
-    assert "20261019_0001" not in res.text
+    assert SCHEMA_HEAD not in res.text
     for word in ("sqlite", "postgres", "dialect", "alembic", "uploads", "traceback"):
         assert word not in lowered
+
+
+def test_ready_alias_matches_v1_health_ready():
+    try:
+        _stamp_head()
+        canonical = client.get("/v1/health/ready")
+        alias = client.get("/ready")
+        assert canonical.status_code == 200
+        assert alias.status_code == canonical.status_code
+        assert alias.json() == canonical.json() == {"ok": True}
+
+        _set_db_revision("not-in-this-chain")
+        canonical = client.get("/v1/health/ready")
+        alias = client.get("/ready")
+        assert canonical.status_code == 503
+        assert alias.status_code == canonical.status_code
+        assert alias.json() == canonical.json()
+        assert alias.json() == {"ok": False, "checks": ["schema"]}
+    finally:
+        _stamp_head()
 
 
 def test_ready_503_when_uploads_dir_is_missing(tmp_path, monkeypatch):
@@ -122,120 +144,47 @@ def _set_db_revision(revision: str | None) -> None:
         _set_db_revisions(revision)
 
 
-def _two_revision_scripts(tmp_path: Path):
-    versions = tmp_path / "versions"
-    versions.mkdir()
-    (versions / "001_ancestor.py").write_text(
-        'revision = "001"\ndown_revision = None\nbranch_labels = None\ndepends_on = None\n\n'
-        "def upgrade():\n    pass\n\ndef downgrade():\n    pass\n",
-        encoding="utf-8",
-    )
-    (versions / "002_head.py").write_text(
-        'revision = "002"\ndown_revision = "001"\nbranch_labels = None\ndepends_on = None\n\n'
-        "def upgrade():\n    pass\n\ndef downgrade():\n    pass\n",
-        encoding="utf-8",
-    )
-    cfg = Config()
-    cfg.set_main_option("script_location", str(tmp_path))
+def test_ready_follows_revision_chain(monkeypatch):
     from alembic.script import ScriptDirectory
 
-    return ScriptDirectory.from_config(cfg)
+    from app.sql_backend import SCHEMA_HEAD, database_revision_ready
 
+    script = ScriptDirectory.from_config(_alembic_config())
+    assert script.get_heads() == [SCHEMA_HEAD]
+    parent = script.get_revision(SCHEMA_HEAD).down_revision
+    assert isinstance(parent, str)
+    assert database_revision_ready(SCHEMA_HEAD)
+    assert database_revision_ready(SCHEMA_HEAD, expected=parent)
+    assert not database_revision_ready(parent)
+    assert not database_revision_ready("not-in-this-chain")
 
-def test_schema_head_ancestor_and_unknown(tmp_path, monkeypatch):
-    script = _two_revision_scripts(tmp_path)
-    monkeypatch.setattr(health_router, "_script_directory", lambda: script)
+    try:
+        _stamp_head()
+        at_head = client.get("/v1/health/ready")
+        assert at_head.status_code == 200, at_head.text
+        assert at_head.json() == {"ok": True}
+        assert SCHEMA_HEAD not in at_head.text
 
-    _set_db_revision("002")
-    at_head = client.get("/v1/health/ready")
-    assert at_head.status_code == 200, at_head.text
-    assert at_head.json() == {"ok": True}
-    assert "002" not in at_head.text
+        _set_db_revision(parent)
+        older = client.get("/v1/health/ready")
+        assert older.status_code == 503
+        assert older.json() == {"ok": False, "checks": ["schema"]}
+        assert parent not in older.text
 
-    _set_db_revision("001")
-    older = client.get("/v1/health/ready")
-    assert older.status_code == 503
-    assert older.json() == {"ok": False, "checks": ["schema"]}
-    assert "001" not in older.text
+        monkeypatch.setattr("app.sql_backend.SCHEMA_HEAD", parent)
+        _stamp_head()
+        later = client.get("/v1/health/ready")
+        assert later.status_code == 200, later.text
+        assert later.json() == {"ok": True}
 
-    _set_db_revision("future001")
-    newer = client.get("/v1/health/ready")
-    assert newer.status_code == 200, newer.text
-    assert newer.json() == {"ok": True}
-    assert "future001" not in newer.text
-    _stamp_head()
-
-
-def _revision_scripts(tmp_path: Path, revisions: list[tuple[str, str | None]]):
-    versions = tmp_path / "versions"
-    versions.mkdir()
-    for revision, down in revisions:
-        down_src = "None" if down is None else f'"{down}"'
-        (versions / f"{revision}.py").write_text(
-            f'revision = "{revision}"\ndown_revision = {down_src}\n'
-            "branch_labels = None\ndepends_on = None\n\n"
-            "def upgrade():\n    pass\n\ndef downgrade():\n    pass\n",
-            encoding="utf-8",
-        )
-    cfg = Config()
-    cfg.set_main_option("script_location", str(tmp_path))
-    from alembic.script import ScriptDirectory
-
-    return ScriptDirectory.from_config(cfg)
-
-
-def test_schema_two_heads_and_unknown_ahead(tmp_path, monkeypatch):
-    script = _revision_scripts(tmp_path, [("a1", None), ("b1", None)])
-    monkeypatch.setattr(health_router, "_script_directory", lambda: script)
-    assert set(script.get_heads()) == {"a1", "b1"}
-
-    _set_db_revisions("a1", "b1")
-    both = client.get("/v1/health/ready")
-    assert both.status_code == 200, both.text
-    assert both.json() == {"ok": True}
-
-    _set_db_revisions("a1")
-    missing = client.get("/v1/health/ready")
-    assert missing.status_code == 503
-    assert missing.json() == {"ok": False, "checks": ["schema"]}
-    assert "a1" not in missing.text
-    assert "b1" not in missing.text
-
-    _set_db_revisions("a1", "zz")
-    ahead = client.get("/v1/health/ready")
-    assert ahead.status_code == 200, ahead.text
-    assert ahead.json() == {"ok": True}
-    assert "zz" not in ahead.text
-    _stamp_head()
-
-
-def test_head_applied_when_database_revision_descends_from_it(tmp_path):
-    script = _revision_scripts(tmp_path, [("a1", None), ("a2", "a1"), ("b1", None)])
-    assert health_router._head_applied(script, "a1", {"a2"}) is True
-    assert health_router._head_applied(script, "a2", {"a1"}) is False
-    assert health_router._schema_matches(script, {"a2", "b1"}) is True
-    assert health_router._schema_matches(script, {"a1", "b1"}) is False
-
-
-def test_schema_match_rejects_revision_prefixes(tmp_path, monkeypatch):
-    script = _revision_scripts(tmp_path, [("20261019_0001", None), ("headb", "20261019_0001")])
-    monkeypatch.setattr(health_router, "_script_directory", lambda: script)
-    assert script.get_revision("2026").revision == "20261019_0001"
-    assert "2026" not in {revision.revision for revision in script.walk_revisions()}
-
-    _set_db_revision("2026")
-    prefixed = client.get("/v1/health/ready")
-    assert prefixed.status_code == 200, prefixed.text
-    assert prefixed.json() == {"ok": True}
-    assert "2026" not in prefixed.text
-    assert "20261019_0001" not in prefixed.text
-
-    _set_db_revision("20261019_0001")
-    older = client.get("/v1/health/ready")
-    assert older.status_code == 503
-    assert older.json() == {"ok": False, "checks": ["schema"]}
-    assert "20261019_0001" not in older.text
-    _stamp_head()
+        monkeypatch.setattr("app.sql_backend.SCHEMA_HEAD", SCHEMA_HEAD)
+        _set_db_revision("not-in-this-chain")
+        unknown = client.get("/v1/health/ready")
+        assert unknown.status_code == 503
+        assert unknown.json() == {"ok": False, "checks": ["schema"]}
+        assert "not-in-this-chain" not in unknown.text
+    finally:
+        _stamp_head()
 
 
 def test_ready_503_when_database_is_down(monkeypatch):
@@ -339,14 +288,19 @@ def test_dev_docs_remain_available():
 
 
 def test_ready_503_schema_when_migrations_are_unreadable(monkeypatch):
-    def unreadable():
+    def unreadable(*_args, **_kwargs):
         raise OSError("migrations unreadable")
 
-    monkeypatch.setattr(health_router, "_script_directory", unreadable)
-    res = client.get("/v1/health/ready")
-    assert res.status_code == 503
-    assert res.json() == {"ok": False, "checks": ["schema"]}
-    assert "migrations" not in res.text
+    _set_db_revision("not-in-this-chain")
+    monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", unreadable)
+    try:
+        res = client.get("/v1/health/ready")
+        assert res.status_code == 503
+        assert res.json() == {"ok": False, "checks": ["schema"]}
+        assert "migrations" not in res.text
+    finally:
+        monkeypatch.undo()
+        _stamp_head()
 
 
 def test_production_docs_return_404(tmp_path):
@@ -453,3 +407,5 @@ def test_deploy_uses_readiness_and_build_identity():
     assert "GIT_SHA=$GIT_SHA" in web_docker
     web_health = (REPO / "apps" / "web" / "src" / "app" / "healthz" / "route.ts").read_text()
     assert "ok: true" in web_health
+    render = (REPO / "render.yaml").read_text()
+    assert "healthCheckPath: /healthz" in render
