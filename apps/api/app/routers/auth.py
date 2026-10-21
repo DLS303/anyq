@@ -8,7 +8,14 @@ from app.deps import require_roles, require_user
 from app.legal import consent_documents
 from app.ratelimit import RateLimited, login_limiter
 from app.schemas import CrossBorderConsentBody, LoginBody, RegisterBody, User
-from app.signup import SignupError, confirm_signup, login_by_phone, profile_of, start_signup, update_profile
+from app.signup import (
+    SignupError,
+    confirm_signup,
+    login_by_phone,
+    profile_of,
+    start_signup,
+    update_profile,
+)
 from app.store import ConsentRequired, store
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])

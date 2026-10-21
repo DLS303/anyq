@@ -201,7 +201,7 @@ export function ProcurementTab({
   const [lineId, setLineId] = useState("");
   const [supplier, setSupplier] = useState("");
   const [price, setPrice] = useState("");
-  const [vat, setVat] = useState<"yes" | "no" | "unknown">("yes");
+  const [vat, setVat] = useState<"yes" | "no" | "unknown">("unknown");
   const [delivery, setDelivery] = useState("");
   const [comment, setComment] = useState("");
   const [confirmed, setConfirmed] = useState(true);

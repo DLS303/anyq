@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { ConsentsPanel } from "@/components/cabinet/ConsentsPanel";
+import { SupplierInbox } from "@/components/cabinet/SupplierInbox";
+import { SupplierProfile } from "@/components/cabinet/SupplierProfile";
 import { InvitePanel } from "@/components/invites/InvitePanel";
 import { ProjectList } from "@/components/site/ProjectList";
 import { ErrorRetry, LoadingSkeleton, useAsync, useSubmitLock } from "@/lib/useAsync";
@@ -11,6 +13,7 @@ import {
   createMaterial,
   fetchMaterialOrders,
   fetchOrders,
+  fetchProcInbox,
   fetchSupplierMaterials,
   reviewOrder,
   setMaterialOrderStatus,
@@ -38,8 +41,9 @@ import {
 
 function roleLabel(role: string) {
   if (role === "supplier") return "Поставщик";
-  if (role === "contractor" || role === "specialist") return "Подрядчик";
-  if (role === "buyer" || role === "owner") return "Заказчик";
+  if (role === "contractor") return "Исполнитель услуг";
+  if (role === "specialist") return "Подрядчик";
+  if (role === "customer" || role === "buyer" || role === "owner") return "Заказчик";
   if (role === "admin") return "Администратор";
   if (role === "moderator") return "Модератор";
   return role;
@@ -59,6 +63,10 @@ export function CabinetView({ locale }: { locale: Locale }) {
     return { orders, matOrders, skus };
   }, [user?.email, user?.role]);
   const actions = useSubmitLock();
+  const inbox = useAsync(async (signal) => {
+    if (!user || user.role !== "supplier") return [];
+    return fetchProcInbox(signal);
+  }, [user?.id, user?.role]);
   const orders = loaded.data?.orders ?? [];
   const matOrders = loaded.data?.matOrders ?? [];
   const skus = loaded.data?.skus ?? [];
@@ -223,6 +231,16 @@ export function CabinetView({ locale }: { locale: Locale }) {
           {" · "}
           {m.objectFeatures}
         </Link>
+      ) : null}
+
+      {user.role === "supplier" ? (
+        <>
+          <SupplierInbox
+            items={inbox.data ?? []}
+            error={inbox.error instanceof Error ? inbox.error.message : undefined}
+          />
+          <SupplierProfile />
+        </>
       ) : null}
 
       {user.role === "owner" || user.role === "admin" ? <InvitePanel locale={locale} /> : null}

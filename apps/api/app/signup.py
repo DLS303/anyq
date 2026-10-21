@@ -275,6 +275,7 @@ def start_signup(
                 created_at=now,
             )
         )
+        session.flush()
         session.add(CompanyMember(company_id=company_id, user_id=uid, role=_member_role(chosen)))
         session.add(
             AccountRow(
@@ -312,7 +313,12 @@ def start_signup(
         session.commit()
     except IntegrityError as exc:
         session.rollback()
-        raise SignupError("Такой email уже зарегистрирован", 409) from exc
+        message = str(getattr(exc, "orig", exc)).lower()
+        if "phone" in message:
+            raise SignupError("Этот телефон уже зарегистрирован", 409) from exc
+        if "email" in message:
+            raise SignupError("Такой email уже зарегистрирован", 409) from exc
+        raise SignupError("Не удалось создать аккаунт", 409) from exc
     except Exception:
         session.rollback()
         raise
@@ -355,59 +361,74 @@ def confirm_signup(*, contact: str, code: str, ip: str = "") -> dict:
     except RateLimited as exc:
         raise SignupError("Слишком много попыток. Повторите через 10 минут", 429) from exc
 
+    count_failure = False
+    error: SignupError | None = None
+    user: User | None = None
+    version = 1
+    user_seq = 0
     session = store._sql.factory()
     try:
         account = session.scalar(select(AccountRow).where(AccountRow.email == value).limit(1))
+        row = None
         if account is None or account.status != "pending":
-            signup_limiter.record_failure(f"confirm:{value}", ip)
-            raise SignupError("Неверный код")
-        row = session.scalar(
-            select(SignupCodeRow).where(SignupCodeRow.user_id == account.user_id).limit(1)
-        )
-        if row is None:
-            signup_limiter.record_failure(f"confirm:{value}", ip)
-            raise SignupError("Неверный код")
-        if _parse_expiry(row.expires_at) <= signup_now():
+            count_failure = True
+            error = SignupError("Неверный код")
+        else:
+            row = session.scalar(
+                select(SignupCodeRow).where(SignupCodeRow.user_id == account.user_id).limit(1)
+            )
+        if error is None and row is None:
+            count_failure = True
+            error = SignupError("Неверный код")
+        elif error is None and row is not None and _parse_expiry(row.expires_at) <= signup_now():
             session.delete(row)
             session.commit()
-            raise SignupError("Срок кода истёк")
-        digest = hash_code(account.user_id, digits)
-        if not hmac.compare_digest(row.code_hash, digest):
-            row.attempts += 1
-            if row.attempts >= _MAX_ATTEMPTS:
-                session.delete(row)
-                session.commit()
-                raise SignupError("Код больше не действует")
-            session.commit()
-            raise SignupError("Неверный код")
-        record = session.get(Record, ("users", account.user_id))
-        if record is None:
-            session.rollback()
-            raise SignupError("Неверный код")
-        payload = dict(record.payload or {})
-        payload["status"] = "active"
-        fields = index_values(store, "users", account.user_id, payload)
-        record.payload = payload
-        record.row_version = int(record.row_version or 1) + 1
-        record.seq = alloc_seq(session, "users")
-        for key, item in fields.items():
-            setattr(record, key, item)
-        account.status = "active"
-        session.delete(row)
-        lock_meta(session, {"users"})
-        bump_revisions(session, {"users"}, seq_collections={"users"})
-        session.commit()
-        version = int(record.row_version or 1)
-        user_seq = int(record.seq or 0)
-        user = User.model_validate(payload)
-    except SignupError:
-        raise
+            error = SignupError("Срок кода истёк")
+        elif error is None and row is not None:
+            digest = hash_code(account.user_id, digits)
+            if not hmac.compare_digest(row.code_hash, digest):
+                row.attempts += 1
+                if row.attempts >= _MAX_ATTEMPTS:
+                    session.delete(row)
+                    session.commit()
+                    error = SignupError("Код больше не действует")
+                else:
+                    session.commit()
+                    count_failure = True
+                    error = SignupError("Неверный код")
+            else:
+                lock_meta(session, {"rev", "users"})
+                record = session.get(Record, ("users", account.user_id))
+                if record is None:
+                    session.rollback()
+                    error = SignupError("Неверный код")
+                else:
+                    payload = dict(record.payload or {})
+                    payload["status"] = "active"
+                    fields = index_values(store, "users", account.user_id, payload)
+                    record.payload = payload
+                    record.row_version = int(record.row_version or 1) + 1
+                    record.seq = alloc_seq(session, "users")
+                    for key, item in fields.items():
+                        setattr(record, key, item)
+                    account.status = "active"
+                    session.delete(row)
+                    bump_revisions(session, {"users"}, seq_collections={"users"})
+                    session.commit()
+                    version = int(record.row_version or 1)
+                    user_seq = int(record.seq or 0)
+                    user = User.model_validate(payload)
     except Exception:
         session.rollback()
         raise
     finally:
         session.close()
 
+    if count_failure:
+        signup_limiter.record_failure(f"confirm:{value}", ip)
+    if error is not None:
+        raise error
+    assert user is not None
     with store._lock:
         local = store._local
         local.suspend = True
@@ -537,13 +558,13 @@ def update_profile(
                     row.vat_included = True
                 elif vat == "no":
                     row.vat_included = False
+        lock_meta(session, {"rev", "users"})
         fields = index_values(store, "users", user.id, payload)
         record.payload = payload
         record.row_version = int(record.row_version or 1) + 1
         record.seq = alloc_seq(session, "users")
         for key, item in fields.items():
             setattr(record, key, item)
-        lock_meta(session, {"users"})
         bump_revisions(session, {"users"}, seq_collections={"users"})
         session.commit()
         version = int(record.row_version or 1)
