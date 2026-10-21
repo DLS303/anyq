@@ -85,14 +85,62 @@ def test_bayesian_smoothing_and_newcomer_neutral():
     assert not scored.is_new
 
 
-def test_catalog_median_only_on_linked_cards():
-    linked = {catalog_id for item in FIXTURE["price_items"] for catalog_id in item["catalog_ids"]}
+def _cities_with_a_market(as_of: date) -> set[tuple[str, str]]:
+    """Item and city pairs whose fixture observations have three distinct suppliers."""
+
+    from statistics import median
+
+    start = as_of - timedelta(days=30)
+    grouped: dict[tuple[str, str], list[tuple[str, int]]] = {}
+    for row in FIXTURE["price_observations"]:
+        day = date.fromisoformat(row["observed_on"])
+        if not (start <= day <= as_of):
+            continue
+        if not (row.get("source_kind") or row.get("source_type")) or not row.get("source_id"):
+            continue
+        rate = int(row.get("vat_rate") or 0)
+        if row.get("vat_included"):
+            incl = int(row["price_tiyn"])
+        else:
+            incl = int(round(row["price_tiyn"] * (100 + (rate or 16)) / 100))
+        grouped.setdefault((row["item_id"], row.get("city") or ""), []).append((row["company_id"], incl))
+    ready: set[tuple[str, str]] = set()
+    for key, points in grouped.items():
+        values = [value for _company, value in points]
+        if len(values) >= 3:
+            mid = median(values)
+            points = [point for point in points if point[1] >= mid * 0.5]
+        suppliers = {company for company, _value in points}
+        if len(suppliers) >= 3:
+            ready.add(key)
+    return ready
+
+
+def test_catalog_shows_the_city_market_only_with_three_suppliers():
+    catalog = {row["id"]: row for row in FIXTURE["catalog"]}
+    ready = _cities_with_a_market(date(2026, 10, 21))
+    shown = {
+        catalog_id
+        for item in FIXTURE["price_items"]
+        for catalog_id in item["catalog_ids"]
+        if (item["id"], catalog[catalog_id]["city"]) in ready
+    }
+    assert shown
+    assert shown < {catalog_id for item in FIXTURE["price_items"] for catalog_id in item["catalog_ids"]}
     res = client.get("/v1/market/catalog?limit=100")
     assert res.status_code == 200, res.text
     cards = res.json()["data"]
-    assert {card["id"] for card in cards if card["median_label"] == "медиана"} == linked
-    assert all(card["median_tiyn"] for card in cards if card["id"] in linked)
-    assert all(card["median_label"] == "мало данных" and card["median_tiyn"] is None for card in cards if card["id"] not in linked)
+    assert {card["id"] for card in cards if card["median_label"] == "медиана"} == shown
+    for card in cards:
+        if card["id"] in shown:
+            assert card["median_tiyn"]
+            assert card["market_label"] == f"Рыночная цена в {card['city']}"
+            assert card["overpay_label"]
+            assert "рынка" in card["overpay_label"]
+        else:
+            assert card["median_label"] == "мало данных"
+            assert card["median_tiyn"] is None
+            assert card["market_label"] == ""
 
 
 def test_home_has_four_tiles_and_vat_marks():
@@ -444,7 +492,7 @@ def test_observations_are_append_only(tmp_path):
                 text(
                     "INSERT INTO price_observations ("
                     "id, item_id, catalog_id, item_name, city, observed_on, unit, "
-                    "price_tiyn, vat_included, vat_rate, source_kind, source_id, company_id, created_at"
+                    "price_tiyn, vat_included, vat_rate, source_type, source_id, company_id, created_at"
                     ") VALUES ("
                     "'obs-t', 'pidx-t', 'mcat-6', 'позиция', 'Алматы', '2026-10-20', 'м', "
                     "100, 0, 16, 'offer', 'src-1', 'msup-1', '2026-10-20T00:00:00Z'"
@@ -509,6 +557,208 @@ def test_technical_fields_do_not_use_a_locale_collation():
     again = client.post("/v1/market/my/items", headers=headers, json=body | {"name": "Тоже без артикула", "sku": ""})
     assert blank.status_code == 200, blank.text
     assert again.status_code == 200, again.text
+
+
+def test_index_excludes_suspicious_prices_and_thin_cities():
+    from app.marketplace_price import PricePoint, summarize
+
+    clean = summarize(
+        [
+            PricePoint("a", 1000, True, 16),
+            PricePoint("b", 1100, True, 16),
+            PricePoint("c", 1200, True, 16),
+            PricePoint("d", 100, True, 16),
+        ]
+    )
+    assert clean.n_observations == 3
+    assert clean.n_suppliers == 3
+    assert clean.median_tiyn == 1100
+    assert clean.p25_tiyn is not None and clean.p75_tiyn is not None
+    assert clean.p25_tiyn <= clean.median_tiyn <= clean.p75_tiyn
+    thin = summarize(
+        [
+            PricePoint("a", 1000, True, 16),
+            PricePoint("a", 1100, True, 16),
+            PricePoint("b", 900, True, 16),
+        ]
+    )
+    assert thin.median_tiyn is None
+    assert thin.n_suppliers == 2
+    judged = judge_price(100, [], None, index_median=1100, index_suppliers=3)
+    assert judged["suspicious"] is True
+    assert judged["basis"] == "index"
+
+    from sqlalchemy import func, select
+
+    from app.marketplace_models import PriceIndexDaily, PriceObservation
+
+    def index_row():
+        session = store._sql.factory()
+        try:
+            row = session.scalar(
+                select(PriceIndexDaily).where(
+                    PriceIndexDaily.item_id == "pidx-1",
+                    PriceIndexDaily.city == "Алматы",
+                    PriceIndexDaily.day == "2026-10-21",
+                )
+            )
+            assert row is not None and row.median_tiyn is not None
+            assert row.p25_tiyn <= row.median_tiyn <= row.p75_tiyn
+            count = session.scalar(
+                select(func.count()).select_from(PriceObservation).where(PriceObservation.item_id == "pidx-1")
+            )
+            return row.n_observations, row.median_tiyn, count
+        finally:
+            session.close()
+
+    before_n, before_median, before_count = index_row()
+    buyer = _token("u-market-buyer")
+    created = client.post(
+        "/v1/market/requests",
+        headers=buyer,
+        json={
+            "supplier_ids": ["msup-5"],
+            "lines": [{"catalog_id": "mcat-6", "name": "Арматура А500С Ø12", "unit": "т", "qty": 1}],
+        },
+    )
+    assert created.status_code == 200, created.text
+    request_id = created.json()["data"]["id"]
+    sent = client.post(
+        "/v1/market/offers",
+        headers=_token("u-msup-5"),
+        json={
+            "request_id": request_id,
+            "source": "fixtures/demo_price.pdf",
+            "lines": [{
+                "catalog_id": "mcat-6",
+                "name": "Арматура А500С Ø12",
+                "unit": "т",
+                "qty": 1,
+                "price_tiyn": 100,
+                "source": "fixtures/demo_price.pdf",
+            }],
+        },
+    )
+    assert sent.status_code == 200, sent.text
+    body = sent.json()["data"]
+    assert body["suspicious"] is True
+    assert body["market_label"] == "Рыночная цена в Алматы"
+    assert body["lines"][0]["market_label"] == "Рыночная цена в Алматы"
+    after_n, after_median, after_count = index_row()
+    assert after_count == before_count + 1
+    assert after_n == before_n
+    assert after_median == before_median
+
+
+def test_invoice_observation_requires_a_source_and_shares_the_transaction():
+    from sqlalchemy import func, select
+
+    from app.marketplace_models import PriceObservation
+
+    def invoice_count() -> int:
+        session = store._sql.factory()
+        try:
+            return int(
+                session.scalar(
+                    select(func.count()).select_from(PriceObservation).where(PriceObservation.source_type == "invoice")
+                )
+                or 0
+            )
+        finally:
+            session.close()
+
+    before = invoice_count()
+    buyer = _token("u-market-buyer")
+    created = client.post(
+        "/v1/market/requests",
+        headers=buyer,
+        json={
+            "supplier_ids": ["msup-1"],
+            "lines": [{"catalog_id": "mcat-6", "name": "Арматура А500С Ø12", "unit": "т", "qty": 1}],
+        },
+    )
+    request_id = created.json()["data"]["id"]
+    offer = client.post(
+        "/v1/market/offers",
+        headers=_token("u-msup-1"),
+        json={
+            "request_id": request_id,
+            "source": "fixtures/demo_price.pdf",
+            "lines": [{
+                "catalog_id": "mcat-6",
+                "name": "Арматура А500С Ø12",
+                "unit": "т",
+                "qty": 1,
+                "price_tiyn": 38000000,
+                "source": "fixtures/demo_price.pdf",
+            }],
+        },
+    ).json()["data"]
+    selected = client.post(f"/v1/market/offers/{offer['id']}/select", headers=buyer).json()["data"]
+    silent = client.post(f"/v1/market/deals/{selected['deal_id']}/accept", headers=buyer, json={})
+    assert silent.status_code == 200, silent.text
+    assert invoice_count() == before
+    created_again = client.post(
+        "/v1/market/requests",
+        headers=buyer,
+        json={
+            "title": "Счёт",
+            "supplier_ids": ["msup-2"],
+            "lines": [{"catalog_id": "mcat-10", "name": "Арматура А500С Ø12", "unit": "т", "qty": 1}],
+        },
+    )
+    request_again = created_again.json()["data"]["id"]
+    offer_again = client.post(
+        "/v1/market/offers",
+        headers=_token("u-msup-2"),
+        json={
+            "request_id": request_again,
+            "source": "fixtures/demo_price.pdf",
+            "lines": [{
+                "catalog_id": "mcat-10",
+                "name": "Арматура А500С Ø12",
+                "unit": "т",
+                "qty": 1,
+                "price_tiyn": 36000000,
+                "source": "fixtures/demo_price.pdf",
+            }],
+        },
+    ).json()["data"]
+    selected_again = client.post(f"/v1/market/offers/{offer_again['id']}/select", headers=buyer).json()["data"]
+    confirmed = client.post(
+        f"/v1/market/deals/{selected_again['deal_id']}/accept",
+        headers=buyer,
+        json={"invoice_source_id": "demo-invoice-1", "invoice_price_tiyn": 36000000},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert invoice_count() == before + 1
+
+
+def test_code_refuses_to_change_an_observation():
+    import pytest
+    from sqlalchemy import select
+
+    from app.marketplace_models import PriceObservation
+
+    session = store._sql.factory()
+    try:
+        row = session.scalars(select(PriceObservation)).first()
+        assert row is not None
+        observed_id = row.id
+        original = row.price_tiyn
+        row.price_tiyn = original + 1
+        with pytest.raises(ValueError, match="append-only"):
+            session.flush()
+        session.rollback()
+        fresh = store._sql.factory()
+        try:
+            again = fresh.get(PriceObservation, observed_id)
+            assert again is not None
+            assert again.price_tiyn == original
+        finally:
+            fresh.close()
+    finally:
+        session.close()
 
 
 def test_perf_seed_is_not_default():

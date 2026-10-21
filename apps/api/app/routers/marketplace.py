@@ -106,6 +106,8 @@ class AcceptIn(BaseModel):
     price_matched: bool = True
     acceptance_ok: bool = True
     esf_ok: bool | None = None
+    invoice_source_id: str = ""
+    invoice_price_tiyn: int | None = None
 
 
 def _run(fn):

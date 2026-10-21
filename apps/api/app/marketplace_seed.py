@@ -22,7 +22,7 @@ from app.marketplace_models import (
     SupplierReview,
 )
 from app.marketplace_score import FIXTURE_AS_OF
-from app.marketplace_service import e164, recompute_all, search_text_of
+from app.marketplace_service import e164, recompute_all, recompute_price_index, search_text_of
 from app.recipient_stub import RequestRecipient
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "anyq_marketplace_demo_fake.json"
@@ -56,6 +56,7 @@ def seed_marketplace(factory, store=None) -> None:
         with session.begin():
             _apply(session, raw)
             recompute_all(session, FIXTURE_AS_OF)
+            recompute_price_index(session, FIXTURE_AS_OF)
         if store is not None:
             _users(store, raw)
     except Exception:
@@ -148,7 +149,7 @@ def _apply(session: Session, raw: dict) -> None:
                 price_tiyn=int(row["price_tiyn"]),
                 vat_included=bool(row.get("vat_included")),
                 vat_rate=int(row.get("vat_rate") or 0),
-                source_kind=row.get("source_kind") or "offer",
+                source_type=row.get("source_type") or row.get("source_kind") or "offer",
                 source_id=row.get("source_id") or row["id"],
                 company_id=row["company_id"],
                 created_at=f"{row['observed_on']}T00:00:00+00:00",

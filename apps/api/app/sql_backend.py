@@ -966,7 +966,7 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-SCHEMA_HEAD = "20261021_0002_marketplace"
+SCHEMA_HEAD = "20261021_0003_price_index"
 MIGRATION_LOCK = 21419007
 
 
