@@ -96,11 +96,17 @@ docker compose --env-file deploy/.env \
 `--target` обязательно. Пароль шифрования берут только из
 офлайн-хранилища `<офлайн-хранилище>`. В команду его не вставляют.
 
-Команды базы рассчитаны на образ и роли после задачи DevOps по базе.
-До неё `pgbackrest` не установлен, восстановление — только из
-логического дампа, администратор кластера — `anyq`.
+К запуску pgBackRest не готов. Команды `pgbackrest` ниже на запуске
+не выполняют. Если шаг migrate повредил данные, грузят снимок
+`pg_dump -Fc` из тома `anyq-backups`
+(`/backups/pre-migrate-<время UTC>.dump`) командой
+из [`docs/DEPLOY.md`](../DEPLOY.md). Если этого снимка нет, берут
+зашифрованный дамп: `rclone`, затем `age -d`, затем `pg_restore`,
+раздел «Зашифрованный дамп» в [`docs/runbooks/db-down.md`](db-down.md).
+До задачи DevOps по базе администратор кластера — `anyq`.
 
-`pgbackrest` на хосте нет. Пока `postgres` остановлен, `info` и
+Когда pgBackRest уже стоит в контуре, `pgbackrest` на хосте нет.
+Пока `postgres` остановлен, `info` и
 `restore` запускают одноразовым контейнером (`run --rm`). Пароль
 репозитория 2 сервис `postgres` берёт из `env_file: .env.pgbackrest`
 в compose (задача DevOps), как в [`docs/runbooks/db-down.md`](db-down.md).

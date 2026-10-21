@@ -8,16 +8,20 @@
 Алерты приходят в любое время. Шаги человека выполняют в рабочие часы
 (Asia/Almaty, UTC+5). Срок уровня считают в рабочих часах.
 
-Команды рассчитаны на образ и роли после задачи DevOps по базе.
-До неё администратор кластера — `anyq`, `pgbackrest` не установлен,
-восстановление — только из логического дампа.
+К запуску pgBackRest не готов. На запуске базу читают из
+зашифрованного дампа в Казахстане: `rclone`, затем `age -d`,
+затем `pg_restore`. Раздел «Зашифрованный дамп» ниже.
+Команды `pgbackrest` в этом файле — на потом, когда инструмент
+уже стоит в контуре. До задачи DevOps по базе администратор
+кластера — `anyq`.
 
-Цель плана, не гарантия для клиента: RPO не больше 15 минут
-(`archive_timeout=60` в конфигурации DevOps), RTO — ≤ 4 ч (пилот).
-В письмо клиенту эти цифры не ставят.
+Цель плана, не гарантия для клиента: RTO — ≤ 4 ч (пилот).
+Цель RPO не больше 15 минут (`archive_timeout=60`) относится
+к pgBackRest и на запуске не действует. Точка восстановления
+на запуске — последний зашифрованный дамп. В письмо клиенту
+эти цифры не ставят.
 
-Базу читают из репозитория pgBackRest `--repo=2` (вторая точка
-в Казахстане). `deploy/restore.sh` — будет добавлено.
+`deploy/restore.sh` — будет добавлено.
 Существующий том всегда запускают тем образом, которым он создан.
 Образ `postgis/postgis:16-3.4` — после миграции на этот образ
 (задача DevOps). Перенос локального стенда с Alpine на PostGIS —
@@ -42,16 +46,17 @@
 1. Координатор (дежурный DLS) ставит SEV1 и открывает карточку.
 2. Эскалация: IT/MLOps, собственник (решение взять новый сервер), SQL-разработчик, разработчик приложения. Юриста зовут, если на потерянном диске могли остаться персональные данные и собственнику нужно решить, считать ли это отдельным событием по [`docs/runbooks/data-leak.md`](data-leak.md).
 3. Новый сервер заказывают только в Казахстане. Адрес записывают в закрытую карточку как `<ipv4-нового-сервера>`, не в git.
-4. Находят вторую копию `<вторая-копия-в-казахстане>`. Копию за пределами Казахстана не используют. Если второй точки в Казахстане нет, восстановление останавливают до решения собственника.
+4. На запуске находят зашифрованный дамп `anyq-postgres-<штамп>.dump.age` в хранилище в Казахстане. Копию за пределами Казахстана не используют. Если файла в Казахстане нет, восстановление останавливают до решения собственника. Репозиторий pgBackRest `--repo=2` на запуске не ждут.
 5. A-запись домена пока не меняют.
 
 ## Восстановление
 
-Источник базы — репозиторий pgBackRest `--repo=2` в Казахстане.
+На запуске источник базы — зашифрованный дамп в Казахстане.
 Каталог на потерянном сервере недоступен, его не ждут.
-Репозиторий за пределами Казахстана не используют.
-Пароль шифрования берут только из офлайн-хранилища
-`<офлайн-хранилище>`. В команду, карточку и git его не вставляют.
+Хранилище за пределами Казахстана не используют.
+Ключ `age` берут только из офлайн-хранилища `<офлайн-хранилище>`.
+В команду, карточку и git его не вставляют. pgBackRest к запуску
+не готов: раздел «Репозиторий 2» на запуске не выполняют.
 
 ### Новый сервер
 
@@ -99,7 +104,131 @@ git checkout <ветка>
 проверка ждёт имя домена, а при неудаче скрипт пытается вернуть
 прежние образы. На новой машине прежнего выпуска нет.
 
+### Зашифрованный дамп
+
+К запуску pgBackRest не готов. Этот раздел — восстановление базы
+на запуске, после того как новый сервер и пустой PostgreSQL
+описаны выше. Команды совпадают с разделом «Зашифрованный дамп»
+в [`docs/runbooks/db-down.md`](db-down.md).
+
+Файл — пользовательский формат `pg_dump -Fc`, затем зашифрован `age`.
+Имя — `anyq-postgres-<штамп>.dump.age`. Ключ — файл `<ключ-age>`,
+права `600`, только из `<офлайн-хранилище>`. Конфиг rclone
+на сервере называется `<rclone-remote>` и указывает только
+в хранилище в Казахстане. В git его нет.
+
+`rclone` и `age` запускают на хосте, из `/opt/anyq`. Если команды
+нет, IT/MLOps ставит её на этот сервер до загрузки. Дальше три шага
+по порядку: получить файл, расшифровать, загрузить. Следующий шаг
+начинают только если предыдущий закончился без ошибки.
+
+Сначала поднимают пустой PostgreSQL и убеждаются, что он принимает
+соединения. API не запускают. `--clean` удаляет объекты базы перед
+загрузкой. Координатор записывает, что базу заменяют этим файлом.
+Пока `pg_restore --list` не прошёл, `--clean` не запускают.
+На запуске дамп грузит роль `anyq`.
+
+Получить файл:
+
+```bash
+cd /opt/anyq
+rclone copy \
+  "<rclone-remote>:<префикс>/anyq-postgres-<штамп>.dump.age" \
+  /var/backups/anyq/
+test -s /var/backups/anyq/anyq-postgres-<штамп>.dump.age
+```
+
+Расшифровать:
+
+```bash
+umask 077
+age -d -i "<ключ-age>" \
+  -o /var/backups/anyq/anyq-postgres-<штамп>.dump \
+  /var/backups/anyq/anyq-postgres-<штамп>.dump.age
+test -s /var/backups/anyq/anyq-postgres-<штамп>.dump
+```
+
+Проверка архива до загрузки. Список объектов пишут в закрытый
+каталог, не в канал. Ожидание: команда завершается с кодом 0,
+файл списка непустой.
+
+```bash
+mkdir -p "<закрытый-каталог-инцидентов>/<номер>"
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml up -d postgres
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  pg_isready -U anyq -d anyq
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
+  -v /var/backups/anyq:/backup:ro \
+  --user root --entrypoint pg_restore \
+  postgres \
+  --list /backup/anyq-postgres-<штамп>.dump \
+  > "<закрытый-каталог-инцидентов>/<номер>/dump-toc.txt"
+test -s "<закрытый-каталог-инцидентов>/<номер>/dump-toc.txt"
+```
+
+Загрузить:
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml stop api
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml cp \
+  /var/backups/anyq/anyq-postgres-<штамп>.dump \
+  postgres:/tmp/anyq-restore.dump
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T --user root postgres \
+  sh -c 'chown postgres:postgres /tmp/anyq-restore.dump && chmod 600 /tmp/anyq-restore.dump'
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
+  pg_restore --username anyq --dbname anyq \
+  --no-owner --no-privileges --exit-on-error --clean --if-exists \
+  /tmp/anyq-restore.dump
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T --user root postgres \
+  rm -f /tmp/anyq-restore.dump
+```
+
+Дамп не восстанавливает владельцев и права. После загрузки роль
+`postgres` заново выдаёт права в базе `anyq`, тем же блоком, что
+в [`docs/runbooks/db-down.md`](db-down.md), раздел «Логический дамп»:
+`\connect anyq`, GRANT, ALTER DEFAULT PRIVILEGES и отдельный
+REVOKE для `consent_events`. REVOKE для `audit_log` — отдельная
+команда и только после миграции журнала аудита.
+
+Проверка загрузки. Строки людей не печатают. Ожидание: `version_num`
+равен `<ревизия>` из карточки, числа строк сходятся со `<счётчики>`.
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname anyq -c \
+  'SELECT version_num FROM alembic_version;'
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname anyq -c \
+  "SELECT collection, count(*) AS rows
+   FROM records GROUP BY collection ORDER BY collection;"
+```
+
+После этих двух результатов расшифрованный файл на хосте удаляют.
+Файл `.dump.age` и копию в хранилище не трогают.
+
+```bash
+rm -f /var/backups/anyq/anyq-postgres-<штамп>.dump
+```
+
+Сжатый SQL `anyq-postgres-<штамп>.sql.gz` — другой файл. Его грузят
+через `psql`, как логический дамп в [`docs/runbooks/db-down.md`](db-down.md),
+а не через `pg_restore`. Локальный снимок `pre-migrate-*.dump`
+тоже не зашифрован `age`.
+
 ### Репозиторий 2
+
+Эти команды не выполняют на запуске: pgBackRest к запуску не готов.
+Их оставляют на контур, где инструмент уже установлен.
 
 На новом сервере тома ещё нет. Его создаёт образ из
 `deploy/docker-compose.prod.yml`. Дальше этот том запускают только
@@ -171,7 +300,7 @@ docker compose --env-file deploy/.env \
 
 `deploy/restore.sh` — будет добавлено.
 
-Если вместо репозитория 2 остался только логический дамп
+Если вместо зашифрованного дампа и репозитория 2 остался только логический дамп
 (`pg_dump --no-owner --no-privileges`), его грузят в пустую базу
 тем же образом, как в [`docs/runbooks/db-down.md`](db-down.md).
 Роль `postgres` (`POSTGRES_USER`) создаёт роли и базу. Роль `anyq`
@@ -259,13 +388,20 @@ docker compose --env-file deploy/.env \
   psql --username anyq --dbname anyq -c \
   'SELECT max(created_at) AS newest FROM records;'
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
-  --user postgres postgres \
-  pgbackrest --stanza=anyq verify
-docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
   pg_amcheck --username postgres -d anyq \
   --install-missing --heapallindexed
+```
+
+На запуске `pgbackrest verify` не выполняют: инструмента ещё нет.
+Проверка запуска — `version_num` и числа строк из раздела
+«Зашифрованный дамп». Когда pgBackRest уже стоит в контуре:
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml run --rm --no-deps -T \
+  --user postgres postgres \
+  pgbackrest --stanza=anyq verify
 ```
 
 Готовность API — внутри контейнера, на `127.0.0.1`:
@@ -275,7 +411,7 @@ docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml up -d
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T api \
-  python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/v1/health/ready', timeout=3).read()"
+  python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/ready', timeout=3).read()"
 ```
 
 Caddy до выпуска сертификата может ещё подниматься. Повторите
@@ -291,8 +427,10 @@ curl -fsS -o /dev/null -w '%{http_code}\n' "https://<домен>/ru"
 Ожидание: в ответе DNS адрес нового сервера, в `/health` и
 `/healthz` есть `"ok":true`, у страницы код `200`, сертификат
 выдан на это имя. Флаг `-k` для боевого домена не используют.
-Выше сняты две полные копии: `pgbackrest --stanza=anyq backup --type=full`
-в первый репозиторий и `pgbackrest --stanza=anyq --repo=2 backup --type=full`
+На запуске `pgbackrest backup` не запускают. Когда инструмент
+уже стоит в контуре, выше снимают две полные копии:
+`pgbackrest --stanza=anyq backup --type=full` в первый репозиторий
+и `pgbackrest --stanza=anyq --repo=2 backup --type=full`
 во второй репозиторий в Казахстане.
 
 ## Коммуникации
