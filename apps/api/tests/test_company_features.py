@@ -524,9 +524,11 @@ def test_project_snapshot_zeroes_closed_counters(monkeypatch):
     assert hidden["counts"]["inspections"] == 0
     assert hidden["counts"]["drawings"] == 0
     assert hidden["counts"]["punch"] > 0
+    from app.drawings import count_current_revisions
+
     drawings = store.project_snapshot("pr-besagash", {"drawings": True})
     assert drawings is not None
-    assert drawings["counts"]["drawings"] > 0
+    assert drawings["counts"]["drawings"] == count_current_revisions("pr-besagash")
     assert drawings["counts"]["rfi"] == 0
 
 

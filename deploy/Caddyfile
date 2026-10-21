@@ -12,8 +12,10 @@ http://127.0.0.1:8080 {
 {$DOMAIN} {
 	encode gzip
 
+	# Proxy body limit for uploads, including drawing PDFs (50 MiB).
+	# nginx equivalent: client_max_body_size 50m;
 	request_body {
-		max_size 12MB
+		max_size 50MiB
 	}
 
 	header {

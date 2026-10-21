@@ -13,6 +13,7 @@ from app.company_features import (
     require_feature,
 )
 from app.deps import require_user
+from app.drawings import sheets_for_project
 from app.idempotency import IdempotencyConflict, run_idempotent
 from app.paths import write_stored_file
 from app.photo_jobs import (
@@ -328,7 +329,7 @@ def bundle(pid: str, user: User = Depends(require_user)):
         "punches": store._by_project(store.punches, p.id),
         "inspections": store._by_project(store.inspections, p.id),
         "incidents": store._by_project(store.incidents, p.id),
-        "drawings": store._by_project(store.drawings, p.id),
+        "drawings": sheets_for_project(p.id) if flags.get("drawings") else store._by_project(store.drawings, p.id),
         "schedule": store._by_project(store.schedule, p.id),
         "budget": store._by_project(store.budget_lines, p.id),
         "changes": store._by_project(store.change_orders, p.id),
@@ -352,7 +353,7 @@ def _member_or_404(user: User, pid: str) -> Project:
 @router.get("/projects/{pid}/drawings")
 def list_drawings(pid: str, user: User = Depends(require_feature("drawings"))):
     project = _member_or_404(user, pid)
-    return {"ok": True, "data": store._by_project(store.drawings, project.id)}
+    return {"ok": True, "data": sheets_for_project(project.id)}
 
 
 @router.get("/projects/{pid}/submittals")
