@@ -18,6 +18,7 @@ import {
   Calculator,
   HardHat,
   Layers,
+  Package,
   MessageSquare,
   User as UserIcon,
   LogOut,
@@ -45,20 +46,22 @@ function navItems(locale: Locale, m: ReturnType<typeof t>, role?: Role) {
   const chat = { href: link("/chat"), label: m.navChat, icon: MessageSquare };
   const crm = { href: link("/crm"), label: m.navCrm, icon: Briefcase };
   const materials = { href: link("/materials"), label: m.navMaterials, icon: Layers };
+  const supply = { href: link("/market"), label: m.navSupply, icon: Package };
   const moderation = { href: link("/moderation"), label: m.navModeration, icon: SlidersHorizontal };
   if (!DEMO_MODE) {
-    if (role === "moderator") return [moderation, objects, chat, cabinet];
-    if (role === "supplier") return [materials, objects, chat, cabinet];
-    if (role === "owner" || role === "admin") return [crm, objects, estimates, chat, cabinet, ...(role === "admin" ? [moderation] : [])];
-    return [objects, estimates, chat, cabinet];
+    if (role === "moderator") return [moderation, supply, objects, chat, cabinet];
+    if (role === "supplier") return [supply, materials, objects, chat, cabinet];
+    if (role === "owner" || role === "admin") return [supply, crm, objects, estimates, chat, cabinet, ...(role === "admin" ? [moderation] : [])];
+    return [supply, objects, estimates, chat, cabinet];
   }
   if (PILOT_MODE) {
     const field = role === "contractor" || role === "supervisor";
-    if (field) return [objects, estimates, chat, cabinet];
-    if (role === "owner" || role === "admin") return [crm, objects, estimates, chat, cabinet];
-    return [estimates, objects, chat, cabinet];
+    if (field) return [supply, objects, estimates, chat, cabinet];
+    if (role === "owner" || role === "admin") return [supply, crm, objects, estimates, chat, cabinet];
+    return [supply, estimates, objects, chat, cabinet];
   }
   return [
+    supply,
     { href: link("/crm"), label: m.navCrm, icon: Briefcase },
     materials,
     { href: link("/estimates"), label: m.navAutoEstimate, icon: Calculator },
@@ -384,6 +387,7 @@ function BottomNav({ locale }: { locale: Locale }) {
       }))
     : [
         { href: `/${locale}`, label: m.navHome, match: (p: string) => p === `/${locale}` },
+        { href: `/${locale}/market`, label: m.navSupply, match: (p: string) => p.includes("/market") },
         { href: `/${locale}/crm`, label: m.navCrm, match: (p: string) => p.includes("/crm") },
         { href: `/${locale}/materials`, label: m.navMaterials, match: (p: string) => p.includes("/materials") },
         { href: `/${locale}/estimates`, label: m.navEstimates, match: (p: string) => p.includes("/estimates") },
