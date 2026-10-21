@@ -4,10 +4,14 @@ Revision ID: 20261021_0002_marketplace
 Revises: 20261021_0001c_app_role
 Create Date: 2026-10-21
 
-NOT FINAL. Registration will sit between 20261021_0001c_app_role and this
-revision. Change down_revision to that revision id when it is published.
-The request_recipients block below is temporary and should be removed in the
-same rebase: that table belongs to registration.
+NOT FINAL. The linear chain is 20261021_0001c_app_role, then
+20261019_0002_pf0 (#18), then the registration revision, then this file,
+then 20261021_0003_price_index. There is one alembic head.
+
+The registration revision id is not published. Until it is, down_revision
+stays 20261021_0001c_app_role so this branch upgrades. Point it at the
+registration revision when that id arrives, and drop the temporary
+request_recipients block in the same rebase.
 
 The application role cannot run DDL or TRUNCATE. The append-only trigger on
 price_observations is created here, not at runtime.
@@ -21,7 +25,8 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20261021_0002_marketplace"
-# Provisional parent until the registration revision is on this chain.
+# Provisional. Replace with the registration revision id. That revision
+# revises 20261019_0002_pf0. Do not point this file at 0002_pf0 itself.
 down_revision = "20261021_0001c_app_role"
 branch_labels = None
 depends_on = None
