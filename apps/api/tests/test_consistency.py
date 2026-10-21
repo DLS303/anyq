@@ -935,28 +935,46 @@ def test_production_empty_database_skips_json_import(tmp_path, monkeypatch):
 
 
 def test_ready_is_unavailable_until_schema_head(tmp_path, monkeypatch):
-    monkeypatch.setenv("ANYQ_ENV", "production")
+    from sqlalchemy.pool import NullPool
+
+    from app.routers import health as health_router
     from app.sql_backend import SqlRuntime
     from app.store import store
 
-    monkeypatch.setenv("DATABASE_URL", "sqlite:///" + (tmp_path / "empty.sqlite").as_posix())
-    empty = SqlRuntime()
-    monkeypatch.setattr(store, "_sql", empty)
-    with TestClient(app) as client:
-        closed = client.get("/ready")
-    empty.engine.dispose()
-    assert closed.status_code == 503
-    assert closed.json()["ok"] is False
+    created: list[tuple[SqlRuntime, object]] = []
 
-    migrated = "sqlite:///" + (tmp_path / "migrated.sqlite").as_posix()
-    _alembic(migrated)
-    ready = SqlRuntime()
-    monkeypatch.setattr(store, "_sql", ready)
-    with TestClient(app) as client:
-        opened = client.get("/ready")
-    ready.engine.dispose()
-    assert opened.status_code == 200
-    assert opened.json()["ok"] is True
+    def point_at(url: str) -> None:
+        monkeypatch.setenv("DATABASE_URL", url)
+        runtime = SqlRuntime()
+        engine = create_engine(
+            url,
+            future=True,
+            poolclass=NullPool,
+            connect_args=health_router._probe_connect_args(url),
+        )
+        created.append((runtime, engine))
+        monkeypatch.setattr(store, "_sql", runtime)
+        monkeypatch.setattr(health_router, "_probe_engine", engine)
+
+    monkeypatch.setenv("ANYQ_ENV", "production")
+    try:
+        point_at("sqlite:///" + (tmp_path / "empty.sqlite").as_posix())
+        with TestClient(app) as client:
+            closed = client.get("/v1/health/ready")
+        assert closed.status_code == 503
+        assert closed.json()["ok"] is False
+
+        migrated = "sqlite:///" + (tmp_path / "migrated.sqlite").as_posix()
+        _alembic(migrated)
+        point_at(migrated)
+        with TestClient(app) as client:
+            opened = client.get("/v1/health/ready")
+        assert opened.status_code == 200
+        assert opened.json()["ok"] is True
+    finally:
+        for runtime, engine in created:
+            engine.dispose()
+            runtime.engine.dispose()
 
 
 def test_concurrent_first_registration_keeps_one_owner(tmp_path, monkeypatch):

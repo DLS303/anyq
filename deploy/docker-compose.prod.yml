@@ -13,7 +13,7 @@ services:
         GIT_SHA: ${GIT_SHA:-}
         BUILD_TIME: ${BUILD_TIME:-}
     image: anyq-api:current
-    container_name: anyq-api
+    container_name: ${ANYQ_API_CONTAINER:-anyq-api}
     env_file:
       - path: .env
         required: true

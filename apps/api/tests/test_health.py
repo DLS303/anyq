@@ -62,6 +62,16 @@ def test_health_and_version_fields(monkeypatch):
     }
 
 
+def test_version_returns_short_sha(monkeypatch):
+    full = "0123456789ABCDEF0123456789abcdef01234567"
+    monkeypatch.setenv("GIT_SHA", full)
+    monkeypatch.setenv("BUILD_TIME", "2026-10-21T00:00:00Z")
+    res = client.get("/v1/version")
+    assert res.status_code == 200
+    assert res.json()["git_sha"] == "0123456"
+    assert full not in res.text
+
+
 def test_health_and_version_omit_sensitive_fields(monkeypatch):
     monkeypatch.setenv("GIT_SHA", "abc1234")
     monkeypatch.setenv("BUILD_TIME", "2026-10-19T00:00:00Z")
@@ -426,10 +436,12 @@ def test_deploy_uses_readiness_and_build_identity():
     assert "http://127.0.0.1:3000/healthz" in compose
     assert "GIT_SHA:" in compose
     assert "BUILD_TIME:" in compose
+    assert "container_name: ${ANYQ_API_CONTAINER:-anyq-api}" in compose
     script = (REPO / "deploy" / "deploy.sh").read_text()
     assert '"$base/v1/health/ready"' not in script
     assert "127.0.0.1:8010/v1/health/ready" in script
-    assert "docker exec anyq-api" in script
+    assert 'API_CONTAINER="${ANYQ_API_CONTAINER:-anyq-api}"' in script
+    assert 'docker exec "$API_CONTAINER"' in script
     assert '"$base/v1/version"' in script
     api_docker = (REPO / "apps" / "api" / "Dockerfile").read_text()
     web_docker = (REPO / "apps" / "web" / "Dockerfile").read_text()

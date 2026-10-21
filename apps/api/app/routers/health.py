@@ -43,11 +43,18 @@ def health():
     return {"ok": True, "version": settings.version}
 
 
+def _short_git_sha(value: str) -> str:
+    sha = value.strip()
+    if sha and all(char in "0123456789abcdefABCDEF" for char in sha):
+        return sha[:7].lower()
+    return sha
+
+
 @router.get("/v1/version")
 def version():
     return {
         "version": settings.version,
-        "git_sha": os.getenv("GIT_SHA", "").strip(),
+        "git_sha": _short_git_sha(os.getenv("GIT_SHA", "")),
         "build_time": os.getenv("BUILD_TIME", "").strip(),
     }
 
