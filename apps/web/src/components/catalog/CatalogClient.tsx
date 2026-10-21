@@ -11,7 +11,7 @@ import { PURPOSE } from "@/lib/format";
 import { useDebounced } from "@/lib/useDebounced";
 import { ErrorRetry, LoadingSkeleton, useAsync, useSubmitLock } from "@/lib/useAsync";
 import { DISTRICTS, type Locale, type Purpose } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { loadWithin } from "@/lib/loadWithin";
 import { ChunkFallback } from "@/components/ui/ChunkFallback";
 
@@ -24,7 +24,7 @@ const PURPOSES = Object.keys(PURPOSE) as Purpose[];
 const RADII = [0, 5, 10, 25, 50];
 
 export function CatalogClient({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
   const [q, setQ] = useState("");
   const debouncedQ = useDebounced(q, 300);

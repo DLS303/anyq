@@ -6,11 +6,11 @@ import { acceptInvitation, previewInvitation } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { siteRoleLabel } from "@/lib/report";
 import { useAsync } from "@/lib/useAsync";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import type { Locale } from "@/lib/types";
 
 export function InviteAccept({ locale, token }: { locale: Locale; token: string }) {
-  const m = t(locale);
+  const m = useMessages();
   const router = useRouter();
   const { login } = useAuth();
   const preview = useAsync((signal) => previewInvitation(token, signal), [token]);

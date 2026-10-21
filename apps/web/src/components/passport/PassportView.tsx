@@ -11,7 +11,7 @@ import { loadWithin } from "@/lib/loadWithin";
 import { useSubmitLock } from "@/lib/useAsync";
 import type { DevCalc, Locale, Plot, Utility } from "@/lib/types";
 import { PURPOSE, RELIEF, STATUS, UTILITY, descOf, maskCadastral, money, titleOf } from "@/lib/format";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { AuthImage } from "@/components/media/AuthImage";
 
 const PlotMap = dynamic(() => loadWithin(import("@/components/catalog/PlotMap")), {
@@ -58,7 +58,7 @@ export function PassportView({
   calc?: DevCalc;
   favorite?: boolean;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
   const [fav, setFav] = useState(Boolean(fav0));
   const [sent, setSent] = useState(false);

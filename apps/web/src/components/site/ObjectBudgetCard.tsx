@@ -10,7 +10,7 @@ import {
 } from "@/lib/api";
 import { money } from "@/lib/format";
 import { ErrorRetry, LoadingSkeleton, useAsync, useGuardedSubmit } from "@/lib/useAsync";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { budgetCategoryLabel } from "@/lib/budgetView";
 import type { BudgetCategory, Locale, ObjectBudgetView } from "@/lib/types";
 import { BudgetArticles } from "./BudgetArticles";
@@ -44,7 +44,7 @@ function planAmount(value: string) {
   return Number.isSafeInteger(amount) ? amount : undefined;
 }
 
-function signalText(signal: ObjectBudgetView["signal"], m: ReturnType<typeof t>) {
+function signalText(signal: ObjectBudgetView["signal"], m: ReturnType<typeof useMessages>) {
   if (signal === "red") return m.budgetSignalOver;
   if (signal === "yellow") return m.budgetSignalClose;
   return m.budgetSignalOk;
@@ -63,7 +63,7 @@ function ForecastLine({
 }: {
   data: ObjectBudgetView;
   locale: Locale;
-  m: ReturnType<typeof t>;
+  m: ReturnType<typeof useMessages>;
 }) {
   if (data.overrun_kind === "actual" && data.overrun_kzt > 0) {
     return (
@@ -112,7 +112,7 @@ function Line({ label, value }: { label: string; value: string }) {
 }
 
 export function ObjectBudgetCard({ locale, projectId }: { locale: Locale; projectId: string }) {
-  const m = t(locale);
+  const m = useMessages();
   const query = useAsync(() => fetchObjectBudget(projectId), [projectId]);
   const [total, setTotal] = useState("");
   const [cats, setCats] = useState<Record<BudgetCategory, string>>({

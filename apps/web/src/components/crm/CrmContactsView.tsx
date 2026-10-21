@@ -6,13 +6,13 @@ import { useAuth } from "@/lib/auth";
 import { createContact, fetchContactsPage } from "@/lib/api";
 import { useDebounced } from "@/lib/useDebounced";
 import { ErrorRetry, useSubmitLock } from "@/lib/useAsync";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { CONTACT_TYPE, money } from "@/lib/format";
 import type { ContactType, CrmContact, Locale } from "@/lib/types";
 
 export function CrmContactsView({ locale }: { locale: Locale }) {
   const { user } = useAuth();
-  const m = t(locale);
+  const m = useMessages();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounced(search, 300);
   const [typeFilter, setTypeFilter] = useState<string>("");

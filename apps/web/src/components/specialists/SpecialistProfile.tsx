@@ -8,7 +8,7 @@ import { createOrder } from "@/lib/api";
 import { CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import type { Locale, Review, Specialist } from "@/lib/types";
 import { PhotoView } from "@/components/media/PhotoView";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { CheckCircle2, ShieldCheck, Star, MessageSquare, Briefcase, ExternalLink, X, Send } from "lucide-react";
 
 export function SpecialistProfile({
@@ -20,7 +20,7 @@ export function SpecialistProfile({
   specialist: Specialist;
   reviews: Review[];
 }) {
-  const m = t(locale);
+  const m = useMessages();
   const router = useRouter();
   const { user } = useAuth();
   const [message, setMessage] = useState("Здравствуйте! Требуется выезд на объект, консультация и расчет коммерческого предложения.");

@@ -121,7 +121,7 @@ export function useSubmitLock() {
 
 export function LoadingSkeleton({ label }: { label: string }) {
   return (
-    <div role="status" aria-busy="true" aria-label={label} className="grid gap-3">
+    <div role="status" aria-busy="true" aria-label={label} className="grid min-h-[40vh] gap-3">
       <div className="h-8 w-2/3 animate-pulse bg-ink/10" />
       <div className="h-24 animate-pulse bg-ink/10" />
       <div className="h-24 animate-pulse bg-ink/10" />

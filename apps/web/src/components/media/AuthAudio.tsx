@@ -1,13 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { fetchAuthorizedBlob, isAbortError } from "@/lib/api";
 
 export function AuthAudio({ src, label }: { src: string; label: string }) {
-  const pathname = usePathname();
-  const m = t(pathname?.startsWith("/kk") ? "kk" : "ru");
+  const m = useMessages();
   const [attempt, setAttempt] = useState(0);
   const [url, setUrl] = useState("");
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");

@@ -21,7 +21,7 @@ import {
 } from "@/lib/api";
 import { MAT_ORDER, ORDER_ST, money } from "@/lib/format";
 import type { Locale, Material, MaterialOrder, ServiceOrder } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { PILOT_MODE } from "@/lib/pilot";
 import {
   Building2,
@@ -50,7 +50,7 @@ function roleLabel(role: string) {
 }
 
 export function CabinetView({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
   const [error, setError] = useState("");
   const loaded = useAsync(async (signal) => {

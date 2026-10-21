@@ -109,14 +109,27 @@ def _title(value: str) -> str:
 def list_requests(store, project_id: str) -> list[dict]:
     rows = [item for item in store.proc_requests.values() if item.project_id == project_id]
     rows.sort(key=lambda item: item.number)
+    lines_by = {item.id: [] for item in rows}
+    for line in store.proc_lines.values():
+        bucket = lines_by.get(line.request_id)
+        if bucket is not None:
+            bucket.append(line)
+    line_request = {line.id: request_id for request_id, lines in lines_by.items() for line in lines}
+    offer_counts = {item.id: 0 for item in rows}
+    for offer in store.proc_offers.values():
+        request_id = line_request.get(offer.line_id)
+        if request_id:
+            offer_counts[request_id] += 1
+    doc_counts = {item.id: 0 for item in rows}
+    for doc in store.proc_docs.values():
+        if doc.request_id in doc_counts:
+            doc_counts[doc.request_id] += 1
     out = []
     for req in rows:
-        lines = _lines(store, req.id)
-        ids = {line.id for line in lines}
         view = req.model_dump()
-        view["lines"] = len(lines)
-        view["offers"] = len(_offers_for(store, ids))
-        view["documents"] = len(_docs(store, req.id))
+        view["lines"] = len(lines_by[req.id])
+        view["offers"] = offer_counts[req.id]
+        view["documents"] = doc_counts[req.id]
         out.append(view)
     return out
 

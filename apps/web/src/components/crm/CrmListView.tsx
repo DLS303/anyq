@@ -5,7 +5,7 @@ import { PageNav, useServerPaged } from "@/components/ui/PagedList";
 import { fetchDealsPage } from "@/lib/api";
 import { FUNNEL, STAGE, money } from "@/lib/format";
 import { useDebounced } from "@/lib/useDebounced";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import type { Deal, Locale } from "@/lib/types";
 
 export function CrmListView({
@@ -25,7 +25,7 @@ export function CrmListView({
   onSelectDeal: (deal: Deal) => void;
   onMoveDeal: (dealId: string, stage: string) => void;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   const [search, setSearch] = useState("");
   const debounced = useDebounced(search, 300);
   const paged = useServerPaged(`${email}:${funnel}:${debounced}:${refreshKey}`, (page, signal) =>

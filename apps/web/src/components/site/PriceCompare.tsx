@@ -1,6 +1,7 @@
 "use client";
 
-import { t } from "@/i18n/messages";
+import { LongList } from "@/components/ui/LongList";
+import { useMessages } from "@/lib/i18n";
 import type { Locale, ProcOfferCell, ProcSheetLine } from "@/lib/types";
 
 type Supplier = { name: string; total_kzt: number; vat_mixed: boolean };
@@ -12,7 +13,7 @@ function tenge(value: number, locale: Locale) {
   return `${formatted} ₸`;
 }
 
-function statusText(code: ProcSheetLine["status_code"], m: ReturnType<typeof t>) {
+function statusText(code: ProcSheetLine["status_code"], m: ReturnType<typeof useMessages>) {
   switch (code) {
     case "no_price":
       return m.procNoOffers;
@@ -25,7 +26,7 @@ function statusText(code: ProcSheetLine["status_code"], m: ReturnType<typeof t>)
   }
 }
 
-function vatText(value: boolean | null, m: ReturnType<typeof t>) {
+function vatText(value: boolean | null, m: ReturnType<typeof useMessages>) {
   if (value === true) return m.procVatYes;
   if (value === false) return m.procVatNo;
   return m.procVatUnknown;
@@ -42,7 +43,7 @@ function OfferFacts({
   locale: Locale;
   warn?: string;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   return (
     <span className="block min-w-0">
       <span className={offer.is_best ? "font-semibold" : ""}>{tenge(offer.price_kzt, locale)}</span>
@@ -78,12 +79,16 @@ export function PriceCompare({
   warnOf: (offerId: string) => string | undefined;
   onSelect: (lineId: string, offerId: string) => void;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   return (
     <>
       <div className="grid min-w-0 gap-3 overflow-x-hidden md:hidden" data-price-cards>
-        {lines.map((line) => (
-          <article key={line.id} className="min-w-0 rounded-2xl border border-ink/10 bg-white/70 p-3">
+        <LongList
+          items={lines}
+          pageSize={20}
+          getKey={(line) => line.id}
+          render={(line) => (
+          <article className="min-w-0 rounded-2xl border border-ink/10 bg-white/70 p-3">
             <h3 className="break-words font-medium">
               {line.pos_no}. {line.title}
             </h3>
@@ -129,7 +134,8 @@ export function PriceCompare({
               })}
             </ul>
           </article>
-        ))}
+          )}
+        />
         <article className="min-w-0 rounded-2xl border border-ink/10 p-3 text-sm">
           <h3 className="font-medium">{m.procTotal}</h3>
           <ul className="mt-2 grid gap-1">

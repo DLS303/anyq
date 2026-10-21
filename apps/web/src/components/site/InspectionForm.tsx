@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { postSite, uploadPhoto } from "@/lib/api";
 import { todayAlmaty } from "@/lib/report";
 import { useGuardedSubmit } from "@/lib/useAsync";
@@ -25,7 +25,7 @@ export function InspectionForm({
   projectId: string;
   onDone: () => void;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   const { submitting, submit } = useGuardedSubmit(m.hubSaved, m.hubSaveError, onDone);
   const [items, setItems] = useState<Item[]>([{ label: "", result: "pass", comment: "" }]);
 

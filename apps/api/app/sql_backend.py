@@ -96,6 +96,7 @@ class Record(Base):
         Index("ix_records_coll_owner_seq", "collection", "owner_id", "seq"),
         Index("ix_records_coll_status_seq", "collection", "status", "seq"),
         Index("ix_records_coll_created", "collection", "created_at"),
+        Index("ix_records_coll_category_seq", "collection", "category", "seq"),
         Index(
             "ux_records_user_email",
             text("lower(email)"),

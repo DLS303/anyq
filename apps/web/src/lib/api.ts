@@ -851,8 +851,26 @@ export function calculateEstimate(body: EstimateInput) {
   });
 }
 
+const readCache = new Map<string, { at: number; data: unknown }>();
+
+export function invalidateReadCache(prefix: string) {
+  for (const key of readCache.keys()) {
+    if (key.startsWith(prefix)) readCache.delete(key);
+  }
+}
+
 export function fetchProjects(signal?: AbortSignal) {
   return request<Record<string, unknown>[]>("/v1/site/projects", { signal });
+}
+
+export async function fetchProjectsPage(limit: number, offset: number, signal?: AbortSignal) {
+  const path = `/v1/site/projects?limit=${limit}&offset=${offset}`;
+  const freshMs = offset === 0 ? 8_000 : 0;
+  const hit = readCache.get(path);
+  if (hit && Date.now() - hit.at < freshMs) return hit.data as PageResult<Record<string, unknown>>;
+  const page = await requestPage<Record<string, unknown>>(path, { signal });
+  if (freshMs > 0) readCache.set(path, { at: Date.now(), data: page });
+  return page;
 }
 
 export function fetchSiteBundle(id: string, signal?: AbortSignal) {
@@ -936,16 +954,18 @@ export type ConsentDocument = {
   sha256: string;
 };
 
-export function createSiteProject(body: {
+export async function createSiteProject(body: {
   title: string;
   address: string;
   deadline?: string;
   budget_kzt?: number;
 }) {
-  return request<{ id: string }>("/v1/site/projects", {
+  const created = await request<{ id: string }>("/v1/site/projects", {
     method: "POST",
     body: JSON.stringify(body),
   });
+  invalidateReadCache("/v1/site/projects");
+  return created;
 }
 
 export function addProjectMember(

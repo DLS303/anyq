@@ -11,7 +11,7 @@ import { createDeal, fetchDeals, fetchFunnels, moveDeal } from "@/lib/api";
 import { FUNNEL, PRODUCT_FUNNELS } from "@/lib/format";
 import type { Deal, Funnel, Locale } from "@/lib/types";
 import { features } from "@/lib/features";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { CrmKanban } from "./CrmKanban";
 import { CrmListView } from "./CrmListView";
 import { CrmDealDrawer } from "./CrmDealDrawer";
@@ -46,7 +46,7 @@ type CrmTab = "deals" | "leads" | "contacts" | "activities" | "invoices" | "anal
 type ViewMode = "kanban" | "list";
 
 export function CrmBoard({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
 
   const [activeTab, setActiveTab] = useState<CrmTab>("deals");
@@ -134,7 +134,7 @@ export function CrmBoard({ locale }: { locale: Locale }) {
   const columns = stages[funnel] ?? [];
 
   return (
-    <div className="space-y-5">
+    <div className="min-h-[100dvh] space-y-5">
       {/* Bitrix24 Top Navigation Header */}
       <div className="bg-white rounded-2xl border border-ink/10 p-4 shadow-xs">
         <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-ink/10">
@@ -238,7 +238,12 @@ export function CrmBoard({ locale }: { locale: Locale }) {
         <ErrorRetry message={m.listLoadError} retryLabel={m.hubRetry} onRetry={loadDeals} />
       ) : null}
 
-      {activeTab === "deals" && viewMode === "kanban" && (
+      {activeTab === "deals" && dealsQuery.loading ? (
+        <ChunkFallback />
+      ) : null}
+
+      {activeTab === "deals" && !dealsQuery.loading && viewMode === "kanban" && (
+        <div className="min-h-[60vh]">
         <CrmKanban
           stages={columns}
           deals={deals}
@@ -246,9 +251,10 @@ export function CrmBoard({ locale }: { locale: Locale }) {
           onSelectDeal={(d) => setSelectedDeal(d)}
           onMoveDeal={handleMove}
         />
+        </div>
       )}
 
-      {activeTab === "deals" && viewMode === "list" && (
+      {activeTab === "deals" && !dealsQuery.loading && viewMode === "list" && (
         <CrmListView
           email={user?.email ?? ""}
           funnel={funnel}

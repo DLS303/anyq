@@ -7,7 +7,8 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { FeatureProvider } from "@/lib/useFeature";
 import { CompareProvider } from "@/lib/compare";
 import type { Locale, Role } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import type { Msg } from "@/i18n/messages";
+import { I18nProvider, useMessages } from "@/lib/i18n";
 import { DEMO_MODE } from "@/lib/features";
 import { PILOT_MODE } from "@/lib/pilot";
 import { LuxuryNavTabs } from "./LuxuryNavTabs";
@@ -38,7 +39,7 @@ function swapLocale(pathname: string, locale: Locale) {
   return pathname.replace(/^\/(ru|kk)/, `/${next}`) || `/${next}`;
 }
 
-function navItems(locale: Locale, m: ReturnType<typeof t>, role?: Role) {
+function navItems(locale: Locale, m: Msg, role?: Role) {
   const link = (path: string) => `/${locale}${path}`;
   const objects = { href: link("/site"), label: m.navObjects, icon: Building2 };
   const estimates = { href: link("/estimates"), label: m.navEstimates, icon: Calculator };
@@ -75,7 +76,7 @@ function navItems(locale: Locale, m: ReturnType<typeof t>, role?: Role) {
 }
 
 function Header({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user, logout } = useAuth();
   const pathname = usePathname();
   const link = (path: string) => `/${locale}${path}`;
@@ -344,7 +345,7 @@ function GlobalToast() {
 }
 
 function Footer({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   return (
     <footer className="mt-20 px-4 mb-20 lg:mb-0">
       <div className="glass-strong mx-auto max-w-6xl rounded-3xl p-6 sm:p-8 text-sm text-slate-500 shadow-luxury border border-slate-200/90">
@@ -375,7 +376,7 @@ function Footer({ locale }: { locale: Locale }) {
 }
 
 function BottomNav({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
   const pathname = usePathname();
   const onProject = /\/site\/[^/]+/.test(pathname);
@@ -416,8 +417,17 @@ function BottomNav({ locale }: { locale: Locale }) {
   );
 }
 
-export function AppShell({ locale, children }: { locale: Locale; children: React.ReactNode }) {
+export function AppShell({
+  locale,
+  messages,
+  children,
+}: {
+  locale: Locale;
+  messages: Msg;
+  children: React.ReactNode;
+}) {
   return (
+    <I18nProvider messages={messages}>
     <AuthProvider>
       <FeatureProvider>
       <CompareProvider>
@@ -433,5 +443,6 @@ export function AppShell({ locale, children }: { locale: Locale; children: React
       </CompareProvider>
       </FeatureProvider>
     </AuthProvider>
+    </I18nProvider>
   );
 }

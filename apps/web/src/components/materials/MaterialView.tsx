@@ -8,11 +8,11 @@ import { orderMaterial } from "@/lib/api";
 import { MATERIAL_CAT, money } from "@/lib/format";
 import type { Locale, Material } from "@/lib/types";
 import { PhotoView } from "@/components/media/PhotoView";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { CheckCircle2, Minus, Plus, ShieldCheck, Truck, ArrowRight, User } from "lucide-react";
 
 export function MaterialView({ locale, item }: { locale: Locale; item: Material }) {
-  const m = t(locale);
+  const m = useMessages();
   const router = useRouter();
   const { user } = useAuth();
   const [qty, setQty] = useState(Number(item.min_qty) || 1);

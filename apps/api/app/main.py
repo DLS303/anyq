@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+
+from app.compress import CompressMiddleware
+from app.timeout import RequestTimeoutMiddleware
 
 from app.authutil import load_secret
 from app.config import refuse_stub_code_in_production, settings
@@ -38,7 +40,8 @@ require_login_hash_secret()
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 
-app.add_middleware(GZipMiddleware, minimum_size=500)
+app.add_middleware(CompressMiddleware, minimum_size=500)
+app.add_middleware(RequestTimeoutMiddleware, seconds=settings.request_timeout_s)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(PublicRobotsMiddleware)
 app.add_middleware(

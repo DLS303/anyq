@@ -2711,61 +2711,98 @@ class MemoryStore:
         return [project for project in self.projects.values() if self.can_access_project(user, project)]
 
     def project_snapshot(self, pid: str, flags: dict | None = None) -> dict | None:
-        p = self.get_project(pid)
-        if not p:
+        project = self.get_project(pid)
+        if not project:
             return None
-        lines = [b for b in self.budget_lines.values() if b.project_id == p.id]
-        budget = sum(b.budget_kzt for b in lines) or p.budget_kzt
-        committed = sum(b.committed_kzt for b in lines)
-        actual = sum(b.actual_kzt for b in lines)
-        open_rfi = sum(1 for x in self.rfis.values() if x.project_id == p.id and x.status == "open")
-        open_punch = sum(1 for x in self.punches.values() if x.project_id == p.id and x.status == "open")
-        open_inc = sum(1 for x in self.incidents.values() if x.project_id == p.id and not x.closed)
-        fail_insp = sum(1 for x in self.inspections.values() if x.project_id == p.id and x.result == "fail")
-        rfi_count = sum(1 for x in self.rfis.values() if x.project_id == p.id)
-        insp_count = sum(1 for x in self.inspections.values() if x.project_id == p.id)
-        drawing_count = sum(1 for x in self.drawings.values() if x.project_id == p.id and x.current)
+        return self.project_snapshots([project], flags)[0]
+
+    def project_snapshots(self, projects: list, flags: dict | None = None) -> list[dict]:
+        """One pass per collection, instead of scanning every collection per project."""
+        ids = {project.id for project in projects}
+        if not ids:
+            return []
+
+        def tally(table, pred=None) -> dict[str, int]:
+            counts = {pid: 0 for pid in ids}
+            for item in table.values():
+                pid = getattr(item, "project_id", "")
+                if pid in ids and (pred is None or pred(item)):
+                    counts[pid] += 1
+            return counts
+
+        budget_sum = {pid: 0 for pid in ids}
+        committed_sum = {pid: 0 for pid in ids}
+        actual_sum = {pid: 0 for pid in ids}
+        for line in self.budget_lines.values():
+            pid = line.project_id
+            if pid not in ids:
+                continue
+            budget_sum[pid] += line.budget_kzt
+            committed_sum[pid] += line.committed_kzt
+            actual_sum[pid] += line.actual_kzt
+        open_rfi = tally(self.rfis, lambda item: item.status == "open")
+        open_punch = tally(self.punches, lambda item: item.status == "open")
+        open_inc = tally(self.incidents, lambda item: not item.closed)
+        fail_insp = tally(self.inspections, lambda item: item.result == "fail")
+        daily = tally(self.daily_logs)
+        rfi = tally(self.rfis)
+        punch = tally(self.punches)
+        inspections = tally(self.inspections)
+        drawings = tally(self.drawings, lambda item: item.current)
         from app.company_features import flag_map, project_company_id
-        from app.config import demo_mode
+        from app.drawings import count_current_revisions
 
-        live_flags = flags if flags is not None else flag_map(project_company_id(p))
-        if live_flags.get("drawings"):
-            from app.drawings import count_current_revisions
-
-            drawing_count = count_current_revisions(p.id)
-        elif not demo_mode():
-            drawing_count = 0
-        if not demo_mode():
-            if not live_flags.get("rfi"):
-                open_rfi = 0
-                rfi_count = 0
-            if not live_flags.get("checklists"):
-                fail_insp = 0
-                insp_count = 0
-        health = "green"
-        over_budget = isinstance(budget, int) and budget > 0 and actual > budget * 0.85
-        if open_inc or fail_insp:
-            health = "red"
-        elif open_rfi or open_punch or over_budget:
-            health = "amber"
-        return {
-            "project": p.model_dump(),
-            "health": health,
-            "budget_kzt": budget,
-            "committed_kzt": committed,
-            "actual_kzt": actual,
-            "open_rfi": open_rfi,
-            "open_punch": open_punch,
-            "open_incidents": open_inc,
-            "fail_inspections": fail_insp,
-            "counts": {
-                "daily": sum(1 for x in self.daily_logs.values() if x.project_id == p.id),
-                "rfi": rfi_count,
-                "punch": sum(1 for x in self.punches.values() if x.project_id == p.id),
-                "inspections": insp_count,
-                "drawings": drawing_count,
-            },
-        }
+        out = []
+        for project in projects:
+            live_flags = flags if flags is not None else flag_map(project_company_id(project))
+            budget = budget_sum[project.id] or project.budget_kzt
+            committed = committed_sum[project.id]
+            actual = actual_sum[project.id]
+            open_rfi_n = open_rfi[project.id]
+            open_punch_n = open_punch[project.id]
+            open_inc_n = open_inc[project.id]
+            fail_insp_n = fail_insp[project.id]
+            rfi_n = rfi[project.id]
+            insp_n = inspections[project.id]
+            drawing_n = drawings[project.id]
+            if live_flags.get("drawings"):
+                drawing_n = count_current_revisions(project.id)
+            elif not demo_mode():
+                drawing_n = 0
+            if not demo_mode():
+                if not live_flags.get("rfi"):
+                    open_rfi_n = 0
+                    rfi_n = 0
+                if not live_flags.get("checklists"):
+                    fail_insp_n = 0
+                    insp_n = 0
+            health = "green"
+            over_budget = isinstance(budget, int) and budget > 0 and actual > budget * 0.85
+            if open_inc_n or fail_insp_n:
+                health = "red"
+            elif open_rfi_n or open_punch_n or over_budget:
+                health = "amber"
+            out.append(
+                {
+                    "project": project.model_dump(),
+                    "health": health,
+                    "budget_kzt": budget,
+                    "committed_kzt": committed,
+                    "actual_kzt": actual,
+                    "open_rfi": open_rfi_n,
+                    "open_punch": open_punch_n,
+                    "open_incidents": open_inc_n,
+                    "fail_inspections": fail_insp_n,
+                    "counts": {
+                        "daily": daily[project.id],
+                        "rfi": rfi_n,
+                        "punch": punch[project.id],
+                        "inspections": insp_n,
+                        "drawings": drawing_n,
+                    },
+                }
+            )
+        return out
 
     def _by_project(self, table: dict, pid: str) -> list:
         proj = self.get_project(pid)

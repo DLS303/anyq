@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { fetchMe } from "./api";
 import type { User } from "./types";
 
@@ -20,8 +20,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
+  useLayoutEffect(() => {
     const tok = localStorage.getItem(TOKEN_KEY) || "";
     try {
       const raw = localStorage.getItem(USER_KEY);
@@ -30,10 +29,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       /* ignore */
     }
     setToken(tok);
-    if (!tok) {
-      setUser(null);
-      return;
-    }
+    if (!tok) setUser(null);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const tok = localStorage.getItem(TOKEN_KEY) || "";
+    if (!tok) return;
     fetchMe()
       .then((fresh) => {
         if (cancelled) return;

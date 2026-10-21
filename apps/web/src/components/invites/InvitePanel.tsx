@@ -4,12 +4,12 @@ import { useState } from "react";
 import { createInvitation, listInvitations, revokeInvitation, type Invitation } from "@/lib/api";
 import { siteRoleLabel } from "@/lib/report";
 import { useAsync } from "@/lib/useAsync";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import type { Locale } from "@/lib/types";
 
 const ROLES = ["supervisor", "foreman", "procurement", "customer", "specialist", "moderator"] as const;
 
-function statusLabel(status: string, m: ReturnType<typeof t>) {
+function statusLabel(status: string, m: ReturnType<typeof useMessages>) {
   if (status === "open") return m.inviteStatusOpen;
   if (status === "used") return m.inviteStatusUsed;
   if (status === "revoked") return m.inviteStatusRevoked;
@@ -18,7 +18,7 @@ function statusLabel(status: string, m: ReturnType<typeof t>) {
 }
 
 export function InvitePanel({ locale, projectId }: { locale: Locale; projectId?: string }) {
-  const m = t(locale);
+  const m = useMessages();
   const [role, setRole] = useState<(typeof ROLES)[number]>("foreman");
   const [link, setLink] = useState("");
   const [notice, setNotice] = useState("");

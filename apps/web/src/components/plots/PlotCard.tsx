@@ -4,13 +4,13 @@ import { memo } from "react";
 import Link from "next/link";
 import type { Locale, Plot } from "@/lib/types";
 import { PURPOSE, maskCadastral, money, titleOf } from "@/lib/format";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { useCompare } from "@/lib/compare";
 import { Check, CheckCircle2, ShieldAlert, Sparkles, ArrowRight } from "lucide-react";
 import { AuthImage } from "@/components/media/AuthImage";
 
 export const PlotCard = memo(function PlotCard({ plot, locale }: { plot: Plot; locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const compare = useCompare();
   const cover = plot.photos?.[0] || "/design/plot-parcel.jpg";
   const clear = plot.verified && !plot.red_lines && !plot.encumbrances;

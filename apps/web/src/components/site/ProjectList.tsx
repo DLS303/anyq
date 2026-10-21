@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { createSiteProject, fetchProjects } from "@/lib/api";
+import { memo, useState } from "react";
+import { createSiteProject, fetchProjectsPage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { money } from "@/lib/format";
-import { t } from "@/i18n/messages";
+import type { Msg } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
+import { LongList } from "@/components/ui/LongList";
 import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
 import { toast } from "@/lib/toast";
 import type { Locale } from "@/lib/types";
@@ -19,25 +21,64 @@ type Snap = {
   open_punch: number;
 };
 
-function healthLabel(health: string, locale: Locale) {
-  const m = t(locale);
+const PAGE = 24;
+
+function healthLabel(health: string, m: Msg) {
   if (health === "green") return m.healthOk;
   if (health === "red") return m.healthBad;
   return m.healthWarn;
 }
 
+const ProjectRow = memo(function ProjectRow({
+  row,
+  locale,
+  m,
+}: {
+  row: Snap;
+  locale: Locale;
+  m: Msg;
+}) {
+  return (
+    <Link
+      href={`/${locale}/site/${row.project.id}`}
+      prefetch={false}
+      className="block border border-ink/10 bg-white/60 p-5 hover:border-pine"
+    >
+      <div className="flex justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="font-serif text-2xl">{row.project.title}</h2>
+          <p className="mt-1 text-sm text-ink/55">{row.project.address}</p>
+        </div>
+        <p className="text-xs uppercase tracking-wider">{healthLabel(row.health, m)}</p>
+      </div>
+      <p className="mt-3 text-sm">
+        {row.budget_kzt == null ? m.objectBudgetEmpty : money(row.budget_kzt, locale)} · {m.hubIssueRfi} {row.open_rfi} · {m.hubIssuePunch} {row.open_punch}
+      </p>
+    </Link>
+  );
+});
+
 export function ProjectList({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const router = useRouter();
   const { user } = useAuth();
   const canCreate = user?.role === "admin" || user?.role === "owner";
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const query = useAsync((signal) => {
-    if (!localStorage.getItem("superapp_token")) return Promise.resolve([] as Snap[]);
-    return fetchProjects(signal) as Promise<Snap[]>;
+  const [more, setMore] = useState<Snap[]>([]);
+  const query = useAsync(async (signal) => {
+    if (!localStorage.getItem("superapp_token")) return { items: [] as Snap[], total: 0 };
+    const page = await fetchProjectsPage(PAGE, 0, signal);
+    return { items: page.items as Snap[], total: page.total ?? page.items.length };
   }, []);
-  const items = query.data ?? [];
+  const first = query.data?.items ?? [];
+  const items = more.length ? [...first, ...more] : first;
+  const total = query.data?.total ?? items.length;
+
+  async function loadMore() {
+    const page = await fetchProjectsPage(PAGE, items.length);
+    setMore((current) => [...current, ...(page.items as Snap[])]);
+  }
 
   async function create(form: HTMLFormElement) {
     const fd = new FormData(form);
@@ -113,24 +154,17 @@ export function ProjectList({ locale }: { locale: Locale }) {
   return (
     <div className="grid gap-3">
       {creator}
-      {items.map((row) => (
-        <Link
-          key={row.project.id}
-          href={`/${locale}/site/${row.project.id}`}
-          className="border border-ink/10 bg-white/60 p-5 hover:border-pine"
-        >
-          <div className="flex justify-between gap-4">
-            <div className="min-w-0">
-              <h2 className="font-serif text-2xl">{row.project.title}</h2>
-              <p className="mt-1 text-sm text-ink/55">{row.project.address}</p>
-            </div>
-            <p className="text-xs uppercase tracking-wider">{healthLabel(row.health, locale)}</p>
-          </div>
-          <p className="mt-3 text-sm">
-            {row.budget_kzt == null ? m.objectBudgetEmpty : money(row.budget_kzt, locale)} · {m.hubIssueRfi} {row.open_rfi} · {m.hubIssuePunch} {row.open_punch}
-          </p>
-        </Link>
-      ))}
+      <LongList
+        items={items}
+        pageSize={PAGE}
+        getKey={(row) => row.project.id}
+        render={(row) => <ProjectRow row={row} locale={locale} m={m} />}
+      />
+      {items.length < total ? (
+        <button type="button" className="min-h-12 text-sm underline" onClick={() => void loadMore()}>
+          {m.listMore}
+        </button>
+      ) : null}
     </div>
   );
 }

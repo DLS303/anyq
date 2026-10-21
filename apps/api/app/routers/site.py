@@ -2,7 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
 from app.company_features import (
@@ -287,9 +287,19 @@ def _guard_item(user: User, table: dict, item_id: str) -> None:
 
 
 @router.get("/projects")
-def list_projects(user: User = Depends(require_user)):
-    snaps = [store.project_snapshot(p.id) for p in store.projects_for(user)]
-    return {"ok": True, "data": snaps}
+def list_projects(
+    user: User = Depends(require_user),
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    projects = store.projects_for(user)
+    total = len(projects)
+    page = projects if limit is None else projects[offset : offset + limit]
+    body = {"ok": True, "data": store.project_snapshots(page), "total": total}
+    if limit is not None:
+        body["limit"] = limit
+        body["offset"] = offset
+    return body
 
 
 @router.post("/projects")

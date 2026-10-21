@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { createActivity, fetchActivities, toggleActivity } from "@/lib/api";
 import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { ACTIVITY_TYPE } from "@/lib/format";
 import type { ActivityType, CrmActivity, Locale } from "@/lib/types";
 
@@ -16,7 +16,7 @@ export function CrmActivitiesView({
   onSelectDealId: (dealId: string) => void;
 }) {
   const { user } = useAuth();
-  const m = t(locale);
+  const m = useMessages();
   const [filterType, setFilterType] = useState<string>("");
   const [onlyPending, setOnlyPending] = useState(false);
   const activitiesQuery = useAsync(

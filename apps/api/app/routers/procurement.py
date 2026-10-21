@@ -263,10 +263,23 @@ def get_offers_template(user: User = Depends(require_user)):
 
 
 @router.get("/projects/{pid}/requests")
-def get_requests(pid: str, user: User = Depends(require_user)):
+def get_requests(
+    pid: str,
+    user: User = Depends(require_user),
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
     project = _member_project(user, pid)
     flags = access_flags(store, user, project)
-    return {"ok": True, "data": {"requests": list_requests(store, project.id), "access": flags, "vat_rate": settings.vat_rate}}
+    rows = list_requests(store, project.id)
+    total = len(rows)
+    if limit is not None:
+        rows = rows[offset : offset + limit]
+    data = {"requests": rows, "access": flags, "vat_rate": settings.vat_rate, "total": total}
+    if limit is not None:
+        data["limit"] = limit
+        data["offset"] = offset
+    return {"ok": True, "data": data}
 
 
 @router.post("/projects/{pid}/requests")

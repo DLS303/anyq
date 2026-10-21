@@ -50,6 +50,7 @@ class Settings(BaseModel):
     vat_rate: float = float(os.getenv("ANYQ_VAT_RATE", "0.16"))
     # An offer this far above the website reference is flagged. It is not a saving.
     overprice_threshold: float = float(os.getenv("ANYQ_OVERPRICE_THRESHOLD", "0.15"))
+    request_timeout_s: float = float(os.getenv("ANYQ_REQUEST_TIMEOUT", "45"))
 
 
 settings = Settings()

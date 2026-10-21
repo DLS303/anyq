@@ -8,11 +8,11 @@ import { fetchQueuePage, moderatePlot } from "@/lib/api";
 import { titleOf } from "@/lib/format";
 import { ErrorRetry, LoadingSkeleton, useSubmitLock } from "@/lib/useAsync";
 import type { Locale } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { toast } from "@/lib/toast";
 
 export function ModerationView({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
   const [notes, setNotes] = useState<Record<string, string>>({});
   const actionLock = useSubmitLock();

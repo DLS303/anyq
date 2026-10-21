@@ -15,15 +15,36 @@ import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
 import { loadWithin } from "@/lib/loadWithin";
 import { ErrorRetry, LoadingSkeleton, isMissing, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { AuthImage } from "@/components/media/AuthImage";
-import { InvitePanel } from "@/components/invites/InvitePanel";
-import { ObjectBudgetCard } from "./ObjectBudgetCard";
-import { DailyReport, type DailyEntry } from "./DailyReport";
-import { InspectionForm } from "./InspectionForm";
-import { MeetingForm } from "./MeetingForm";
 import { toast } from "@/lib/toast";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import dynamic from "next/dynamic";
+import type { DailyEntry } from "./DailyReport";
 import type { Locale, ScheduleTask } from "@/lib/types";
+
+const DailyReport = dynamic(
+  () => loadWithin(import("./DailyReport").then((m) => m.DailyReport)),
+  { ssr: false, loading: () => <ChunkFallback /> },
+);
+
+const ObjectBudgetCard = dynamic(
+  () => loadWithin(import("./ObjectBudgetCard").then((m) => m.ObjectBudgetCard)),
+  { ssr: false, loading: () => <ChunkFallback /> },
+);
+
+const InspectionForm = dynamic(
+  () => loadWithin(import("./InspectionForm").then((m) => m.InspectionForm)),
+  { ssr: false, loading: () => <ChunkFallback /> },
+);
+
+const MeetingForm = dynamic(
+  () => loadWithin(import("./MeetingForm").then((m) => m.MeetingForm)),
+  { ssr: false, loading: () => <ChunkFallback /> },
+);
+
+const InvitePanel = dynamic(
+  () => loadWithin(import("@/components/invites/InvitePanel").then((m) => m.InvitePanel)),
+  { ssr: false, loading: () => <ChunkFallback /> },
+);
 
 const InteractiveGantt = dynamic(
   () => loadWithin(import("./InteractiveGantt").then((m) => m.InteractiveGantt)),
@@ -44,11 +65,7 @@ const ProcurementTab = dynamic(
   () => import("./ProcurementTab").then((m) => m.ProcurementTab),
   {
     ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center p-12 text-ink/50 glass rounded-2xl">
-        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-pine mr-3" />
-      </div>
-    ),
+    loading: () => <ChunkFallback />,
   },
 );
 
@@ -74,7 +91,7 @@ type Tab =
   | "dir"
   | "ks";
 
-type Msg = ReturnType<typeof t>;
+type Msg = ReturnType<typeof useMessages>;
 
 function drawingCards(rows: unknown) {
   if (!Array.isArray(rows)) return [];
@@ -143,7 +160,7 @@ const primaryBtn =
   "inline-flex min-h-12 items-center justify-center rounded-full bg-pine px-4 text-sm font-medium text-paper disabled:opacity-50";
 
 export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
-  const m = t(locale);
+  const m = useMessages();
   const router = useRouter();
   const { user } = useAuth();
   const [tab, setTab] = useState<Tab>(DEMO_MODE ? "home" : "today");
@@ -193,7 +210,11 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       }
       return <ErrorRetry message={m.hubLoadError} retryLabel={m.hubRetry} onRetry={load} />;
     }
-    return <LoadingSkeleton label={m.hubLoading} />;
+    return (
+      <div className="min-h-[100dvh]">
+        <LoadingSkeleton label={m.hubLoading} />
+      </div>
+    );
   }
 
   const snap = bundle.snapshot as {

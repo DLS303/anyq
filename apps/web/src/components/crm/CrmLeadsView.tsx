@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { convertLead, createLead, fetchLeads } from "@/lib/api";
 import { FUNNEL, LEAD_STATUS, PRODUCT_FUNNELS, money } from "@/lib/format";
 import type { Funnel, Lead, Locale } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 
 export function CrmLeadsView({
   locale,
@@ -16,7 +16,7 @@ export function CrmLeadsView({
   onDealCreated: () => void;
 }) {
   const { user } = useAuth();
-  const m = t(locale);
+  const m = useMessages();
   const [statusFilter, setStatusFilter] = useState<string>("");
   const leadsQuery = useAsync(
     (signal) => (user ? fetchLeads(user.email, statusFilter || undefined, signal) : Promise.resolve([] as Lead[])),
