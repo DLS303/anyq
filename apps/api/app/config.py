@@ -8,6 +8,16 @@ def demo_mode() -> bool:
     return os.getenv("ANYQ_DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def refuse_stub_code_in_production() -> None:
+    """A fixed sign-up code is demo-only. Production must not boot with it set."""
+    raw = os.getenv("SIGNUP_STUB_CODE", "").strip()
+    if not raw:
+        return
+    env = os.getenv("ANYQ_ENV", "development").strip().lower()
+    if env == "production":
+        raise RuntimeError("SIGNUP_STUB_CODE must not be set when ANYQ_ENV=production")
+
+
 def resolve_cors_origins() -> list[str]:
     env = os.getenv("ANYQ_ENV", "development").strip().lower()
     raw = os.getenv("CORS_ORIGINS", "")

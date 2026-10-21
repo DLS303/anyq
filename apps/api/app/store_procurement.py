@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from sqlalchemy import select
+
 from app.procurement_calc import (
     assert_org_name,
     build_sheet,
@@ -137,6 +139,24 @@ def create_request(store, project, user, title: str) -> dict:
         return req.model_dump()
 
 
+def record_recipients(store, request_id: str, company_ids: list[str] | None = None) -> None:
+    """Insert one row per supplier company. The pair is unique, so repeats are skipped."""
+    from app.sql_backend import CompanyRow, RequestRecipient
+
+    now = _now()
+    with store._sql.factory() as session:
+        if company_ids is None:
+            company_ids = list(session.scalars(select(CompanyRow.id).where(CompanyRow.role == "supplier")).all())
+        for company_id in company_ids:
+            key = (request_id, company_id)
+            if not company_id or session.get(RequestRecipient, key) is not None:
+                continue
+            session.add(
+                RequestRecipient(request_id=request_id, supplier_company_id=company_id, sent_at=now)
+            )
+        session.commit()
+
+
 def quick_request(store, project, user, title: str, unit: str, qty: float) -> dict:
     name = _title(title)
     unit_text = clean_note(unit, 40)
@@ -168,7 +188,12 @@ def quick_request(store, project, user, title: str, unit: str, qty: float) -> di
         store.proc_requests[req.id] = req
         store.proc_lines[line.id] = line
         store._save_unlocked()
-        return {"request": req.model_dump(), "line": line.model_dump()}
+        request_id = req.id
+        shared = bool(req.shared)
+        status = req.status
+    if shared and status == "collecting":
+        record_recipients(store, request_id)
+    return {"request": req.model_dump(), "line": line.model_dump()}
 
 
 def repeat_request(store, source: ProcRequest, user) -> dict:
@@ -201,7 +226,13 @@ def repeat_request(store, source: ProcRequest, user) -> dict:
         _refresh(req, copied)
         store.proc_requests[req.id] = req
         store._save_unlocked()
-        return {"request": req.model_dump(), "lines": [line.model_dump() for line in copied]}
+        request_id = req.id
+        shared = bool(req.shared)
+        status = req.status
+        payload = {"request": req.model_dump(), "lines": [line.model_dump() for line in copied]}
+    if shared and status == "collecting":
+        record_recipients(store, request_id)
+    return payload
 
 
 def material_picker(store, project, query: str) -> dict:
@@ -236,16 +267,37 @@ def material_picker(store, project, query: str) -> dict:
     return {"recent": recent, "catalog": catalog}
 
 
+def _recipient_ids(store, company_id: str) -> set[str]:
+    from app.sql_backend import RequestRecipient
+
+    if not company_id:
+        return set()
+    with store._sql.factory() as session:
+        rows = session.scalars(
+            select(RequestRecipient.request_id).where(RequestRecipient.supplier_company_id == company_id)
+        ).all()
+    return {str(item) for item in rows}
+
+
 def supplier_can_bid(user, request: ProcRequest) -> bool:
-    return user.role == "supplier" and bool(request.shared) and request.status == "collecting"
+    if user.role != "supplier" or not request.shared or request.status != "collecting":
+        return False
+    company_id = str(getattr(user, "company_id", "") or "").strip()
+    if not company_id:
+        return False
+    from app.store import store
+
+    return request.id in _recipient_ids(store, company_id)
 
 
 def supplier_inbox(store, user) -> list[dict]:
     if user.role != "supplier":
         raise PermissionError("Недостаточно прав")
+    company_id = str(getattr(user, "company_id", "") or "").strip()
+    allowed = _recipient_ids(store, company_id)
     rows = []
     for req in store.proc_requests.values():
-        if not supplier_can_bid(user, req):
+        if req.id not in allowed or not req.shared or req.status != "collecting":
             continue
         project = store.get_project(req.project_id)
         lines = [

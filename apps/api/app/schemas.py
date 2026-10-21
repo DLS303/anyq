@@ -45,8 +45,8 @@ InquiryStatus = Literal["new", "seen", "closed"]
 
 class User(BaseModel):
     id: str
-    email: str
-    full_name: str
+    email: str = ""
+    full_name: str = ""
     role: Role
     phone: str = ""
     company: str = ""
@@ -55,6 +55,10 @@ class User(BaseModel):
     company_review: bool = False
     city: str = ""
     pilot: str = ""
+    status: Literal["active", "pending"] = "active"
+    account_kind: str = ""
+    company_id: str = ""
+    phone_verified_at: str | None = None
 
 
 class PlotDocs(BaseModel):

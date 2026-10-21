@@ -10,7 +10,7 @@ def current_user(authorization: str | None = Header(default=None)) -> User | Non
         uid = read_token(authorization.split(" ", 1)[1].strip())
         if uid:
             user = store.get_user(uid)
-            if user:
+            if user and getattr(user, "status", "active") != "pending":
                 return user
     return None
 

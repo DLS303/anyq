@@ -19,6 +19,7 @@ from uuid import uuid4
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Float,
     ForeignKeyConstraint,
     Index,
@@ -242,6 +243,122 @@ class PhotoJob(Base):
     taken_at: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[str] = mapped_column(String(40), index=True)
     finished_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class CompanyRow(Base):
+    """Company created with a sign-up so consent and requests have a company id."""
+
+    __tablename__ = "companies"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    role: Mapped[str] = mapped_column(String(40), nullable=False)
+    account_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    bin: Mapped[str | None] = mapped_column(String(12))
+    iin: Mapped[str | None] = mapped_column(String(12))
+    city: Mapped[str | None] = mapped_column(String(120))
+    categories: Mapped[str | None] = mapped_column(String(400))
+    vat_included: Mapped[bool | None] = mapped_column(Boolean)
+    e_invoice: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("role IN ('supplier', 'contractor', 'customer')", name="ck_companies_role"),
+        CheckConstraint("account_kind IN ('individual', 'company')", name="ck_companies_kind"),
+    )
+
+
+class AccountRow(Base):
+    """Sign-up account. Phone is unique only after phone_verified_at is set."""
+
+    __tablename__ = "accounts"
+
+    user_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    company_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    role: Mapped[str] = mapped_column(String(40), nullable=False)
+    account_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(20))
+    phone_verified_at: Mapped[str | None] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    bin: Mapped[str | None] = mapped_column(String(12))
+    iin: Mapped[str | None] = mapped_column(String(12))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["company_id"], ["companies.id"], name="fk_accounts_company_id"),
+        CheckConstraint("phone IS NOT NULL OR email IS NOT NULL", name="ck_accounts_contact"),
+        CheckConstraint("role IN ('supplier', 'contractor', 'customer')", name="ck_accounts_role"),
+        CheckConstraint("account_kind IN ('individual', 'company')", name="ck_accounts_kind"),
+        CheckConstraint("status IN ('pending', 'active')", name="ck_accounts_status"),
+        Index(
+            "ux_accounts_email",
+            "email",
+            unique=True,
+            sqlite_where=text("email IS NOT NULL"),
+            postgresql_where=text("email IS NOT NULL"),
+        ),
+        Index(
+            "ux_accounts_phone_verified",
+            "phone",
+            unique=True,
+            sqlite_where=text("phone_verified_at IS NOT NULL"),
+            postgresql_where=text("phone_verified_at IS NOT NULL"),
+        ),
+    )
+
+
+class CompanyMember(Base):
+    """Membership inside a company. `owner` is not the site role `foreman`."""
+
+    __tablename__ = "company_members"
+
+    company_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    role: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["company_id"], ["companies.id"], name="fk_company_members_company_id"),
+        CheckConstraint("role IN ('owner', 'supplier')", name="ck_company_members_role"),
+        Index("ix_company_members_user", "user_id"),
+        Index("ix_company_members_company_role", "company_id", "role"),
+    )
+
+
+class SignupCodeRow(Base):
+    __tablename__ = "signup_codes"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id"],
+            ["accounts.user_id"],
+            name="fk_signup_codes_user_id",
+            ondelete="CASCADE",
+        ),
+        Index("ix_signup_codes_user", "user_id"),
+    )
+
+
+class RequestRecipient(Base):
+    """A procurement request sent to one supplier company."""
+
+    __tablename__ = "request_recipients"
+
+    request_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    supplier_company_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    sent_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    __table_args__ = (
+        Index("ix_request_recipients_request", "request_id"),
+        Index("ix_request_recipients_company", "supplier_company_id"),
+    )
 
 
 # Attribute on MemoryStore -> collection name in `records`.
@@ -827,7 +944,7 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-SCHEMA_HEAD = "20261019_0002_pf0"
+SCHEMA_HEAD = "20261021_0002_signup_accounts"
 MIGRATION_LOCK = 21419007
 
 

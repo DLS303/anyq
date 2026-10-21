@@ -63,8 +63,10 @@ if os.environ.get("ANYQ_TEST_POSTGRES") != "1":
 
 @pytest.fixture(autouse=True)
 def _reset_login_rate_limit():
-    from app.ratelimit import login_limiter
+    from app.ratelimit import login_limiter, signup_limiter
 
     login_limiter.reset()
+    signup_limiter.reset()
     yield
     login_limiter.reset()
+    signup_limiter.reset()

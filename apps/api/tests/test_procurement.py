@@ -451,6 +451,7 @@ def test_repeat_order_is_prefilled_and_editable():
         role="supplier",
         company="Поставщик C",
         phone="+77001112244",
+        company_id="co-sup-repeat",
     )
     store._index_user(supplier)
     store.credentials[supplier.id] = hash_password("secret12")
@@ -460,6 +461,10 @@ def test_repeat_order_is_prefilled_and_editable():
     )
     assert login.status_code == 200, login.text
     supplier_token = login.json()["data"]["token"]
+    from app.store_procurement import record_recipients
+
+    record_recipients(store, quick.json()["data"]["request"]["id"], ["co-sup-repeat"])
+    record_recipients(store, new_id, ["co-sup-repeat"])
     inbox = client.get("/v1/procurement/inbox", headers=_auth(supplier_token))
     assert inbox.status_code == 200, inbox.text
     ids = {item["id"] for item in inbox.json()["data"]}

@@ -424,7 +424,9 @@ class MemoryStore:
             bag.synced_rev = current
 
     def _index_user(self, user: User) -> None:
-        self.users[user.email.lower()] = user
+        email = (user.email or "").strip().lower()
+        if email:
+            self.users[email] = user
         self.users_by_id[user.id] = user
 
     def _ensure_seed_users(self) -> None:
@@ -751,8 +753,20 @@ class MemoryStore:
 
         return export_features()
 
+    def is_company_owner(self, user: User) -> bool:
+        company_id = (user.company_id or "").strip()
+        if not company_id:
+            return False
+        from app.sql_backend import CompanyMember
+
+        with self._sql.factory() as session:
+            row = session.get(CompanyMember, (company_id, user.id))
+        return row is not None and row.role == "owner"
+
     def get_user_by_email(self, email: str) -> User | None:
         key = email.lower().strip()
+        if not key:
+            return None
         emails = object.__getattribute__(self, "users")
         if key in emails.deleted:
             return None
@@ -2572,7 +2586,7 @@ class MemoryStore:
         deadline: str | None = None,
         budget_kzt: int | None = None,
     ) -> Project:
-        if user.role not in ("admin", "owner"):
+        if user.role not in ("admin", "owner") and not self.is_company_owner(user):
             raise PermissionError("Создавать объект может владелец или администратор")
         name = title.strip()
         if len(name) < 3 or len(name) > 120:
