@@ -3,8 +3,9 @@
   display: grid;
   width: 100vw;
   margin: -1.5rem calc(50% - 50vw) 0;
+  aspect-ratio: 9 / 16;
+  height: calc(100svh - 8.75rem);
   min-height: calc(100svh - 8.75rem);
-  height: calc(100dvh - 8.75rem);
   max-height: 920px;
   overflow: hidden;
   isolation: isolate;
@@ -16,11 +17,13 @@
 .scrim,
 .copy {
   grid-area: 1 / 1;
+  min-height: 0;
+  min-width: 0;
 }
 
 .media {
   position: relative;
-  min-height: 100%;
+  height: 100%;
   background-image: var(--hero-blur-mobile);
   background-size: cover;
   background-position: center;
@@ -28,6 +31,8 @@
 
 .media picture,
 .media img {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
@@ -128,8 +133,10 @@
 
 @media (min-width: 768px) {
   .hero {
+    aspect-ratio: 16 / 9;
+    height: min(72svh, 44rem);
     min-height: 32rem;
-    height: min(72vh, 44rem);
+    max-height: none;
   }
 
   .media {

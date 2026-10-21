@@ -8,8 +8,11 @@ import { useAuth } from "@/lib/auth";
 import { MATERIAL_CAT } from "@/lib/format";
 import type { Locale, MaterialCat } from "@/lib/types";
 import { t } from "@/i18n/messages";
+import { REGISTRATION_ENABLED } from "@/lib/features";
 import { PILOT_MODE } from "@/lib/pilot";
 import { Building2, Lock, Mail, Truck } from "lucide-react";
+
+const registrationLocked = PILOT_MODE && !REGISTRATION_ENABLED;
 
 type RegRole = "buyer" | "contractor" | "supplier";
 
@@ -54,10 +57,10 @@ export function LoginView({
       .then((row) => {
         if (stop) return;
         setNeedsOwner(row.needs_owner);
-        setMode(row.needs_owner ? "register" : PILOT_MODE ? "login" : initialMode);
+        setMode(row.needs_owner ? "register" : registrationLocked ? "login" : initialMode);
       })
       .catch(() => {
-        if (!stop) setMode(PILOT_MODE ? "login" : initialMode);
+        if (!stop) setMode(registrationLocked ? "login" : initialMode);
       });
     return () => {
       stop = true;
@@ -169,7 +172,7 @@ export function LoginView({
     <div className="max-w-4xl mx-auto py-6 sm:py-10">
       <div className="grid md:grid-cols-[1.15fr_0.85fr] gap-8 items-start">
         <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
-          {PILOT_MODE || needsOwner ? null : (
+          {registrationLocked || needsOwner ? null : (
             <div className="flex items-center gap-2 mb-6 p-1 bg-slate-100 rounded-2xl w-fit border border-slate-200">
               <button
                 type="button"
@@ -199,11 +202,11 @@ export function LoginView({
           )}
 
           <h1 className="text-2xl font-bold text-slate-900 mb-1">
-            {needsOwner ? m.ownerSetupTitle : PILOT_MODE || mode === "login" ? (PILOT_MODE ? m.pilotLoginTitle : m.loginTitle) : m.register}
+            {needsOwner ? m.ownerSetupTitle : registrationLocked || mode === "login" ? (registrationLocked ? m.pilotLoginTitle : m.loginTitle) : m.register}
           </h1>
-          <p className="text-xs text-slate-500 mb-6">{needsOwner ? m.ownerSetupLead : PILOT_MODE ? m.pilotLoginLead : m.loginLead}</p>
+          <p className="text-xs text-slate-500 mb-6">{needsOwner ? m.ownerSetupLead : registrationLocked ? m.pilotLoginLead : m.loginLead}</p>
 
-          {!needsOwner && (PILOT_MODE || mode === "login") ? (
+          {!needsOwner && (registrationLocked || mode === "login") ? (
             <form onSubmit={onLogin} className="grid gap-3.5">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
@@ -455,16 +458,16 @@ export function LoginView({
         <aside className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
           <div className="flex items-center gap-2 mb-3">
             <Building2 className="h-5 w-5 text-pine" />
-            <h2 className="text-lg font-bold text-slate-900">{needsOwner ? m.ownerSetupTitle : PILOT_MODE ? m.pilotLoginTitle : m.demoHint}</h2>
+            <h2 className="text-lg font-bold text-slate-900">{needsOwner ? m.ownerSetupTitle : registrationLocked ? m.pilotLoginTitle : m.demoHint}</h2>
           </div>
           <p className="text-sm text-slate-600 leading-relaxed">
             {needsOwner
               ? m.ownerSetupLead
-              : PILOT_MODE
+              : registrationLocked
               ? m.pilotLoginAside
               : "Компания входит по своим реквизитам. Поставщик указывает первую позицию, и она сразу появляется в каталоге материалов."}
           </p>
-          {PILOT_MODE || needsOwner ? null : (
+          {registrationLocked || needsOwner ? null : (
             <>
               <ul className="mt-5 grid gap-3 text-sm text-slate-700">
                 <li className="flex gap-2">

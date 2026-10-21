@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { fetchMaterials, fetchSpecialists } from "@/lib/api";
 import { MATERIAL_CAT, CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import { t } from "@/i18n/messages";
@@ -19,15 +20,25 @@ import {
 export default async function HomePage({ params }: { params: Promise<{ locale: string }> }) {
   const { locale: raw } = await params;
   const locale = (raw === "kk" ? "kk" : "ru") as Locale;
+
+  return (
+    <div className="grid grid-cols-1">
+      <HomeStage locale={locale} />
+      <Suspense fallback={null}>
+        <HomeCatalog locale={locale} />
+      </Suspense>
+    </div>
+  );
+}
+
+async function HomeCatalog({ locale }: { locale: Locale }) {
   const m = t(locale);
   const specialists = PILOT_MODE ? [] : await fetchSpecialists().catch(() => []);
   const materials = PILOT_MODE ? [] : await fetchMaterials().catch(() => []);
 
   return (
-    <div className="grid grid-cols-1">
-      <HomeStage locale={locale} />
+    <>
       <HomeRise />
-
       <div className="relative">
           <div className="grid gap-12 pt-8 sm:gap-16 sm:pt-12">
       {PILOT_MODE ? null : (
@@ -182,6 +193,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
       ) : null}
           </div>
       </div>
-    </div>
+    </>
   );
 }

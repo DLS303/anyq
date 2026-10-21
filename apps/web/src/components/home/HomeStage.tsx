@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { preload } from "react-dom";
+import { REGISTRATION_ENABLED } from "@/lib/features";
 import type { Locale } from "@/lib/types";
 import styles from "./HomeStage.module.css";
 
@@ -27,6 +28,7 @@ const copy = {
     title: "Закупки для стройки — быстрее и дешевле",
     lead: "Сравнивайте цены поставщиков, оставляйте заявку в 3 нажатия и смотрите бюджет: план и факт.",
     register: "Зарегистрироваться",
+    access: "Заявка на доступ",
     login: "Войти",
     alt: "Строительная площадка на закате: каркас здания, башенный кран и поставка материалов",
   },
@@ -34,6 +36,7 @@ const copy = {
     title: "Құрылыс сатып алулары — тезірек және арзанырақ",
     lead: "Жеткізуші бағасын салыстырыңыз, өтінімді 3 рет басып жіберіңіз, бюджетті жоспар мен факт бойынша қараңыз.",
     register: "Тіркелу",
+    access: "Қол жеткізуге өтінім",
     login: "Кіру",
     alt: "Ымырттағы құрылыс алаңы: ғимарат қаңқасы, мұнаралы кран және материал жеткізу",
   },
@@ -92,9 +95,15 @@ export function HomeStage({ locale }: { locale: Locale }) {
         </h1>
         <p className={styles.lead}>{text.lead}</p>
         <div className={styles.actions}>
-          <Link href={`/${locale}/login?mode=register`} className={styles.primary}>
-            {text.register}
-          </Link>
+          {REGISTRATION_ENABLED ? (
+            <Link href={`/${locale}/login?mode=register`} className={styles.primary}>
+              {text.register}
+            </Link>
+          ) : (
+            <Link href={`/${locale}/login`} className={styles.primary}>
+              {text.access}
+            </Link>
+          )}
           <Link href={`/${locale}/login?mode=login`} className={styles.secondary}>
             {text.login}
           </Link>
