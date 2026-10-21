@@ -43,7 +43,7 @@ npm run dev
 docker compose up -d
 ```
 
-Поднимутся PostgreSQL + PostGIS и Redis для GIS-контура. Порты 5432 и 6379 на хост не публикуются. Пароль локальной базы берётся из `LOCAL_POSTGRES_PASSWORD` и в репозиторий не кладётся. Схема: `infra/postgres/init.sql`. Приложение хранит свои данные в SQLite, если `DATABASE_URL` пустой, и в PostgreSQL, если он задан. Рабочий запуск описан в `docs/DEPLOY.md`.
+Поднимутся PostgreSQL + PostGIS и Redis для GIS-контура. Порты 5432 и 6379 слушаются только на 127.0.0.1. Пароль локальной базы берётся из `LOCAL_POSTGRES_PASSWORD` и в репозиторий не кладётся. Схема: `infra/postgres/init.sql`. Приложение хранит свои данные в SQLite, если `DATABASE_URL` пустой, и в PostgreSQL, если он задан. Рабочий запуск описан в `docs/DEPLOY.md`.
 
 ## Что сознательно не сделано
 

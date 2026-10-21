@@ -18,9 +18,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Install age, rclone, and PostgreSQL
-        run: |
-          bash scripts/ci/install_backup_tools.sh
-          sudo apt-get install -y postgresql postgresql-client
+      - name: Install age and rclone
+        run: bash scripts/ci/install_backup_tools.sh
       - name: Round-trip
         run: bash scripts/ci/backup_roundtrip.sh

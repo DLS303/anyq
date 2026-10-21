@@ -194,17 +194,6 @@ validate_env() {
       return 1
       ;;
   esac
-
-  case "${BACKUP_RETENTION_DAYS:-14}" in
-    ''|*[!0-9]*)
-      echo "anyq: BACKUP_RETENTION_DAYS must be a positive number of days" >&2
-      return 1
-      ;;
-    0)
-      echo "anyq: BACKUP_RETENTION_DAYS must be a positive number of days" >&2
-      return 1
-      ;;
-  esac
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

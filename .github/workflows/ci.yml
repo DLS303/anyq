@@ -155,6 +155,7 @@ jobs:
             exit 1
           fi
           alembic upgrade head
+          alembic check
           alembic downgrade -1
           alembic upgrade head
           alembic check
@@ -170,6 +171,9 @@ jobs:
 
   docker-api:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v4
       - name: Build API image
@@ -177,12 +181,25 @@ jobs:
       - name: Install trivy
         run: bash scripts/ci/install_trivy.sh
       - name: Report HIGH and CRITICAL
-        run: trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --no-progress anyq-api:ci
+        run: |
+          trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --no-progress \
+            --ignorefile .trivyignore.yaml --format sarif --output trivy-api.sarif anyq-api:ci
+          trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --no-progress \
+            --ignorefile .trivyignore.yaml anyq-api:ci
+      - name: Save the HIGH report
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-api-high
+          path: trivy-api.sarif
+          if-no-files-found: error
       - name: Fail on CRITICAL with a fix
-        run: trivy image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 --no-progress anyq-api:ci
+        run: trivy image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 --no-progress --ignorefile .trivyignore.yaml anyq-api:ci
 
   docker-web:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v4
       - name: Build web image
@@ -190,9 +207,19 @@ jobs:
       - name: Install trivy
         run: bash scripts/ci/install_trivy.sh
       - name: Report HIGH and CRITICAL
-        run: trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --no-progress anyq-web:ci
+        run: |
+          trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --no-progress \
+            --ignorefile .trivyignore.yaml --format sarif --output trivy-web.sarif anyq-web:ci
+          trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --no-progress \
+            --ignorefile .trivyignore.yaml anyq-web:ci
+      - name: Save the HIGH report
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-web-high
+          path: trivy-web.sarif
+          if-no-files-found: error
       - name: Fail on CRITICAL with a fix
-        run: trivy image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 --no-progress anyq-web:ci
+        run: trivy image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 --no-progress --ignorefile .trivyignore.yaml anyq-web:ci
 
   repo-checks:
     runs-on: ubuntu-latest

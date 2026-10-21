@@ -2,7 +2,7 @@
 #   sudo cp deploy/anyq-backup.cron /etc/cron.d/anyq-backup
 #   sudo chmod 644 /etc/cron.d/anyq-backup
 # The deploy user runs docker, age, and rclone.
-# Retention comes from BACKUP_RETENTION_DAYS in deploy/.env.
+# Retention is per class: hourly 48 hours, then 7 daily, 4 weekly, 6 monthly.
 CRON_TZ=Asia/Qyzylorda
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

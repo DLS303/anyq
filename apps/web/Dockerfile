@@ -2,7 +2,8 @@
 #   docker build -f apps/web/Dockerfile .
 
 FROM node:20-alpine AS base
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat \
+    && apk upgrade --no-cache libssl3 libcrypto3
 ENV NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 

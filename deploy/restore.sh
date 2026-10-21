@@ -134,16 +134,31 @@ rc() {
   rclone --quiet "$@"
 }
 
-if [ -n "$stamp" ]; then
-  object="anyq-postgres-${stamp}.dump.age"
-else
-  object="$(rc lsf "${remote}:${dest}" --files-only --include 'anyq-postgres-*.dump.age' | sort | tail -n 1)"
-  object="${object//$'\r'/}"
-  object="${object#"${object%%[![:space:]]*}"}"
-  object="${object%"${object##*[![:space:]]}"}"
-fi
+list="$(rc lsf "${remote}:${dest}" --recursive --files-only --include 'anyq-postgres-*.dump.age')"
+object=""
+newest=""
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  line="${line//$'\r'/}"
+  base="$(basename "$line")"
+  case "$base" in
+    anyq-postgres-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.dump.age) ;;
+    *) continue ;;
+  esac
+  case "$line" in
+    hourly/"$base"|daily/"$base"|weekly/"$base"|monthly/"$base") ;;
+    *) continue ;;
+  esac
+  if [ -n "$stamp" ] && [ "$base" != "anyq-postgres-${stamp}.dump.age" ]; then
+    continue
+  fi
+  if [ -z "$newest" ] || [[ "$base" > "$newest" ]]; then
+    newest="$base"
+    object="$line"
+  fi
+done <<< "$list"
 case "$object" in
-  anyq-postgres-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.dump.age) ;;
+  hourly/*|daily/*|weekly/*|monthly/*) ;;
   *)
     echo "anyq: no encrypted dump on the remote" >&2
     exit 1

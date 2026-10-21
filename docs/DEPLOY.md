@@ -146,7 +146,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml logs --t
 Тома:
 
 - `anyq-data` — `/data` в API: `uploads`, `private`, `public`. Старый `db.json` можно положить сюда для импорта.
-- `anyq-postgres` — данные PostgreSQL. Удаление тома стирает базу.
+- `anyq-postgres` — данные PostgreSQL. Удаление тома стирает базу. Образ сервиса `postgres` — `postgis/postgis:16-3.4`. При первом создании каталога данных кластер получает `POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale-provider=icu --icu-locale=ru-KZ`. Локаль и кодировка фиксируются в этот момент. Позже их меняют только через дамп и восстановление в новый том. Эти аргументы должны быть заданы до первого боевого `initdb`: уже заполненный том их не перечитает.
 - `anyq-caddy-data` и `anyq-caddy-config` — сертификаты. Удаление этих томов заставит Caddy запросить сертификат заново.
 
 Логи контейнеров пишутся драйвером `json-file`: не больше 10 МБ на файл и 5 файлов на сервис. Лимиты ресурсов в compose-файле рассчитаны на 2 vCPU и 4 ГБ: API до 1 CPU и 1536 МБ, PostgreSQL до 0.5 CPU и 512 МБ, сайт до 0.75 CPU и 768 МБ, Caddy до 0.25 CPU и 128 МБ. Политика перезапуска — `unless-stopped`. Сервис `db-backup` до старта `migrate` пишет `pg_dump -Fc` в том `anyq-backups`. Имя файла содержит время UTC (`pre-migrate-YYYYMMDDTHHMMSSZ.dump`), поэтому новый запуск не затирает предыдущий. `umask 077` задаёт доступ только владельцу. В томе остаются три последних снимка. Если дамп не создался, `migrate` не запускается. Сервис `migrate` один раз выполняет `alembic upgrade head` до старта API. API при старте таблицы не создаёт и отвечает 503 на `/ready`, пока версия схемы не совпадает с ожидаемой.
@@ -176,9 +176,9 @@ curl -fsS -o /dev/null -w '%{http_code}\n' "https://<домен>/ru"
 ls -lh /var/backups/anyq
 ```
 
-Появляются `anyq-postgres-<дата>.dump.age` (`pg_dump -Fc`) и `anyq-data-<дата>.tar.gz.age` (загрузки и медиа). Оба файла зашифрованы. Срок хранения задаёт `BACKUP_RETENTION_DAYS` (14), и локально, и на обоих remote. Порядок восстановления — в `docs/BACKUPS.md`.
+Появляются `anyq-postgres-<дата>.dump.age` (`pg_dump -Fc`) и `anyq-data-<дата>.tar.gz.age` (загрузки и медиа). Оба файла зашифрованы. Копии лежат в четырёх классах, локально и на обоих remote: почасовые 48 часов, затем 7 суточных, 4 недельных и 6 месячных. Каждый класс чистится своим правилом. Порядок восстановления — в `docs/BACKUPS.md`.
 
-Перед каждой миграцией compose дополнительно пишет `/backups/pre-migrate-<время UTC>.dump` в томе `anyq-backups`. Это снимок `pg_dump -Fc` из `postgres:16-alpine` с паролем `POSTGRES_PASSWORD`, с `umask 077`. Файл непустой, иначе сервис `db-backup` завершается с ошибкой и `migrate` не стартует. Восстановление в уже запущенный PostgreSQL:
+Перед каждой миграцией compose дополнительно пишет `/backups/pre-migrate-<время UTC>.dump` в томе `anyq-backups`. Это снимок `pg_dump -Fc` из образа `postgis/postgis:16-3.4` с паролем `POSTGRES_PASSWORD`, с `umask 077`. Файл непустой, иначе сервис `db-backup` завершается с ошибкой и `migrate` не стартует. Восстановление в уже запущенный PostgreSQL:
 
 ```bash
 docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml run --rm --no-deps \
@@ -266,7 +266,7 @@ docker logs anyq-api --tail 50
 
 В поле `ref` укажите ветку, которая уже запушена и которую сервер может получить из `origin`. На сервере репозиторий должен быть в `/opt/anyq`. Workflow выполняет там `deploy/deploy.sh`.
 
-Существующий `.github/workflows/ci.yml` этот файл не заменяет. Проверки pull request идут через него и через `.github/workflows/backup-check.yml`. Сканер образов печатает HIGH и CRITICAL. Сборка падает только на CRITICAL, для которых уже есть исправление. Записи без исправления остаются в отчёте и сборку не останавливают. Локальные команды для тех же проверок перечислены в описании соответствующего pull request и в `docs/BACKUPS.md` для круга backup/restore.
+Существующий `.github/workflows/ci.yml` этот файл не заменяет. Проверки pull request идут через него и через `.github/workflows/backup-check.yml`. Сканер образов печатает HIGH и CRITICAL и сохраняет отчёт SARIF. Сборка падает только на CRITICAL, для которых уже есть исправление. Записи без исправления остаются в отчёте и сборку не останавливают. `.trivyignore.yaml` перечисляет только те CVE, у которых исправление есть, но поставить его в этом дереве нельзя; у каждой записи есть срок не длиннее 30 дней. Локальные команды для тех же проверок перечислены в описании соответствующего pull request и в `docs/BACKUPS.md` для круга backup/restore.
 
 ## 10. Что скрипты не делают
 

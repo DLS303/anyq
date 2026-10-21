@@ -1,5 +1,5 @@
 # Только локальная разработка. Боевой стек — deploy/docker-compose.prod.yml.
-# PostgreSQL и Redis доступны в сети compose. Порты 5432 и 6379 на хост не публикуются.
+# Порты базы опубликованы только на 127.0.0.1.
 #   docker compose up -d postgis redis
 services:
   postgis:
@@ -9,8 +9,8 @@ services:
       POSTGRES_USER: superapp
       POSTGRES_PASSWORD: ${LOCAL_POSTGRES_PASSWORD:?set LOCAL_POSTGRES_PASSWORD}
       POSTGRES_DB: superapp
-    expose:
-      - "5432"
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgis_data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
@@ -23,8 +23,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: superapp-redis
-    expose:
-      - "6379"
+    ports:
+      - "127.0.0.1:6379:6379"
 
 volumes:
   postgis_data:
