@@ -204,7 +204,8 @@ def test_buyer_cannot_see_owner_deals_and_companies_stay_apart():
         json={"title": "Company A yard", "address": "Almaty"},
         headers=_auth(company_a),
     )
-    assert project.status_code == 403
+    assert project.status_code == 200, project.text
+    assert project.json()["data"]["title"] == "Company A yard"
 
 
 def test_material_orders_are_not_shared_across_companies():

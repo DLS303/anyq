@@ -123,7 +123,7 @@ export const messages = {
     phone: "Телефон",
     message: "Комментарий",
     listings: "Объявления",
-    incoming: "Входящие заявки",
+    incoming: "Входящие",
     myFavorites: "Избранное",
     myInquiries: "Мои заявки",
     calcTitle: "Калькулятор освоения",

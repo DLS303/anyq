@@ -158,8 +158,8 @@ def _kind(value: str) -> str:
     return kind
 
 
-def _member_role(role: str) -> str:
-    if role in {"customer", "contractor"}:
+def _member_role(role: str, kind: str) -> str:
+    if kind == "company" or role in {"customer", "contractor"}:
         return "owner"
     return "supplier"
 
@@ -282,7 +282,7 @@ def start_signup(
             )
         )
         session.flush()
-        session.add(CompanyMember(company_id=company_id, user_id=uid, role=_member_role(chosen)))
+        session.add(CompanyMember(company_id=company_id, user_id=uid, role=_member_role(chosen, kind)))
         session.add(
             AccountRow(
                 user_id=uid,

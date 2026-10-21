@@ -365,9 +365,13 @@ class RequestRecipient(Base):
 
     request_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     supplier_company_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="sent")
     sent_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False, server_default="")
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False, server_default="")
 
     __table_args__ = (
+        CheckConstraint("status IN ('sent', 'closed')", name="ck_request_recipients_status"),
         Index("ix_request_recipients_request", "request_id"),
         Index("ix_request_recipients_company", "supplier_company_id"),
     )
@@ -956,7 +960,7 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-SCHEMA_HEAD = "20261021_0002_signup_accounts"
+SCHEMA_HEAD = "20261021_0003_recipient_status"
 MIGRATION_LOCK = 21419007
 
 

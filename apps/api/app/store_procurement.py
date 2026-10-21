@@ -152,7 +152,14 @@ def record_recipients(store, request_id: str, company_ids: list[str] | None = No
             if not company_id or session.get(RequestRecipient, key) is not None:
                 continue
             session.add(
-                RequestRecipient(request_id=request_id, supplier_company_id=company_id, sent_at=now)
+                RequestRecipient(
+                    request_id=request_id,
+                    supplier_company_id=company_id,
+                    status="sent",
+                    sent_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
             )
         session.commit()
 
@@ -267,16 +274,20 @@ def material_picker(store, project, query: str) -> dict:
     return {"recent": recent, "catalog": catalog}
 
 
-def _recipient_ids(store, company_id: str) -> set[str]:
+def _recipient_rows(store, company_id: str) -> dict[str, str]:
     from app.sql_backend import RequestRecipient
 
     if not company_id:
-        return set()
+        return {}
     with store._sql.factory() as session:
         rows = session.scalars(
-            select(RequestRecipient.request_id).where(RequestRecipient.supplier_company_id == company_id)
+            select(RequestRecipient).where(RequestRecipient.supplier_company_id == company_id)
         ).all()
-    return {str(item) for item in rows}
+    return {str(row.request_id): row.status for row in rows}
+
+
+def _recipient_ids(store, company_id: str) -> set[str]:
+    return set(_recipient_rows(store, company_id))
 
 
 def supplier_can_bid(user, request: ProcRequest) -> bool:
@@ -294,10 +305,10 @@ def supplier_inbox(store, user) -> list[dict]:
     if user.role != "supplier":
         raise PermissionError("Недостаточно прав")
     company_id = str(getattr(user, "company_id", "") or "").strip()
-    allowed = _recipient_ids(store, company_id)
+    addressed = _recipient_rows(store, company_id)
     rows = []
     for req in store.proc_requests.values():
-        if req.id not in allowed or not req.shared or req.status != "collecting":
+        if req.id not in addressed or not req.shared or req.status != "collecting":
             continue
         project = store.get_project(req.project_id)
         lines = [
@@ -309,6 +320,7 @@ def supplier_inbox(store, user) -> list[dict]:
                 "id": req.id,
                 "number": req.number,
                 "title": req.title,
+                "status": addressed[req.id],
                 "project_id": req.project_id,
                 "project_title": project.title if project else "",
                 "created_at": req.created_at,

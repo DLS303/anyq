@@ -138,6 +138,39 @@ def test_roles_create_company_and_do_not_take_the_site_owner_slot(open_signup):
         assert status == "active"
 
 
+def test_company_registration_creates_an_owner_membership(open_signup):
+    from app.schemas import RegisterBody
+
+    email = _email()
+    user, _token = store.register(
+        RegisterBody(
+            email=email,
+            password="secret12",
+            full_name="Компания Тест",
+            phone="+77012223344",
+            company="ТОО Тест",
+            company_bin=f"{uuid4().int % 10**12:012d}",
+            role="buyer",
+            consent_offer_pd=True,
+        )
+    )
+    assert user.company_id
+    with store._sql.factory() as session:
+        company = session.get(CompanyRow, user.company_id)
+        member = session.get(CompanyMember, (user.company_id, user.id))
+    assert company is not None and company.legacy_key == user.company_key
+    assert member is not None and member.role == "owner"
+    contact = _email()
+    started = _start("supplier", contact, kind="company", name="ТОО Поставка")
+    assert started.status_code == 200, started.text
+    body = started.json()["data"]
+    with store._sql.factory() as session:
+        company = session.get(CompanyRow, body["company_id"])
+        member = session.get(CompanyMember, (body["company_id"], body["user_id"]))
+    assert company is not None and company.account_kind == "company"
+    assert member is not None and member.role == "owner"
+
+
 def test_phone_stays_pending_and_unverified_numbers_do_not_block(open_signup):
     phone = _phone()
     first = _start("supplier", "8" + phone[2:])
@@ -276,7 +309,8 @@ def test_supplier_inbox_is_limited_to_recipient_rows(open_signup):
     seen = client.get("/v1/procurement/inbox", headers=_auth(supplier["token"]))
     hidden = client.get("/v1/procurement/inbox", headers=_auth(other_user.json()["data"]["token"]))
     assert seen.status_code == 200, seen.text
-    assert request_id in {item["id"] for item in seen.json()["data"]}
+    match = next(item for item in seen.json()["data"] if item["id"] == request_id)
+    assert match["status"] == "sent"
     assert hidden.status_code == 200, hidden.text
     assert request_id not in {item["id"] for item in hidden.json()["data"]}
     denied = client.post("/v1/site/projects", json={"title": "Чужой объект"}, headers=_auth(supplier["token"]))

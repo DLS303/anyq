@@ -2227,7 +2227,7 @@ class MemoryStore:
         return record
 
     def register(self, body: RegisterBody, *, ip: str = "", user_agent: str = "") -> tuple[User, str]:
-        from sqlalchemy import func, select
+        from sqlalchemy import func, select, text
         from sqlalchemy.exc import IntegrityError
 
         email = body.email.lower().strip()
@@ -2290,6 +2290,10 @@ class MemoryStore:
                     raise ValueError("Такой email уже зарегистрирован")
                 uid = f"u-{uuid4().hex[:8]}"
                 key, review = claim_company_key(session, uid, bin_no)
+                company_id = session.execute(
+                    text("SELECT id FROM companies WHERE legacy_key = :key"),
+                    {"key": key},
+                ).scalar_one()
                 user = User(
                     id=uid,
                     email=email,
@@ -2299,6 +2303,7 @@ class MemoryStore:
                     company=company,
                     company_bin=bin_no,
                     company_key=key,
+                    company_id=str(company_id),
                     company_review=review,
                     city=body.city.strip() or "Алматы",
                     pilot=pilot,
@@ -2360,6 +2365,9 @@ class MemoryStore:
                     return seq
 
                 user_seq = put(session, "users", uid, user)
+                from app.sql_backend import CompanyMember
+
+                session.add(CompanyMember(company_id=str(company_id), user_id=uid, role="owner"))
                 cred_seq = put(session, "credentials", uid, password_hash)
                 company_id = company_key(user)
                 consent_seq = alloc_seq(session, "consents")

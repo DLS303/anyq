@@ -786,6 +786,12 @@ def test_upgrade_dedupes_emails_and_restores_consents(tmp_path, capsys):
         assert failures == 0
         command.downgrade(cfg, "-1")
         names = set(inspect(engine).get_table_names())
+        recipient_columns = {column["name"] for column in inspect(engine).get_columns("request_recipients")}
+        assert "status" not in recipient_columns
+        assert "created_at" not in recipient_columns
+        assert "accounts" in names
+        command.downgrade(cfg, "20261019_0002_pf0")
+        names = set(inspect(engine).get_table_names())
         assert "accounts" not in names
         assert "signup_codes" not in names
         assert "companies" in names
