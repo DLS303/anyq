@@ -26,6 +26,9 @@ load_env "$ROOT/deploy/.env"
 validate_env
 chmod 600 "$ROOT/deploy/.env" || true
 
+API_CONTAINER="${ANYQ_API_CONTAINER:-anyq-api}"
+export ANYQ_API_CONTAINER="$API_CONTAINER"
+
 if [ "${DEPLOY_PULL:-1}" != "0" ]; then
   if [ ! -d "$ROOT/.git" ]; then
     echo "anyq: $ROOT is not a git checkout" >&2
@@ -64,7 +67,7 @@ wait_healthy() {
   local attempt status container
   for attempt in $(seq 1 48); do
     local ready=1
-    for container in anyq-api anyq-web anyq-caddy; do
+    for container in "$API_CONTAINER" anyq-web anyq-caddy; do
       status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container" 2>/dev/null || echo missing)"
       if [ "$status" != "healthy" ]; then
         ready=0
@@ -92,6 +95,8 @@ smoke() {
   fi
   curl "${curl_opts[@]}" "$base/healthz" | grep -q '"ok":true'
   curl "${curl_opts[@]}" "$base/health" | grep -q '"ok":true'
+  curl "${curl_opts[@]}" "$base/v1/version" | grep -q '"version"'
+  docker exec "$API_CONTAINER" python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/v1/health/ready', timeout=6).read().decode())" | grep -q '"ok":true'
   curl "${curl_opts[@]}" "$base/v1/modules" | grep -q '"ok":true'
   curl "${curl_opts[@]}" -o /dev/null "$base/ru"
 }
@@ -117,8 +122,17 @@ rollback() {
   wait_healthy
 }
 
-snapshot_if_healthy anyq-api anyq-api
+snapshot_if_healthy "$API_CONTAINER" anyq-api
 snapshot_if_healthy anyq-web anyq-web
+
+if [ -z "${GIT_SHA:-}" ]; then
+  GIT_SHA="$(git -C "$ROOT" rev-parse --short=7 HEAD 2>/dev/null || true)"
+  export GIT_SHA
+fi
+if [ -z "${BUILD_TIME:-}" ]; then
+  BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  export BUILD_TIME
+fi
 
 echo "anyq: building images"
 "${COMPOSE[@]}" build

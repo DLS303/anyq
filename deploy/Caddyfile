@@ -21,7 +21,14 @@ http://127.0.0.1:8080 {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		X-Frame-Options "DENY"
+		Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://server.arcgisonline.com; connect-src 'self' https://*.tile.openstreetmap.org https://server.arcgisonline.com https://unpkg.com; worker-src 'self' blob: https://unpkg.com; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		Permissions-Policy "camera=(self), geolocation=(self), microphone=(self)"
 		-Server
+	}
+
+	@ready path /v1/health/ready /v1/health/ready/*
+	handle @ready {
+		respond 404
 	}
 
 	handle /v1/* {
@@ -42,20 +49,9 @@ http://127.0.0.1:8080 {
 		reverse_proxy api:8010
 	}
 
-	handle /docs {
-		reverse_proxy api:8010
-	}
-
-	handle /docs/* {
-		reverse_proxy api:8010
-	}
-
-	handle /redoc {
-		reverse_proxy api:8010
-	}
-
-	handle /openapi.json {
-		reverse_proxy api:8010
+	@api_docs path /docs /docs/* /redoc /redoc/* /openapi.json
+	handle @api_docs {
+		respond 404
 	}
 
 	handle {

@@ -32,7 +32,14 @@ from app.sql_backend import ChangedByOther
 load_secret()
 require_login_hash_secret()
 
-app = FastAPI(title=settings.app_name, version=settings.version)
+_production = settings.anyq_env.strip().lower() == "production"
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.version,
+    docs_url=None if _production else "/docs",
+    redoc_url=None if _production else "/redoc",
+    openapi_url=None if _production else "/openapi.json",
+)
 
 app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(SecurityHeadersMiddleware)
@@ -72,9 +79,11 @@ def changed_by_other(_request: Request, exc: ChangedByOther):
 
 @app.get("/")
 def root():
-    return {
+    body = {
         "ok": True,
         "product": "SuperAPP",
         "phase": 2,
-        "docs": "/docs",
     }
+    if not _production:
+        body["docs"] = "/docs"
+    return body

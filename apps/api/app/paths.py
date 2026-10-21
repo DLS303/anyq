@@ -4,9 +4,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def uploads_dir() -> Path:
+def uploads_path() -> Path:
+    """Uploads directory from configuration. Does not create it."""
     override = os.getenv("ANYQ_UPLOADS_DIR", "").strip()
-    path = Path(override) if override else REPO_ROOT / "data" / "uploads"
+    if override:
+        return Path(override)
+    return REPO_ROOT / "data" / "uploads"
+
+
+def uploads_dir() -> Path:
+    path = uploads_path()
     path.mkdir(parents=True, exist_ok=True)
     return path
 

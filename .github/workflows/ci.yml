@@ -24,6 +24,15 @@ jobs:
           pip install -r requirements.txt "ruff==0.17.1"
       - name: Ruff
         run: ruff check .
+      - name: Alembic has one head
+        run: |
+          set -euo pipefail
+          count="$(alembic heads | grep -cve '^$' || true)"
+          alembic heads
+          if [ "$count" -ne 1 ]; then
+            echo "expected exactly one alembic head, found ${count}"
+            exit 1
+          fi
       - name: Migrate SQLite
         run: |
           rm -f /tmp/anyq-ci.sqlite
