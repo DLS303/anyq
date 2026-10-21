@@ -11,12 +11,12 @@ from app.schemas import (
 )
 
 PHASE2_USERS: list[User] = [
-    User(id="u-arch", email="architect@demo.superapp", full_name="Айдар Бекмуратов", role="specialist", phone="+7 777 200 11 11"),
-    User(id="u-surv", email="surveyor@demo.superapp", full_name="Сауле Искакова", role="specialist", phone="+7 701 300 22 22"),
-    User(id="u-smr", email="contractor@demo.superapp", full_name="ТОО Qurylys Group", role="contractor", phone="+7 727 250 33 33"),
-    User(id="u-nadzor", email="supervisor@demo.superapp", full_name="Марат Технадзор", role="supervisor", phone="+7 705 400 44 44"),
-    User(id="u-law", email="lawyer@demo.superapp", full_name="Дана Юридическая", role="specialist", phone="+7 747 500 55 55"),
-    User(id="u-tech", email="excavator@demo.superapp", full_name="ИП Техника 24", role="specialist", phone="+7 777 600 66 66"),
+    User(id="u-arch", email="architect@demo.superapp", full_name="Айдар Бекмуратов", role="specialist", phone="+7 000 000 00 04"),
+    User(id="u-surv", email="surveyor@demo.superapp", full_name="Сауле Искакова", role="specialist", phone="+7 000 000 00 05"),
+    User(id="u-smr", email="contractor@demo.superapp", full_name="ТОО Qurylys Group", role="contractor", phone="+7 000 000 00 06"),
+    User(id="u-nadzor", email="supervisor@demo.superapp", full_name="Марат Технадзор", role="supervisor", phone="+7 000 000 00 07"),
+    User(id="u-law", email="lawyer@demo.superapp", full_name="Дана Юридическая", role="specialist", phone="+7 000 000 00 08"),
+    User(id="u-tech", email="excavator@demo.superapp", full_name="ИП Техника 24", role="specialist", phone="+7 000 000 00 09"),
 ]
 
 SPECIALISTS: list[Specialist] = [

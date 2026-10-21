@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import threading
@@ -12,7 +13,7 @@ from typing import get_args
 from uuid import uuid4
 
 from app.authutil import hash_password, make_token, verify_password
-from app.config import demo_mode
+from app.config import assert_demo_password_policy, current_env, demo_mode, secure_env
 from app.geo import centroid, haversine_km
 from app.legal import PD_VERSION, ai_document, pd_sha256, privacy_document
 from app.schemas import (
@@ -121,6 +122,7 @@ from app.sql_backend import (
     alloc_seq,
     bump_revisions,
     consent_event_from_record,
+    guard_json_store_read,
     index_values,
     json_db_file,
     lock_meta,
@@ -164,6 +166,7 @@ CADASTRE = re.compile(r"^\d{2}-\d{3}-\d{3}-\d{3}$")
 DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SITE_ROLES = set(get_args(SiteRole))
 CHECK_RESULTS = {"pass", "fail", "na"}
+log = logging.getLogger("app.store")
 
 
 def company_key(user: User) -> str:
@@ -317,6 +320,7 @@ def _now() -> str:
 
 class MemoryStore:
     def __init__(self) -> None:
+        assert_demo_password_policy()
         object.__setattr__(self, "_ready", False)
         self._lock = RLock()
         self._local = threading.local()
@@ -445,6 +449,8 @@ class MemoryStore:
             return
         password = os.getenv("ANYQ_DEMO_PASSWORD", "").strip()
         if not password:
+            if current_env() == "demo":
+                log.warning("ANYQ_DEMO_PASSWORD is unset; demo accounts cannot log in")
             return
         added = False
         for u in list(self.users_by_id.values()):
@@ -618,7 +624,7 @@ class MemoryStore:
             self._sql.load_into(self)
             self._seen_rev = self._sql.revision()
             return
-        if _production():
+        if secure_env():
             self._seen_rev = self._sql.revision()
             return
         self._load_json()
@@ -626,6 +632,7 @@ class MemoryStore:
         self._seen_rev = self._sql.revision()
 
     def _load_json(self) -> None:
+        guard_json_store_read()
         path = db_file()
         if not path.exists():
             if demo_mode():

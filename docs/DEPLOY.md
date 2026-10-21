@@ -108,7 +108,7 @@ openssl rand -base64 48
 - `NEXT_PUBLIC_PILOT_MODE=1` включает пилотный интерфейс. Значение попадает в образ сайта на сборке. Смена потребует нового `deploy.sh`.
 - `INTERNAL_API_URL` оставьте `http://api:8010`.
 
-Контейнер API не стартует, если `JWT_SECRET` или `LOGIN_HASH_SECRET` пустой, короче 32 символов или похож на заготовку (`changeme`, `replace-me`, `test-only`, `superapp`, `your-secret` и те же слова в другом регистре). Пустой `CORS_ORIGINS`, символ `*` в нём, непустой демо-пароль и пароль базы по умолчанию тоже останавливают запуск. Тот же набор проверяет `deploy/check_env.sh` до сборки. Процесс Python дополнительно отказывается стартовать без `JWT_SECRET` и `LOGIN_HASH_SECRET` достаточной длины и без `CORS_ORIGINS`.
+Контейнер API не стартует, если `JWT_SECRET` или `LOGIN_HASH_SECRET` пустой, короче 32 символов или похож на заготовку (`changeme`, `replace-me`, `test-only`, `superapp`, `your-secret` и те же слова в другом регистре). Пустой `CORS_ORIGINS`, символ `*` в нём, непустой демо-пароль и пароль базы по умолчанию тоже останавливают запуск. Тот же набор проверяет `deploy/check_env.sh` до сборки. Процесс Python дополнительно отказывается стартовать без `JWT_SECRET` и `LOGIN_HASH_SECRET` достаточной длины, без `CORS_ORIGINS` и при символе `*` в `CORS_ORIGINS`. Те же проверки действуют при `ANYQ_ENV=demo`; демо может использовать SQLite и `ANYQ_DEMO_PASSWORD`. См. `docs/DEMO.md`.
 
 ```bash
 ./deploy/check_env.sh

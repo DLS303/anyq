@@ -5,7 +5,7 @@ SUPPLIER = User(
     email="supplier@demo.superapp",
     full_name="ТОО СтройСнаб Алматы",
     role="supplier",
-    phone="+7 727 333 20 20",
+    phone="+7 000 000 00 03",
 )
 
 MATERIALS: list[Material] = [

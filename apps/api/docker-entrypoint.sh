@@ -58,6 +58,8 @@ case "${CORS_ORIGINS}" in
     ;;
 esac
 
+# ANYQ_DEMO_PASSWORD is forbidden only while ANYQ_ENV=production.
+# ANYQ_ENV=demo may set it. The API reads that variable and has no fallback value.
 if [ -n "${ANYQ_DEMO_PASSWORD:-}" ]; then
   fail "ANYQ_DEMO_PASSWORD must be empty in production"
 fi

@@ -7,6 +7,8 @@ import os
 import secrets
 import time
 
+from app.config import secure_env
+
 _cached_secret: str | None = None
 
 
@@ -19,11 +21,10 @@ def load_secret() -> str:
     global _cached_secret
     if _cached_secret:
         return _cached_secret
-    env = os.getenv("ANYQ_ENV", "development").strip().lower()
     secret = (os.getenv("JWT_SECRET") or os.getenv("SUPERAPP_SECRET") or "").strip()
-    if env == "production":
+    if secure_env():
         if len(secret) < 32:
-            raise RuntimeError("JWT_SECRET must be set to at least 32 characters when ANYQ_ENV=production")
+            raise RuntimeError("JWT_SECRET must be set to at least 32 characters when ANYQ_ENV is demo or production")
         _cached_secret = secret
         return _cached_secret
     if len(secret) < 16:

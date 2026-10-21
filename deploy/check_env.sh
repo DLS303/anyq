@@ -99,6 +99,7 @@ validate_env() {
       ;;
   esac
 
+  # Forbidden only for this production file. ANYQ_ENV=demo may set ANYQ_DEMO_PASSWORD.
   if [ -n "${ANYQ_DEMO_PASSWORD:-}" ]; then
     echo "anyq: ANYQ_DEMO_PASSWORD must be empty in production" >&2
     return 1
