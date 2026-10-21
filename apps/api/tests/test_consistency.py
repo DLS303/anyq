@@ -1144,5 +1144,31 @@ def test_app_role_cannot_rewrite_consent_events(tmp_path, monkeypatch):
                 text("SELECT count(*) FROM consent_events WHERE legacy_id = 'c-app-role'")
             ).scalar()
         assert stored == 1
+        for statement in (
+            "TRUNCATE TABLE companies",
+            "TRUNCATE TABLE company_features",
+            "TRUNCATE TABLE audit_log",
+            "UPDATE audit_log SET action = 'nope'",
+            "DELETE FROM audit_log",
+            "CREATE TABLE app_role_must_not_create (id int)",
+        ):
+            with pytest.raises(DatabaseError), app_engine.begin() as connection:
+                connection.execute(text(statement))
+        with app_engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO companies (id, legacy_key) VALUES (:id, :key)"),
+                {"id": str(uuid4()), "key": "user:app-role-probe"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO audit_log (occurred_at, actor_kind, action, row_hash) "
+                    "VALUES (CURRENT_TIMESTAMP, 'system', 'feature.enable', :row_hash)"
+                ),
+                {"row_hash": b"\x11"},
+            )
+            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert version == "20261019_0002_pf0"
+        with pytest.raises(DatabaseError), app_engine.begin() as connection:
+            connection.execute(text("UPDATE alembic_version SET version_num = 'stale'"))
     finally:
         app_engine.dispose()
