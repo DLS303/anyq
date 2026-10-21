@@ -90,7 +90,8 @@ def test_keepwarm_workflow_contract():
     assert "timeout 100" in text
     assert "--max-time 45" in text
     assert "--retry 3" in text
-    assert "failure() || cancelled()" in text
+    assert "if: success() || failure()" in text
+    assert "cancelled()" not in text
     assert "https://anyq-demo-api.onrender.com" in text
     assert "https://anyq-demo.vercel.app" in text
     assert "vars.DEMO_API_URL" in text
