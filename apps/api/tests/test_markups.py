@@ -5,6 +5,8 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
@@ -430,6 +432,7 @@ def test_delete_tombstone_repeat_and_other_company():
     removed = client.delete(f"{path}?row_version={version}", headers=_auth(owner["token"]))
     assert removed.status_code == 200, removed.text
     assert removed.json()["data"]["deleted_at"].endswith("+00:00")
+    assert removed.json()["data"]["row_version"] == version + 1
     again = client.delete(f"{path}?row_version={version}", headers=_auth(owner["token"]))
     assert again.status_code == 409, again.text
     listed = client.get(f"/v1/site/revisions/{revision_id}/markups", headers=_auth(owner["token"]))
@@ -442,6 +445,76 @@ def test_delete_tombstone_repeat_and_other_company():
         ).all()
     assert len(audit) == 1
     assert "storage_key" not in str(audit[0].changes)
+
+
+def test_delete_then_stale_update_conflicts():
+    owner = _register("markup-stale-del@example.com", "520000000012")
+    _promote("markup-stale-del@example.com", "owner")
+    pid = _project(owner["token"], "Stale delete yard")
+    _enable(owner["token"])
+    sheet = _sheet(owner["token"], pid)
+    revision_id = sheet["revisions"][0]["id"]
+    markup_id = str(uuid4())
+    created = _post(owner["token"], revision_id, [_arrow()], id=markup_id)
+    assert created.status_code == 200, created.text
+    version = created.json()["data"]["row_version"]
+    path = f"/v1/site/revisions/{revision_id}/markups/{markup_id}"
+    removed = client.delete(f"{path}?row_version={version}", headers=_auth(owner["token"]))
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["data"]["row_version"] == version + 1
+    stale = _post(owner["token"], revision_id, [_arrow(0.2, 0.2, 0.3, 0.3)], id=markup_id, row_version=version)
+    assert stale.status_code == 409, stale.text
+    fresh = _post(
+        owner["token"],
+        revision_id,
+        [_arrow(0.2, 0.2, 0.3, 0.3)],
+        id=markup_id,
+        row_version=version + 1,
+    )
+    assert fresh.status_code == 404, fresh.text
+    listed = client.get(f"/v1/site/revisions/{revision_id}/markups", headers=_auth(owner["token"]))
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"]["markups"] == []
+    with store._sql.factory() as session:
+        row = session.get(MarkupRow, markup_id)
+    assert row is not None
+    assert row.deleted_at is not None
+    assert row.row_version == version + 1
+
+
+def test_concurrent_delete_one_writer():
+    owner = _register("markup-race-del@example.com", "520000000013")
+    _promote("markup-race-del@example.com", "owner")
+    pid = _project(owner["token"], "Race delete yard")
+    _enable(owner["token"])
+    sheet = _sheet(owner["token"], pid)
+    revision_id = sheet["revisions"][0]["id"]
+    markup_id = str(uuid4())
+    created = _post(owner["token"], revision_id, [_arrow()], id=markup_id)
+    assert created.status_code == 200, created.text
+    version = created.json()["data"]["row_version"]
+    path = f"/v1/site/revisions/{revision_id}/markups/{markup_id}?row_version={version}"
+    barrier = threading.Barrier(2)
+
+    def once():
+        barrier.wait()
+        return client.delete(path, headers=_auth(owner["token"]))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        done = list(pool.map(lambda _item: once(), (0, 1)))
+    assert sorted(item.status_code for item in done) == [200, 409]
+    winner = next(item for item in done if item.status_code == 200)
+    assert winner.json()["data"]["row_version"] == version + 1
+    with store._sql.factory() as session:
+        row = session.get(MarkupRow, markup_id)
+        audit = session.execute(
+            text("SELECT action FROM audit_log WHERE entity_id = :id AND action = 'markup.delete'"),
+            {"id": markup_id},
+        ).all()
+    assert row is not None
+    assert row.deleted_at is not None
+    assert row.row_version == version + 1
+    assert len(audit) == 1
 
 
 def test_other_company_file_and_download_names():

@@ -409,15 +409,23 @@ def save_markup(access: MarkupAccess, payload: dict, raw: bytes | None) -> dict:
                     session.flush()
                 else:
                     if (
-                        current.deleted_at
-                        or current.revision_id != access.revision_id
+                        current.revision_id != access.revision_id
                         or current.project_id != access.project_id
+                        or (
+                            current.deleted_at is not None
+                            and current.author_id != access.user_id
+                        )
                     ):
                         raise HTTPException(status_code=404, detail="Не найдено")
                     if current.visibility == "me" and current.author_id != access.user_id:
                         raise HTTPException(status_code=404, detail="Не найдено")
                     if current.author_id != access.user_id:
                         raise HTTPException(status_code=403, detail="Недостаточно прав")
+                    if current.deleted_at is not None and int(current.row_version) != row_version:
+                        session.rollback()
+                        raise MarkupConflict()
+                    if current.deleted_at is not None:
+                        raise HTTPException(status_code=404, detail="Не найдено")
                     bumped = session.execute(
                         update(MarkupRow)
                         .where(
@@ -493,7 +501,12 @@ def delete_markup(access: MarkupAccess, markup_id: str, row_version: int) -> dic
                 MarkupRow.row_version == row_version,
                 MarkupRow.deleted_at.is_(None),
             )
-            .values(deleted_at=stamp, updated_at=stamp, updated_by=access.user_id)
+            .values(
+                deleted_at=stamp,
+                updated_at=stamp,
+                updated_by=access.user_id,
+                row_version=row_version + 1,
+            )
         )
         if removed.rowcount != 1:
             session.rollback()
@@ -509,7 +522,7 @@ def delete_markup(access: MarkupAccess, markup_id: str, row_version: int) -> dic
             actor_user_id=access.user_id,
         )
         session.commit()
-    return {"id": token, "deleted_at": stamp, "row_version": row_version}
+    return {"id": token, "deleted_at": stamp, "row_version": row_version + 1}
 
 
 def open_file(access: MarkupAccess, file_id: str) -> tuple[Path, str, str]:
