@@ -2,6 +2,8 @@
 # Validate deploy/.env before compose up. Safe to execute or to source.
 # Keep the secret rules aligned with apps/api/docker-entrypoint.sh.
 
+_ANYQ_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 load_env() {
   local file="$1"
   local line key val
@@ -99,9 +101,13 @@ validate_env() {
       ;;
   esac
 
-  # Forbidden only for this production file. ANYQ_ENV=demo may set ANYQ_DEMO_PASSWORD.
-  if [ -n "${ANYQ_DEMO_PASSWORD:-}" ]; then
-    echo "anyq: ANYQ_DEMO_PASSWORD must be empty in production" >&2
+  # Same production rule as app.demo_password.assert_demo_password_policy.
+  if ! PYTHONPATH="${_ANYQ_REPO}/apps/api${PYTHONPATH:+:$PYTHONPATH}" python3 -c 'import sys; from app.demo_password import assert_demo_password_policy
+try:
+    assert_demo_password_policy()
+except RuntimeError:
+    sys.exit(1)'; then
+    echo "anyq: ANYQ_DEMO_PASSWORD must be empty when ANYQ_ENV=production" >&2
     return 1
   fi
 

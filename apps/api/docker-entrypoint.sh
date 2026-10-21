@@ -58,10 +58,13 @@ case "${CORS_ORIGINS}" in
     ;;
 esac
 
-# ANYQ_DEMO_PASSWORD is forbidden only while ANYQ_ENV=production.
-# ANYQ_ENV=demo may set it. The API reads that variable and has no fallback value.
-if [ -n "${ANYQ_DEMO_PASSWORD:-}" ]; then
-  fail "ANYQ_DEMO_PASSWORD must be empty in production"
+# Production rejection of ANYQ_DEMO_PASSWORD lives in assert_demo_password_policy.
+if ! python -c 'import sys; from app.demo_password import assert_demo_password_policy
+try:
+    assert_demo_password_policy()
+except RuntimeError:
+    sys.exit(1)'; then
+  fail "ANYQ_DEMO_PASSWORD must be empty when ANYQ_ENV=production"
 fi
 
 case "${DATABASE_URL:-}" in

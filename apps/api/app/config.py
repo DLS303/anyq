@@ -36,14 +36,12 @@ def session_cookie_params() -> dict[str, object]:
     return {"httponly": True, "secure": secure_cookies(), "samesite": "lax"}
 
 
-def api_docs_urls() -> dict[str, str | None]:
-    """Swagger stays off in production and demo. Development still serves /docs.
+def api_docs_closed() -> bool:
+    """True when /docs, /redoc, and /openapi.json must stay closed.
 
-    PR #16 can keep calling this instead of checking production on its own.
+    Demo and production. PR #16 should call this instead of a production-only flag.
     """
-    if secure_env():
-        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
-    return {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"}
+    return secure_env()
 
 
 def resolve_cors_origins() -> list[str]:
@@ -56,16 +54,6 @@ def resolve_cors_origins() -> list[str]:
     if not items:
         return ["http://localhost:3000", "http://127.0.0.1:3000"]
     return items
-
-
-def assert_demo_password_policy() -> None:
-    """ANYQ_DEMO_PASSWORD may be set for demo and must be empty in production.
-
-    The message names the variable and does not include its value.
-    """
-    password = os.getenv("ANYQ_DEMO_PASSWORD", "").strip()
-    if production_env() and password:
-        raise RuntimeError("ANYQ_DEMO_PASSWORD must be empty when ANYQ_ENV=production")
 
 
 class Settings(BaseModel):

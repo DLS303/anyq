@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
+import multiprocessing
 import re
 import secrets
 from pathlib import Path
@@ -17,7 +18,7 @@ from openpyxl import load_workbook
 from PIL import Image
 
 from app.authutil import load_secret, reset_secret_cache
-from app.config import api_docs_urls, resolve_cors_origins, session_cookie_params
+from app.config import api_docs_closed, resolve_cors_origins, session_cookie_params
 from app.demo_seed import DEMO_SEED_VERSION, demo_placeholder_jpeg, run_demo_seed
 from app.import_json import import_file
 from app.main import _lifespan, app, root
@@ -210,9 +211,7 @@ def test_secure_env_rejects_wildcard_cors_and_missing_secrets(monkeypatch, env_n
         login_hash_secret()
 
     assert session_cookie_params()["secure"] is True
-    assert api_docs_urls()["docs_url"] is None
-    assert api_docs_urls()["redoc_url"] is None
-    assert api_docs_urls()["openapi_url"] is None
+    assert api_docs_closed() is True
     assert "docs" not in root()
 
 
@@ -220,7 +219,7 @@ def test_development_keeps_docs_and_optional_cors(monkeypatch):
     monkeypatch.setenv("ANYQ_ENV", "development")
     monkeypatch.delenv("CORS_ORIGINS", raising=False)
     assert "http://localhost:3000" in resolve_cors_origins()
-    assert api_docs_urls()["docs_url"] == "/docs"
+    assert api_docs_closed() is False
     assert root()["docs"] == "/docs"
     assert session_cookie_params()["secure"] is False
     assert app.docs_url == "/docs"
@@ -288,3 +287,149 @@ def test_json_store_read_raises(monkeypatch, tmp_path, env_name):
 
     monkeypatch.setenv("ANYQ_ENV", "development")
     assert read_json_store(path)["users"][0]["id"] == "u-from-json"
+
+
+def _seed_ids(store) -> dict[str, list]:
+    photos = [
+        (item.original_id, item.public_id)
+        for log in store.daily_logs.values()
+        for item in log.photos
+    ]
+    return {
+        "projects": sorted(store.projects),
+        "tasks": sorted(store.schedule),
+        "rfis": sorted(store.rfis),
+        "requests": sorted(store.proc_requests),
+        "lines": sorted(store.proc_lines),
+        "files": sorted(store.files),
+        "logs": sorted(store.daily_logs),
+        "photos": sorted(photos),
+    }
+
+
+def test_demo_seeds_construction_without_plots_or_db_json(monkeypatch, tmp_path):
+    path = tmp_path / "db.json"
+    path.write_text(
+        json.dumps(
+            {
+                "users": [
+                    {
+                        "id": "u-from-json",
+                        "email": "json@example.com",
+                        "full_name": "JSON",
+                        "role": "buyer",
+                    }
+                ],
+                "plots": [{"id": "p-from-json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _sqlite(monkeypatch, tmp_path)
+    monkeypatch.setenv("ANYQ_DB_PATH", str(path))
+    monkeypatch.setenv("ANYQ_ENV", "demo")
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    monkeypatch.setenv("ANYQ_DEMO_PASSWORD", "")
+    fresh = MemoryStore()
+    try:
+        assert list(fresh.plots) == []
+        assert "p-from-json" not in fresh.plots
+        assert "p-besagash" not in fresh.plots
+        assert "u-from-json" not in fresh.users_by_id
+        assert list(fresh.reviews) == []
+        assert "sp-arch" in fresh.specialists
+        assert "ord-topo" in fresh.orders
+        assert "deal-smr-1" in fresh.deals
+        assert "th-topo" in fresh.threads
+        assert "m1" in fresh.messages
+    finally:
+        _close(fresh)
+
+    again = MemoryStore()
+    try:
+        assert list(again.plots) == []
+        assert "sp-arch" in again.specialists
+        assert "ord-arch" in again.orders
+        assert "deal-design-2" in again.deals
+        assert "th-arch" in again.threads
+        assert "m3" in again.messages
+        assert "u-from-json" not in again.users_by_id
+    finally:
+        _close(again)
+
+
+def test_seed_without_marker_does_not_duplicate(monkeypatch, tmp_path):
+    from app.sql_backend import Meta
+
+    _sqlite(monkeypatch, tmp_path)
+    monkeypatch.setenv("ANYQ_ENV", "demo")
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    monkeypatch.setenv("ANYQ_DEMO_PASSWORD", "")
+    fresh = MemoryStore()
+    try:
+        assert run_demo_seed(fresh) == "created"
+        before = _seed_ids(fresh)
+        assert "demo-prj-almaty-1-task-1" in before["tasks"]
+        assert "demo-prj-almaty-1-rfi" in before["rfis"]
+        assert "demo-prj-almaty-1-req" in before["requests"]
+        assert "demo-prj-almaty-1-photo-orig" in before["files"]
+        assert "demo-doc-estimate" in before["files"]
+        with fresh._sql.factory() as session:
+            row = session.get(Meta, "demo_seed_version")
+            assert row is not None
+            session.delete(row)
+            session.commit()
+        assert run_demo_seed(fresh) == "created"
+        assert _seed_ids(fresh) == before
+    finally:
+        _close(fresh)
+
+
+def _seed_in_process(barrier, queue) -> None:
+    barrier.wait(60)
+    from app.demo_seed import run_demo_seed
+    from app.store import store
+
+    try:
+        queue.put(run_demo_seed(store))
+    finally:
+        store._sql.engine.dispose()
+
+
+def test_two_processes_create_the_seed_once(monkeypatch, tmp_path):
+    _sqlite(monkeypatch, tmp_path)
+    monkeypatch.setenv("ANYQ_ENV", "demo")
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    monkeypatch.setenv("ANYQ_DEMO_PASSWORD", "")
+    ctx = multiprocessing.get_context("spawn")
+    barrier = ctx.Barrier(2)
+    queue = ctx.Queue()
+    procs = [ctx.Process(target=_seed_in_process, args=(barrier, queue)) for _ in range(2)]
+    for proc in procs:
+        proc.start()
+    statuses = []
+    try:
+        for proc in procs:
+            proc.join(90)
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(5)
+        statuses = [queue.get(timeout=5) for _ in procs]
+    finally:
+        for proc in procs:
+            if proc.is_alive():
+                proc.kill()
+                proc.join(5)
+    assert statuses.count("created") == 1
+    assert statuses.count("skipped") == 1
+    assert all(proc.exitcode == 0 for proc in procs)
+
+    fresh = MemoryStore()
+    try:
+        assert sorted(item for item in fresh.projects if item.startswith("demo-prj-")) == [
+            "demo-prj-almaty-1",
+            "demo-prj-almaty-2",
+        ]
+        assert list(fresh.files).count("demo-doc-estimate") == 1
+    finally:
+        _close(fresh)

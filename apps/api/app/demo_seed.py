@@ -14,6 +14,7 @@ from app.config import current_env, demo_mode
 from app.estimate import EstimateInput, calculate_estimate
 from app.paths import write_stored_file
 from app.procurement_models import ProcLine, ProcRequest
+from app.schemas import StoredUpload
 from app.site_models import RFI, BudgetLine, DailyLog, DailyPhoto, Project, ScheduleTask
 
 log = logging.getLogger("app.demo_seed")
@@ -283,7 +284,6 @@ def _photo(store, project: Project, owner, label: str) -> None:
             notes="DEMO",
             author_id=owner.id,
         )
-        store._save()
     jpeg = demo_placeholder_jpeg(label)
     original_id = f"{project.id}-photo-orig"
     public_id = f"{project.id}-photo-pub"
@@ -291,32 +291,60 @@ def _photo(store, project: Project, owner, label: str) -> None:
     public_name = f"{project.id}/{public_id}.jpg"
     write_stored_file("original", original_name, jpeg)
     write_stored_file("public", public_name, jpeg)
-    if original_id not in store.files:
-        store.add_upload(
-            owner,
-            original_name,
-            "image/jpeg",
-            project.id,
-            kind="original",
-            daily_log_id=log_id,
-            file_id=original_id,
-        )
-    if public_id not in store.files:
-        store.add_upload(
-            owner,
-            public_name,
-            "image/jpeg",
-            project.id,
-            kind="public",
-            daily_log_id=log_id,
-            file_id=public_id,
-        )
+    _stored_file(
+        store,
+        owner,
+        original_id,
+        original_name,
+        "image/jpeg",
+        project.id,
+        "original",
+        log_id,
+    )
+    _stored_file(
+        store,
+        owner,
+        public_id,
+        public_name,
+        "image/jpeg",
+        project.id,
+        "public",
+        log_id,
+    )
     log_row = store.daily_logs[log_id]
-    if not log_row.photos:
-        store.add_daily_photo(
-            log_id,
-            DailyPhoto(original_id=original_id, public_id=public_id),
-        )
+    photo = DailyPhoto(original_id=original_id, public_id=public_id)
+    already = any(
+        item.original_id == original_id and item.public_id == public_id
+        for item in log_row.photos
+    )
+    if not already:
+        log_row.photos = [photo]
+        store.daily_logs[log_id] = log_row
+    store._save()
+
+
+def _stored_file(
+    store,
+    owner,
+    file_id: str,
+    name: str,
+    content_type: str,
+    project_id: str,
+    kind: str,
+    daily_log_id: str | None,
+) -> None:
+    if file_id in store.files:
+        return
+    store.files[file_id] = StoredUpload(
+        id=file_id,
+        owner_id=owner.id,
+        name=name,
+        content_type=content_type,
+        created_at="2026-10-21T00:00:00+00:00",
+        project_id=project_id,
+        kind=kind,  # type: ignore[arg-type]
+        daily_log_id=daily_log_id,
+    )
 
 
 def _document(store, owner, built) -> None:
@@ -337,6 +365,14 @@ def _document(store, owner, built) -> None:
     project = built[0][0]
     name = f"{project.id}/demo-estimate.xlsx"
     write_stored_file("upload", name, data)
-    if "demo-doc-estimate" in store.files:
-        return
-    store.add_upload(owner, name, XLSX_MIME, project.id, kind="upload", file_id="demo-doc-estimate")
+    _stored_file(
+        store,
+        owner,
+        "demo-doc-estimate",
+        name,
+        XLSX_MIME,
+        project.id,
+        "upload",
+        None,
+    )
+    store._save()

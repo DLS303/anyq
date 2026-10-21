@@ -13,7 +13,8 @@ from typing import get_args
 from uuid import uuid4
 
 from app.authutil import hash_password, make_token, verify_password
-from app.config import assert_demo_password_policy, current_env, demo_mode, secure_env
+from app.config import current_env, demo_mode, secure_env
+from app.demo_password import assert_demo_password_policy
 from app.geo import centroid, haversine_km
 from app.legal import PD_VERSION, ai_document, pd_sha256, privacy_document
 from app.schemas import (
@@ -445,8 +446,7 @@ class MemoryStore:
             self._save()
 
     def _ensure_demo_passwords(self) -> None:
-        if os.getenv("ANYQ_ENV", "development").strip().lower() == "production":
-            return
+        assert_demo_password_policy()
         password = os.getenv("ANYQ_DEMO_PASSWORD", "").strip()
         if not password:
             if current_env() == "demo":
@@ -619,9 +619,27 @@ class MemoryStore:
         self.threads = {t.id: deepcopy(t) for t in THREADS}
         self.messages = {m.id: deepcopy(m) for m in MESSAGES}
 
+    def _seed_demo_construction(self) -> None:
+        """Specialists, orders, deals, and chats for an empty demo database.
+
+        The plots catalog stays empty. This path does not open db.json.
+        """
+        if not demo_mode():
+            return
+        self.specialists = {s.id: deepcopy(s) for s in SPECIALISTS}
+        self.orders = {o.id: deepcopy(o) for o in ORDERS}
+        self.deals = {d.id: deepcopy(d) for d in DEALS}
+        self.threads = {t.id: deepcopy(t) for t in THREADS}
+        self.messages = {m.id: deepcopy(m) for m in MESSAGES}
+        self._save_unlocked()
+
     def _load(self) -> None:
         if self._sql.count() > 0:
             self._sql.load_into(self)
+            self._seen_rev = self._sql.revision()
+            return
+        if current_env() == "demo":
+            self._seed_demo_construction()
             self._seen_rev = self._sql.revision()
             return
         if secure_env():

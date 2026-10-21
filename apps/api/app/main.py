@@ -6,7 +6,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app.authutil import load_secret
-from app.config import api_docs_urls, secure_env, settings
+from app.config import api_docs_closed, settings
 from app.routers import (
     acts,
     auth,
@@ -45,14 +45,14 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-_docs = api_docs_urls()
+_docs_closed = api_docs_closed()
 app = FastAPI(
     title=settings.app_name,
     version=settings.version,
     lifespan=_lifespan,
-    docs_url=_docs["docs_url"],
-    redoc_url=_docs["redoc_url"],
-    openapi_url=_docs["openapi_url"],
+    docs_url=None if _docs_closed else "/docs",
+    redoc_url=None if _docs_closed else "/redoc",
+    openapi_url=None if _docs_closed else "/openapi.json",
 )
 
 app.add_middleware(GZipMiddleware, minimum_size=500)
@@ -99,6 +99,6 @@ def root():
         "product": "SuperAPP",
         "phase": 2,
     }
-    if not secure_env():
+    if not api_docs_closed():
         body["docs"] = "/docs"
     return body
