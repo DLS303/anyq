@@ -50,7 +50,7 @@ async def _user(client: httpx.AsyncClient, index: int, rounds: int) -> list[tupl
         }
         for path in (
             "/health",
-            "/v1/plots?limit=24&offset=0",
+            "/v1/modules",
             "/v1/materials?limit=24&offset=0",
             "/v1/specialists?limit=24&offset=0",
         ):
@@ -120,19 +120,35 @@ def measure_reload_p50(doc_count: int, samples: int = 21) -> float:
     The caller chooses the database through DATABASE_URL / ANYQ_DB_PATH. A flat
     result as doc_count grows means a write does not reload every row.
     """
-    from copy import deepcopy
-
-    from app.seed import PLOTS
+    from app.schemas import Plot
     from app.store import MemoryStore
 
     writer = MemoryStore()
-    base = deepcopy(PLOTS[0])
+    base = Plot(
+        id="p-bench",
+        slug="object-bench",
+        owner_id="u-bench",
+        cadastral_no="20-315-027-142",
+        title_ru="Объект",
+        title_kk="Нысан",
+        district="Алматы",
+        purpose="izhs",
+        area_sotka=8.0,
+        price_kzt=1_000_000,
+        status="published",
+        electricity="connected",
+        gas="connected",
+        water="nearby",
+        sewage="absent",
+        access_road="connected",
+        polygon=[[43.32, 77.10], [43.32, 77.11], [43.33, 77.11], [43.33, 77.10], [43.32, 77.10]],
+    )
     target = ""
     for index in range(doc_count):
         item = base.model_copy(deep=True)
         item.id = f"plot-bench-{index}"
         item.owner_id = "u-bench"
-        item.title_ru = f"ТОО Тест участок {index}"
+        item.title_ru = f"ТОО Тест объект {index}"
         writer.plots[item.id] = item
         target = item.id
     writer._save()

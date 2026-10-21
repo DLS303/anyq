@@ -2,9 +2,9 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ANYQ · АНЫҚ — Премиальная цифровая экосистема девелопмента и строительства",
+  title: "ANYQ · АНЫҚ — стройка: объекты, снабжение, сметы",
   description:
-    "Безупречная точность в каждом метре и решении: аккредитованные генподрядчики, прямые поставки стройматериалов, автосмета и цифровой контроль стройплощадки в Казахстане.",
+    "Платформа строительства в Казахстане: объекты, снабжение, сметы, поставщики и исполнители.",
   appleWebApp: { capable: true, title: "ANYQ", statusBarStyle: "default" },
   formatDetection: { telephone: false },
 };

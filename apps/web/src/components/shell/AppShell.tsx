@@ -63,7 +63,6 @@ function navItems(locale: Locale, m: ReturnType<typeof t>, role?: Role) {
     { href: link("/estimates"), label: m.navAutoEstimate, icon: Calculator },
     { href: link("/specialists"), label: m.navSpecialists, icon: HardHat },
     { href: link("/site"), label: m.navSite, icon: Building2 },
-    { href: link("/catalog"), label: m.navCatalog, icon: Layers },
     { href: link("/control"), label: m.navPanel, icon: SlidersHorizontal },
     chat,
     cabinet,
@@ -134,7 +133,7 @@ function Header({ locale }: { locale: Locale }) {
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
             </span>
             <span className="hidden xs:block text-[9px] uppercase tracking-[0.25em] text-slate-500 font-semibold">
-              PREMIUM PROPTECH
+              СТРОЙКА
             </span>
           </span>
         </Link>

@@ -3,7 +3,6 @@ import json
 import os
 import queue
 import threading
-from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -20,10 +19,31 @@ from app.invitations import InvitationClosed, accept, create_invitation, revoke
 from app.legal import PD_VERSION, pd_sha256
 from app.main import app
 from app.procurement_models import ProcRequest
-from app.schemas import ConsentRecord, RegisterBody
-from app.seed import PLOTS
+from app.schemas import ConsentRecord, Plot, RegisterBody
 from app.sql_backend import ChangedByOther, InvitationRow, Record
 from app.store import MemoryStore
+
+
+def _sample_plot() -> Plot:
+    return Plot(
+        id="p-sample",
+        slug="object-sample",
+        owner_id="u-owner",
+        cadastral_no="20-315-027-142",
+        title_ru="Объект Бесагаш",
+        title_kk="Нысан Бесагаш",
+        district="Талгарский район",
+        purpose="izhs",
+        area_sotka=8.4,
+        price_kzt=1_000_000,
+        status="published",
+        electricity="connected",
+        gas="connected",
+        water="nearby",
+        sewage="absent",
+        access_road="connected",
+        polygon=[[43.32, 77.10], [43.32, 77.11], [43.33, 77.11], [43.33, 77.10], [43.32, 77.10]],
+    )
 
 
 def _alembic(url: str) -> None:
@@ -84,7 +104,7 @@ def test_changed_rows_reload_without_a_full_read(tmp_path, monkeypatch):
     _isolated(monkeypatch, tmp_path)
     writer = MemoryStore()
     _register(writer)
-    plot = deepcopy(PLOTS[0])
+    plot = _sample_plot()
     plot.id = "plot-seq"
     plot.owner_id = next(iter(writer.users_by_id))
     plot.title_ru = "Before"
@@ -107,7 +127,7 @@ def test_changed_rows_reload_without_a_full_read(tmp_path, monkeypatch):
 def test_parallel_edits_keep_every_increment(tmp_path, monkeypatch):
     _isolated(monkeypatch, tmp_path)
     origin = MemoryStore()
-    plot = deepcopy(PLOTS[0])
+    plot = _sample_plot()
     plot.id = "plot-cas"
     plot.owner_id = "u-cas"
     plot.soil = "0"
@@ -149,7 +169,7 @@ def test_parallel_edits_keep_every_increment(tmp_path, monkeypatch):
 def test_stale_write_is_rejected(tmp_path, monkeypatch):
     _isolated(monkeypatch, tmp_path)
     writer = MemoryStore()
-    plot = deepcopy(PLOTS[0])
+    plot = _sample_plot()
     plot.id = "plot-stale"
     plot.owner_id = "u-stale"
     plot.title_ru = "Original"
@@ -288,7 +308,7 @@ def test_two_workers_see_each_other(tmp_path, monkeypatch):
     reader = MemoryStore()
     before = int(writer._sql.revisions().get("rev", 0))
     loads = reader._sql.full_loads
-    base = deepcopy(PLOTS[0])
+    base = _sample_plot()
     written: list[str] = []
     guard = threading.Lock()
     finished: queue.Queue[int] = queue.Queue()
@@ -596,7 +616,7 @@ def test_meta_locks_follow_one_sorted_order(tmp_path, monkeypatch):
 
 
 def _run_meta_lock_order(store, seen) -> None:
-    plot = deepcopy(PLOTS[0])
+    plot = _sample_plot()
     plot.id = "plot-lock-order"
     plot.owner_id = "u-lock"
     store.plots[plot.id] = plot

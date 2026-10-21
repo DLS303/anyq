@@ -26,7 +26,7 @@ class PassportScreen extends StatelessWidget {
               const Icon(Icons.shield_outlined, size: 48, color: AnyqColors.inkMute),
               const SizedBox(height: 12),
               Text(
-                locale == 'kk' ? 'Телім таңдалмаған' : 'Участок не выбран',
+                locale == 'kk' ? 'Нысан таңдалмаған' : 'Объект не выбран',
                 style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
               ),
               const SizedBox(height: 8),
@@ -267,7 +267,7 @@ class PassportScreen extends StatelessWidget {
                         ? (locale == 'kk' ? 'Шектеу бар (Генплан)' : 'Пересечение с генпланом!')
                         : (locale == 'kk' ? 'Таза' : 'Не пересекает'),
                     isRisk: plot.redLines,
-                    info: plot.redLines ? 'Часть участка попадает под расширение дороги по ПДП.' : 'Чисто.',
+                    info: plot.redLines ? 'Часть объекта попадает под расширение дороги по ПДП.' : 'Чисто.',
                   ),
                   const Divider(height: 16),
                   _buildRiskRow(
@@ -472,7 +472,7 @@ class PassportScreen extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                'Раскрытие юридического паспорта участка ${plot.title(locale)}',
+                'Раскрытие юридического паспорта объекта ${plot.title(locale)}',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13, color: AnyqColors.inkMute),
               ),

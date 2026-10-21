@@ -1,4 +1,4 @@
 # Marketplace Service
 
-Фаза 1: каталог земли. Фаза 2: услуги и ресурсы.
-Сейчас живёт внутри API-шлюза (`apps/api` routers/plots).
+Снабжение стройки: материалы, поставщики и услуги.
+Живёт внутри API-шлюза (`apps/api` routers/materials, specialists, procurement).

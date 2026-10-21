@@ -847,7 +847,7 @@ class MemoryStore:
         if len(poly) >= 3 and poly[0] != poly[-1]:
             poly.append(poly[0])
         if len(poly) < 4:
-            raise ValueError("Нарисуйте контур участка на карте (минимум 3 точки)")
+            raise ValueError("Нарисуйте контур на карте (минимум 3 точки)")
         with self._lock:
             pid = f"p-{uuid4().hex[:8]}"
             plot = Plot(
@@ -963,9 +963,9 @@ class MemoryStore:
     def update_plot(self, plot_id: str, owner: User, body: PlotCreate) -> Plot:
         plot = self.get_plot(plot_id)
         if not plot:
-            raise ValueError("Участок не найден")
+            raise ValueError("Запись не найдена")
         if plot.owner_id != owner.id and owner.role != "admin":
-            raise PermissionError("Чужой участок")
+            raise PermissionError("Чужая запись")
         if plot.status not in ("draft", "pending", "needs_revision"):
             raise ValueError("Редактировать можно черновик или объявление на доработке")
         cad = body.cadastral_no.strip()
@@ -975,7 +975,7 @@ class MemoryStore:
         if len(poly) >= 3 and poly[0] != poly[-1]:
             poly.append(poly[0])
         if len(poly) < 4:
-            raise ValueError("Нарисуйте контур участка на карте (минимум 3 точки)")
+            raise ValueError("Нарисуйте контур на карте (минимум 3 точки)")
         with self._lock:
             plot.cadastral_no = cad
             plot.title_ru = body.title_ru
@@ -1012,9 +1012,9 @@ class MemoryStore:
     def submit_plot(self, plot_id: str, owner: User) -> Plot:
         plot = self.get_plot(plot_id)
         if not plot:
-            raise ValueError("Участок не найден")
+            raise ValueError("Запись не найдена")
         if plot.owner_id != owner.id and owner.role != "admin":
-            raise PermissionError("Чужой участок")
+            raise PermissionError("Чужая запись")
         if plot.status not in ("draft", "needs_revision", "pending"):
             raise ValueError("Нельзя повторно отправить это объявление")
         with self._lock:
@@ -1501,7 +1501,7 @@ class MemoryStore:
                 title=f"Интерес: {inquiry.plot_title}",
                 name=inquiry.name,
                 phone=inquiry.phone,
-                source="Заявка на участок",
+                source="Заявка на объект",
                 status="contacted",
                 funnel_target="land_sale",
                 budget_kzt=plot.price_kzt if plot else 0,
@@ -1517,7 +1517,7 @@ class MemoryStore:
                 deal_id=did,
                 activity_type="call",
                 title=f"Звонок: {inquiry.name} ({inquiry.phone})",
-                description=f"Интерес к участку {inquiry.plot_title}. Сообщение: {inquiry.message}",
+                description=f"Интерес к объекту {inquiry.plot_title}. Сообщение: {inquiry.message}",
                 due_date=_now()[:10],
                 author_name="Система",
                 created_at=_now(),

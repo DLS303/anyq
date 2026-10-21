@@ -269,7 +269,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
                               ? Center(
                                   child: GlassContainer(
                                     child: Text(
-                                      locale == 'kk' ? 'Телімдер табылмады' : 'Участки не найдены',
+                                      locale == 'kk' ? 'Нысандар табылмады' : 'Объекты не найдены',
                                       style: const TextStyle(fontWeight: FontWeight.w600),
                                     ),
                                   ),

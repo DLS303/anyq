@@ -19,7 +19,6 @@ from app.routers import (
     materials,
     moderation,
     modules,
-    plots,
     procurement,
     public,
     site,
@@ -45,7 +44,6 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(modules.router)
-app.include_router(plots.router)
 app.include_router(auth.router)
 app.include_router(cabinet.router)
 app.include_router(moderation.router)
