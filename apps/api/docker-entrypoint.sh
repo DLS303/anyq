@@ -59,6 +59,9 @@ case "${CORS_ORIGINS}" in
 esac
 
 # Production rejection of ANYQ_DEMO_PASSWORD lives in assert_demo_password_policy.
+# The package root is /srv/anyq/apps/api. /app is the legal-files mount, not this package.
+export PYTHONPATH="/srv/anyq/apps/api${PYTHONPATH:+:$PYTHONPATH}"
+cd /srv/anyq/apps/api
 if ! python -c 'import sys; from app.demo_password import assert_demo_password_policy
 try:
     assert_demo_password_policy()

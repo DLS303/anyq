@@ -418,6 +418,57 @@ def test_demo_seeds_construction_without_plots_or_db_json(monkeypatch, tmp_path)
         _close(again)
 
 
+def test_demo_restart_keeps_participation_records(monkeypatch, tmp_path):
+    from app.schemas import Deal, Lead, ServiceOrder
+
+    _sqlite(monkeypatch, tmp_path)
+    monkeypatch.setenv("ANYQ_ENV", "demo")
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    monkeypatch.setenv("ANYQ_DEMO_PASSWORD", "")
+    fresh = MemoryStore()
+    try:
+        fresh.orders["viewer-ord"] = ServiceOrder(
+            id="viewer-ord",
+            specialist_id="sp-arch",
+            client_id="u-buyer",
+            message="Просим подтвердить участие",
+            created_at="2026-10-21T00:00:00+00:00",
+        )
+        fresh.deals["viewer-deal"] = Deal(
+            id="viewer-deal",
+            funnel="construction",
+            stage="request",
+            title="Подтверждение участия",
+            created_at="2026-10-21T00:00:00+00:00",
+        )
+        fresh.leads["viewer-lead"] = Lead(
+            id="viewer-lead",
+            title="Заявка на участие",
+            name="Зритель",
+            phone="+7 000 000 00 99",
+            created_at="2026-10-21T00:00:00+00:00",
+        )
+        fresh._save()
+        before = {
+            "orders": sorted(fresh.orders),
+            "deals": sorted(fresh.deals),
+            "leads": sorted(fresh.leads),
+        }
+    finally:
+        _close(fresh)
+
+    again = MemoryStore()
+    try:
+        assert sorted(again.orders) == before["orders"]
+        assert sorted(again.deals) == before["deals"]
+        assert sorted(again.leads) == before["leads"]
+        assert again.orders["viewer-ord"].message == "Просим подтвердить участие"
+        assert again.deals["viewer-deal"].title == "Подтверждение участия"
+        assert again.leads["viewer-lead"].title == "Заявка на участие"
+    finally:
+        _close(again)
+
+
 def test_seed_without_marker_does_not_duplicate(monkeypatch, tmp_path):
     from app.sql_backend import Meta
 

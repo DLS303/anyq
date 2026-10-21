@@ -319,89 +319,13 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-_LAND_WORD = re.compile(r"участ(?!ник)|земл", re.IGNORECASE)
 _DEMO_LAND_ORDERS = frozenset({"ord-topo"})
 _DEMO_LAND_DEALS = frozenset({"deal-land-1", "deal-design-1"})
 _DEMO_LAND_THREADS = frozenset({"th-topo"})
-_LAND_SKIP = frozenset(
-    {
-        "id",
-        "email",
-        "phone",
-        "slug",
-        "bin",
-        "iin",
-        "license_no",
-        "bin_iin",
-        "payer_iin_bin",
-        "number",
-        "code",
-    }
-)
-_LAND_SWAPS = (
-    ("земельный участок", "строительный объект"),
-    ("Земельный участок", "Строительный объект"),
-    ("земельным", "строительным"),
-    ("земельного", "строительного"),
-    ("земельные", "строительные"),
-    ("Земляные", "Котлован"),
-    ("земляные", "котлован"),
-    ("землек.", "бригада"),
-    ("участков", "объектов"),
-    ("Участков", "Объектов"),
-    ("участки", "объекты"),
-    ("участком", "объектом"),
-    ("участку", "объекту"),
-    ("участке", "объекте"),
-    ("участка", "объекта"),
-    ("Участка", "Объекта"),
-    ("Участок", "Объект"),
-    ("участок", "объект"),
-    ("Land Development", "Development"),
-    ("Legal Land", "Legal"),
-)
-
-
-def _land_words(text: str) -> bool:
-    return bool(_LAND_WORD.search(text or ""))
-
-
-def _rewrite_land_text(text: str) -> str:
-    for old, new in _LAND_SWAPS:
-        text = text.replace(old, new)
-    return text
-
-
-def _is_model(value) -> bool:
-    return isinstance(getattr(type(value), "model_fields", None), dict)
-
-
-def _clean_land_model(model) -> bool:
-    changed = False
-    for name in type(model).model_fields:
-        value = getattr(model, name)
-        if name == "plot_id" and value is not None:
-            setattr(model, name, None)
-            changed = True
-            continue
-        if name == "plot_title" and isinstance(value, str) and _land_words(value):
-            setattr(model, name, "")
-            changed = True
-            continue
-        if isinstance(value, str) and name not in _LAND_SKIP:
-            cleaned = _rewrite_land_text(value)
-            if cleaned != value:
-                setattr(model, name, cleaned)
-                changed = True
-            continue
-        if isinstance(value, list):
-            for item in value:
-                if _is_model(item) and _clean_land_model(item):
-                    changed = True
-            continue
-        if _is_model(value) and _clean_land_model(value):
-            changed = True
-    return changed
+_DEMO_LAND_MESSAGES = frozenset({"m1", "m2"})
+_DEMO_LAND_LEADS = frozenset({"lead-101"})
+_DEMO_LAND_ACTIVITIES = frozenset({"act-1", "act-2"})
+_DEMO_LAND_INVOICES = frozenset({"inv-1"})
 
 
 class MemoryStore:
@@ -425,6 +349,7 @@ class MemoryStore:
         object.__setattr__(self, "_schema_ok", True)
         boot = self._sql.bootstrap_lock()
         try:
+            seed_empty = self._sql.count() == 0
             self._load()
             if demo_mode():
                 self._ensure_seed_users()
@@ -432,8 +357,8 @@ class MemoryStore:
                 self._ensure_materials()
                 self._ensure_site()
                 self._ensure_crm()
-                if current_env() == "demo":
-                    self._strip_demo_land()
+                if seed_empty and current_env() == "demo":
+                    self._drop_fixed_land_seed()
         finally:
             self._sql.bootstrap_unlock(boot)
         self._stamp_revs(self._sql.revisions())
@@ -720,50 +645,83 @@ class MemoryStore:
         self.messages = {m.id: deepcopy(m) for m in MESSAGES}
         self._save_unlocked()
 
-    def _strip_demo_land(self) -> None:
-        """Drop land rows from the demo store and clear plot ids on what remains."""
-        land_orders = {
-            item_id
-            for item_id, item in self.orders.items()
-            if item_id in _DEMO_LAND_ORDERS or _land_words(item.message)
-        }
-        land_deals = {
-            item_id
-            for item_id, item in self.deals.items()
-            if item.funnel == "land_sale" or item_id in _DEMO_LAND_DEALS or _land_words(item.title)
-        }
-        for item_id in land_orders:
-            del self.orders[item_id]
-        for item_id in land_deals:
-            del self.deals[item_id]
-        land_threads = {
-            item_id
-            for item_id, item in self.threads.items()
-            if item.order_id in land_orders or item_id in _DEMO_LAND_THREADS
-        }
-        for item_id in land_threads:
-            del self.threads[item_id]
-        for item_id, item in list(self.messages.items()):
-            if item.thread_id in land_threads:
-                del self.messages[item_id]
-        for item_id, item in list(self.leads.items()):
-            if item.funnel_target == "land_sale" or _land_words(item.title):
-                del self.leads[item_id]
-        for name in ("crm_activities", "crm_invoices"):
+    def _drop_fixed_land_seed(self) -> None:
+        """Omit fixed land seed ids. Only for the first fill of an empty demo database."""
+        for name, ids in (
+            ("orders", _DEMO_LAND_ORDERS),
+            ("deals", _DEMO_LAND_DEALS),
+            ("threads", _DEMO_LAND_THREADS),
+            ("messages", _DEMO_LAND_MESSAGES),
+            ("leads", _DEMO_LAND_LEADS),
+            ("crm_activities", _DEMO_LAND_ACTIVITIES),
+            ("crm_invoices", _DEMO_LAND_INVOICES),
+        ):
             bag = getattr(self, name)
-            for item_id, item in list(bag.items()):
-                if getattr(item, "deal_id", None) in land_deals:
+            for item_id in ids:
+                if item_id in bag:
                     del bag[item_id]
-        for item_id in list(self.plots):
-            del self.plots[item_id]
-        for name in DICT_ATTRS:
-            bag = getattr(self, name)
-            for item_id, item in list(bag.items()):
-                if not _is_model(item):
-                    continue
-                if _clean_land_model(item):
-                    bag[item_id] = item
+        for item in list(self.orders.values()):
+            if item.plot_id is not None:
+                item.plot_id = None
+                self.orders[item.id] = item
+        for item in list(self.deals.values()):
+            if item.plot_id is None and not item.plot_title:
+                continue
+            item.plot_id = None
+            item.plot_title = ""
+            self.deals[item.id] = item
+        for item in list(self.threads.values()):
+            if item.plot_id is not None:
+                item.plot_id = None
+                self.threads[item.id] = item
+        self._rewrite_fixed_seed_copy()
         self._save_unlocked()
+
+    def _rewrite_fixed_seed_copy(self) -> None:
+        """Replace land wording on known seed ids. Does not scan other rows."""
+        law = self.specialists.get("sp-law")
+        if law is not None:
+            law.company_ru = "Dana Legal"
+            law.company_kk = "Dana Legal"
+            law.bio_ru = "Проверка договора подряда и сметы. Отчёт за 3 дня."
+            law.bio_kk = "Мердігерлік шартты тексеру."
+            if law.prices:
+                law.prices[0].unit = "объект"
+            self.specialists[law.id] = law
+        contact = self.crm_contacts.get("cnt-1")
+        if contact is not None:
+            contact.notes = "Планирует строительство 2-этажного дома 280 м²."
+            self.crm_contacts[contact.id] = contact
+        contact = self.crm_contacts.get("cnt-2")
+        if contact is not None:
+            contact.company_name = "ТОО 'Smagulov Development'"
+            contact.notes = "Заказчик домов в Медеуском и Талгарском районах."
+            self.crm_contacts[contact.id] = contact
+        contact = self.crm_contacts.get("cnt-6")
+        if contact is not None:
+            contact.notes = "Юристы по договорам подряда, АПЗ и ГАСК."
+            self.crm_contacts[contact.id] = contact
+        lead = self.leads.get("lead-104")
+        if lead is not None:
+            lead.plot_id = None
+            lead.notes = "Нужно согласование эскиза в Бостандыкском районе."
+            self.leads[lead.id] = lead
+        task = self.schedule.get("st-1")
+        if task is not None and task.title == "Земляные":
+            task.title = "Котлован"
+            self.schedule[task.id] = task
+        line = self.budget_lines.get("bl-1")
+        if line is not None and line.title == "Земляные":
+            line.title = "Котлован"
+            self.budget_lines[line.id] = line
+        sheet = self.timesheets.get("ts-1")
+        if sheet is not None and sheet.crew == "землек. / 6 чел":
+            sheet.crew = "бригада / 6 чел"
+            self.timesheets[sheet.id] = sheet
+        inquiry = self.rfis.get("rfi-2")
+        if inquiry is not None:
+            inquiry.question = "Подтвердите расстояние до газопровода по проекту."
+            self.rfis[inquiry.id] = inquiry
 
     def _load(self) -> None:
         if self._sql.count() > 0:
