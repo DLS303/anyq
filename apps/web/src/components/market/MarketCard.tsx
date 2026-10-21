@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { displayPriceTiyn, formatTiyn, medianText, type MarketCardItem } from "@/lib/market";
+import { displayPriceTiyn, formatTiyn, marketText, type MarketCardItem } from "@/lib/market";
 
 export function MarketCard({
   locale,
@@ -34,7 +34,19 @@ export function MarketCard({
         <span>{item.vat_label}</span>
       </p>
       {item.stale_label ? <p className="mt-1 text-sm font-medium text-amber-800">{item.stale_label}</p> : null}
-      <p className="mt-1 text-sm text-slate-500">{medianText(item.median_label, item.median_tiyn)}</p>
+      {item.median_label === "медиана" && item.median_tiyn != null ? (
+        <div className="mt-2">
+          <p className="text-base text-ink">{item.market_label || `Рыночная цена в ${item.city}`}</p>
+          <p className="text-lg font-semibold text-pine">{formatTiyn(item.median_tiyn)}</p>
+          {item.overpay_label ? (
+            <p className={`text-sm font-medium ${(item.overpay_pct ?? 0) > 0 ? "text-amber-800" : "text-slate-600"}`}>
+              {item.overpay_label}
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mt-2 text-sm text-slate-500">{marketText(item)}</p>
+      )}
       <Link href={`/${locale}/market/supplier/${item.supplier_id}`} className="mt-3 block text-sm font-medium text-ink">
         {item.supplier_name}
       </Link>

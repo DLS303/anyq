@@ -83,9 +83,21 @@ export function MarketCompare({ locale, requestId }: { locale: Locale; requestId
                 {formatTiyn(offer.comparable_tiyn)}
               </p>
               <p className="mt-1 text-sm text-slate-600">{offer.vat_label}</p>
+              {offer.market_label && offer.median_tiyn != null ? (
+                <div className="mt-2">
+                  <p className="text-base text-ink">{offer.market_label}</p>
+                  <p className="text-lg font-semibold text-pine">{formatTiyn(offer.median_tiyn)}</p>
+                  {offer.overpay_label ? (
+                    <p className={`text-sm font-medium ${(offer.overpay_pct ?? 0) > 0 ? "text-amber-800" : "text-slate-600"}`}>
+                      {offer.overpay_label}
+                    </p>
+                  ) : null}
+                </div>
+              ) : offer.manual_review ? (
+                <p className="mt-2 text-sm text-slate-600">мало данных</p>
+              ) : null}
               {offer.best ? <p className="mt-2 text-sm font-semibold text-emerald-700">лучшая цена</p> : null}
               {offer.suspicious ? <p className="mt-1 text-sm font-medium text-amber-800">подозрительная цена</p> : null}
-              {offer.manual_review ? <p className="mt-1 text-sm text-slate-600">мало данных</p> : null}
               {offer.stale_label ? <p className="mt-1 text-sm text-amber-800">{offer.stale_label}</p> : null}
               {offer.analog_label ? <p className="mt-1 text-sm text-slate-700">{offer.analog_label}</p> : null}
               {offer.esf_label ? <p className="mt-1 text-sm text-slate-500">{offer.esf_label}</p> : null}
@@ -96,7 +108,10 @@ export function MarketCompare({ locale, requestId }: { locale: Locale; requestId
                     {line.analog_label ? ` · ${line.analog_label}` : ""}
                     {line.stale_label ? ` · ${line.stale_label}` : ""}
                     {line.suspicious ? " · подозрительная цена" : ""}
-                    {line.manual_review ? ` · ${line.median_label}` : ""}
+                    {!offer.market_label && line.market_label && line.median_tiyn != null
+                      ? ` · ${line.market_label} · ${formatTiyn(line.median_tiyn)}${line.overpay_label ? ` · ${line.overpay_label}` : ""}`
+                      : ""}
+                    {!offer.market_label && !line.market_label && line.manual_review ? ` · ${line.median_label}` : ""}
                   </li>
                 ))}
               </ul>
