@@ -966,6 +966,8 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
+# One alembic head. 20261021_0002_marketplace will revise the registration
+# revision (itself on 20261019_0002_pf0) when that id is published.
 SCHEMA_HEAD = "20261021_0003_price_index"
 MIGRATION_LOCK = 21419007
 
