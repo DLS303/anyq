@@ -1,0 +1,26 @@
+name: Backup round-trip
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  round-trip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install age, rclone, and PostgreSQL
+        run: |
+          bash scripts/ci/install_backup_tools.sh
+          sudo apt-get install -y postgresql postgresql-client
+      - name: Round-trip
+        run: bash scripts/ci/backup_roundtrip.sh

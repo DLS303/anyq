@@ -35,6 +35,12 @@ data/public/
 *.dump
 backups/
 
+# age private keys and encrypted dumps stay out of git
+age-identity.txt
+*.agekey
+*.dump.age
+*.tar.gz.age
+
 # Logs
 npm-debug.log*
 yarn-debug.log*

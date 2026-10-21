@@ -61,8 +61,8 @@ snapshot_if_healthy() {
 }
 
 wait_healthy() {
-  local attempt status container
-  for attempt in $(seq 1 48); do
+  local status container
+  for _ in $(seq 1 48); do
     local ready=1
     for container in anyq-api anyq-web anyq-caddy; do
       status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container" 2>/dev/null || echo missing)"

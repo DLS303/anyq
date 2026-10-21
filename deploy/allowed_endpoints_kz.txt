@@ -1,0 +1,4 @@
+# Hosts allowed for object storage, rclone, and pgBackRest.
+# One host per line. Add a host only when that storage is in Kazakhstan.
+# Empty values and <set-on-server> are not hosts.
+# No host is listed here: this repository does not contain an endpoint.

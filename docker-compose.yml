@@ -1,5 +1,5 @@
-# Прод-контур из ТЗ. На этой машине Docker пока не установлен —
-# API фазы 1 работает на in-memory store. Когда Docker появится:
+# Только локальная разработка. Боевой стек — deploy/docker-compose.prod.yml.
+# PostgreSQL и Redis доступны в сети compose. Порты 5432 и 6379 на хост не публикуются.
 #   docker compose up -d postgis redis
 services:
   postgis:
@@ -7,10 +7,10 @@ services:
     container_name: superapp-postgis
     environment:
       POSTGRES_USER: superapp
-      POSTGRES_PASSWORD: superapp
+      POSTGRES_PASSWORD: ${LOCAL_POSTGRES_PASSWORD:?set LOCAL_POSTGRES_PASSWORD}
       POSTGRES_DB: superapp
-    ports:
-      - "5432:5432"
+    expose:
+      - "5432"
     volumes:
       - postgis_data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
@@ -23,8 +23,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: superapp-redis
-    ports:
-      - "6379:6379"
+    expose:
+      - "6379"
 
 volumes:
   postgis_data:

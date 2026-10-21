@@ -1,0 +1,3 @@
+# ICU locale for a new PostgreSQL 16 cluster. CI reads the last token.
+# Recorded from the 19.10 agreement of the SQL developer and IT\MLOPS.
+ru-KZ

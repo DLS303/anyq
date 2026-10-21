@@ -4,6 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   api:
@@ -24,6 +32,14 @@ jobs:
           pip install -r requirements.txt "ruff==0.17.1"
       - name: Ruff
         run: ruff check .
+      - name: One migration head
+        run: |
+          count="$(alembic heads | grep -c '(head)' || true)"
+          if [ "$count" -ne 1 ]; then
+            echo "expected one alembic head" >&2
+            alembic heads >&2
+            exit 1
+          fi
       - name: Migrate SQLite
         run: |
           rm -f /tmp/anyq-ci.sqlite
@@ -40,6 +56,10 @@ jobs:
           LOGIN_HASH_SECRET: test-only-login-hash-secret-value-32ch
           ANYQ_DEMO_PASSWORD: ""
           CORS_ORIGINS: http://localhost:3000
+      - name: Audit Python dependencies
+        run: |
+          python -m pip install pip-audit
+          pip-audit -r requirements.txt
 
   web:
     runs-on: ubuntu-latest
@@ -64,40 +84,53 @@ jobs:
       - name: Build
         working-directory: apps/web
         run: npm run build
+      - name: Audit npm dependencies
+        run: bash scripts/ci/npm_audit.sh
 
   secrets:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install gitleaks
         run: |
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
       - name: Scan the current tree
-        # The gitleaks binary is MIT-licensed. Full-history cleanup is a separate
-        # decision and is not done from a pull request.
-        run: gitleaks detect --source . --no-git --redact --verbose
+        run: gitleaks detect --source . --no-git --redact --verbose --config .gitleaks.toml
+      - name: Scan the pull request commits
+        if: github.event_name == 'pull_request'
+        run: |
+          gitleaks detect --source . --redact --verbose --config .gitleaks.toml \
+            --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+      - name: Scan pushed commits
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: |
+          gitleaks detect --source . --redact --verbose --config .gitleaks.toml \
+            --log-opts="${{ github.event.before }}..${{ github.sha }}"
+
+  gitleaks-full-history:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+      - name: Scan full history
+        run: gitleaks detect --source . --redact --verbose --config .gitleaks.toml
 
   api-postgres:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/api
-    services:
-      postgres:
-        image: postgis/postgis:16-3.4
-        env:
-          POSTGRES_USER: anyq
-          POSTGRES_PASSWORD: anyq
-          POSTGRES_DB: anyq
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U anyq -d anyq"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -109,18 +142,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt "ruff==0.17.1" pytest-xdist
+      - name: Start PostgreSQL
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/ci/start_postgres.sh
       - name: Migrate
-        env:
-          DATABASE_URL: postgresql+psycopg://anyq:anyq@127.0.0.1:5432/anyq
         run: |
+          test -n "$DATABASE_URL"
+          count="$(alembic heads | grep -c '(head)' || true)"
+          if [ "$count" -ne 1 ]; then
+            echo "expected one alembic head" >&2
+            alembic heads >&2
+            exit 1
+          fi
           alembic upgrade head
-          alembic check
           alembic downgrade -1
           alembic upgrade head
           alembic check
       - name: Pytest
         env:
-          DATABASE_URL: postgresql+psycopg://anyq:anyq@127.0.0.1:5432/anyq
           ANYQ_TEST_POSTGRES: "1"
           ANYQ_ENV: development
           JWT_SECRET: test-only-secret-value-with-32-characters
@@ -129,9 +168,58 @@ jobs:
           CORS_ORIGINS: http://localhost:3000
         run: python -m pytest -q -n 2
 
-  docker:
+  docker-api:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build API image
         run: docker build -t anyq-api:ci apps/api
+      - name: Install trivy
+        run: bash scripts/ci/install_trivy.sh
+      - name: Report HIGH and CRITICAL
+        run: trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --no-progress anyq-api:ci
+      - name: Fail on CRITICAL
+        run: trivy image --scanners vuln --severity CRITICAL --exit-code 1 --no-progress anyq-api:ci
+
+  docker-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build web image
+        run: docker build -f apps/web/Dockerfile -t anyq-web:ci .
+      - name: Install trivy
+        run: bash scripts/ci/install_trivy.sh
+      - name: Report HIGH and CRITICAL
+        run: trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --no-progress anyq-web:ci
+      - name: Fail on CRITICAL
+        run: trivy image --scanners vuln --severity CRITICAL --exit-code 1 --no-progress anyq-web:ci
+
+  repo-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install shellcheck and actionlint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          bash scripts/ci/install_actionlint.sh
+      - name: shellcheck
+        run: shellcheck deploy/*.sh scripts/ci/*.sh
+      - name: actionlint
+        run: actionlint
+      - name: Forbidden files
+        run: |
+          bash scripts/ci/check_forbidden_files.sh --self-test
+          bash scripts/ci/check_forbidden_files.sh
+      - name: Kazakhstan endpoints
+        run: |
+          bash scripts/ci/check_kz_endpoints.sh --self-test
+          bash scripts/ci/check_kz_endpoints.sh
+      - name: Migration contract
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/ci/check_pr_migrations.sh
+      - name: Production compose config
+        run: bash scripts/ci/compose_config.sh

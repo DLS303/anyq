@@ -1,0 +1,22 @@
+# CI only. Synthetic data. The database port is not published on the host.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: anyq
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: anyq
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - uploads:/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anyq -d anyq"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  pgdata:
+  uploads:
+    name: ${BACKUP_VOLUME_NAME:?}

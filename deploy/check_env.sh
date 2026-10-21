@@ -4,7 +4,8 @@
 
 load_env() {
   local file="$1"
-  local line key val
+  local line key val subst
+  subst='$'
   if [ ! -f "$file" ]; then
     echo "anyq: missing environment file: $file" >&2
     echo "anyq: copy deploy/.env.production.example to deploy/.env" >&2
@@ -14,12 +15,14 @@ load_env() {
     case "$line" in
       ''|\#*) continue ;;
     esac
-    case "$line" in
-      *\`*|*'$(*)')
-        echo "anyq: refusing command substitution in $file" >&2
-        return 1
-        ;;
-    esac
+    if printf '%s\n' "$line" | grep -F -q '`'; then
+      echo "anyq: refusing command substitution in $file" >&2
+      return 1
+    fi
+    if printf '%s\n' "$line" | grep -F -q "${subst}("; then
+      echo "anyq: refusing command substitution in $file" >&2
+      return 1
+    fi
     key="${line%%=*}"
     val="${line#*=}"
     case "$key" in
