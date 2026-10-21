@@ -123,10 +123,13 @@ git checkout <ветка>
 начинают только если предыдущий закончился без ошибки.
 
 Сначала поднимают пустой PostgreSQL и убеждаются, что он принимает
-соединения. API не запускают. `--clean` удаляет объекты базы перед
-загрузкой. Координатор записывает, что базу заменяют этим файлом.
-Пока `pg_restore --list` не прошёл, `--clean` не запускают.
-На запуске дамп грузит роль `anyq`.
+соединения. Живую или пустую базу `anyq` не перезаписывают.
+Флаг `--clean` не ставят. Дамп грузят в новую пустую базу
+`anyq_restore`. API не запускают до смены имён. На запуске дамп
+грузит роль `anyq`. Координатор записывает, что после проверки
+имена баз меняют. Пока `pg_restore --list` не прошёл, загрузку
+не начинают. Если `alembic_version` или числа строк не сошлись,
+имена не меняют.
 
 Получить файл:
 
@@ -169,11 +172,28 @@ docker compose --env-file deploy/.env \
 test -s "<закрытый-каталог-инцидентов>/<номер>/dump-toc.txt"
 ```
 
-Загрузить:
+Пустую базу создают из сессии в базе `postgres`, не из `anyq`.
+На запуске сессию открывает роль `anyq`. После задачи DevOps
+та же команда с `--username postgres`. Если имя `anyq_restore`
+осталось от незавершённой попытки, перед созданием удаляют только
+его. Базу `anyq` этой командой не удаляют.
 
 ```bash
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.prod.yml stop api
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname postgres -v ON_ERROR_STOP=1 <<'SQL'
+DROP DATABASE IF EXISTS anyq_restore;
+CREATE DATABASE anyq_restore OWNER anyq
+  TEMPLATE template0
+  ENCODING 'UTF8'
+  LOCALE_PROVIDER icu
+  ICU_LOCALE 'ru-KZ';
+SQL
+```
+
+Загрузить в `anyq_restore`. Флагов `--clean` и `--if-exists` нет.
+
+```bash
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml cp \
   /var/backups/anyq/anyq-postgres-<штамп>.dump \
@@ -183,32 +203,34 @@ docker compose --env-file deploy/.env \
   sh -c 'chown postgres:postgres /tmp/anyq-restore.dump && chmod 600 /tmp/anyq-restore.dump'
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T --user postgres postgres \
-  pg_restore --username anyq --dbname anyq \
-  --no-owner --no-privileges --exit-on-error --clean --if-exists \
+  pg_restore --username anyq --dbname anyq_restore \
+  --no-owner --no-privileges --exit-on-error --single-transaction \
   /tmp/anyq-restore.dump
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T --user root postgres \
   rm -f /tmp/anyq-restore.dump
 ```
 
-Дамп не восстанавливает владельцев и права. После загрузки роль
-`postgres` заново выдаёт права в базе `anyq`, тем же блоком, что
-в [`docs/runbooks/db-down.md`](db-down.md), раздел «Логический дамп»:
-`\connect anyq`, GRANT, ALTER DEFAULT PRIVILEGES и отдельный
-REVOKE для `consent_events`. REVOKE для `audit_log` — отдельная
-команда и только после миграции журнала аудита.
+Дамп не восстанавливает владельцев и права. После загрузки права
+выдают в базе `anyq_restore` тем же блоком, что в
+[`docs/runbooks/db-down.md`](db-down.md), раздел «Логический дамп»,
+с `\connect anyq_restore` вместо `\connect anyq`. GRANT,
+ALTER DEFAULT PRIVILEGES и отдельный REVOKE для `consent_events`.
+REVOKE для `audit_log` — отдельная команда и только после миграции
+журнала аудита.
 
-Проверка загрузки. Строки людей не печатают. Ожидание: `version_num`
-равен `<ревизия>` из карточки, числа строк сходятся со `<счётчики>`.
+Проверка загрузки идёт в `anyq_restore`, до смены имён.
+Строки людей не печатают. Ожидание: `version_num` равен `<ревизия>`
+из карточки, числа строк сходятся со `<счётчики>`.
 
 ```bash
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T postgres \
-  psql --username anyq --dbname anyq -c \
+  psql --username anyq --dbname anyq_restore -c \
   'SELECT version_num FROM alembic_version;'
 docker compose --env-file deploy/.env \
   -f deploy/docker-compose.prod.yml exec -T postgres \
-  psql --username anyq --dbname anyq -c \
+  psql --username anyq --dbname anyq_restore -c \
   "SELECT collection, count(*) AS rows
    FROM records GROUP BY collection ORDER BY collection;"
 ```
@@ -218,6 +240,40 @@ docker compose --env-file deploy/.env \
 
 ```bash
 rm -f /var/backups/anyq/anyq-postgres-<штамп>.dump
+```
+
+Смена имён — только если оба запроса сошлись. Сессия открыта
+в базе `postgres`: базу, к которой подключены, переименовать нельзя.
+Сначала останавливают API, чтобы он не держал соединение с `anyq`.
+Имени `anyq_old` ещё не должно быть. Этот запуск API не вызывает
+сервис `migrate`.
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml stop api
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname postgres -v ON_ERROR_STOP=1 \
+  -c 'ALTER DATABASE anyq RENAME TO anyq_old;'
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname postgres -v ON_ERROR_STOP=1 \
+  -c 'ALTER DATABASE anyq_restore RENAME TO anyq;'
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml up -d --no-deps api
+```
+
+После задачи DevOps те же команды `psql` запускают с
+`--username postgres`.
+
+`anyq_old` удаляют отдельной командой и только после проверок
+из раздела «Проверка». До них эту базу не удаляют.
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql --username anyq --dbname postgres -v ON_ERROR_STOP=1 \
+  -c 'DROP DATABASE anyq_old;'
 ```
 
 Сжатый SQL `anyq-postgres-<штамп>.sql.gz` — другой файл. Его грузят
@@ -427,6 +483,8 @@ curl -fsS -o /dev/null -w '%{http_code}\n' "https://<домен>/ru"
 Ожидание: в ответе DNS адрес нового сервера, в `/health` и
 `/healthz` есть `"ok":true`, у страницы код `200`, сертификат
 выдан на это имя. Флаг `-k` для боевого домена не используют.
+Если грузили зашифрованный дамп, базу `anyq_old` удаляют только
+после этих проверок, командой из раздела «Зашифрованный дамп».
 На запуске `pgbackrest backup` не запускают. Когда инструмент
 уже стоит в контуре, выше снимают две полные копии:
 `pgbackrest --stanza=anyq backup --type=full` в первый репозиторий
