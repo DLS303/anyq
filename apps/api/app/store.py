@@ -2240,8 +2240,6 @@ class MemoryStore:
         for attempt in (1, 2):
             session = self._sql.factory()
             try:
-                uid = f"u-{uuid4().hex[:8]}"
-                key, review = claim_company_key(session, uid, bin_no)
                 needed = {"owner_gate", "rev", "users", "credentials", "consents"}
                 if body.role == "supplier":
                     needed.add("materials")
@@ -2268,6 +2266,8 @@ class MemoryStore:
                 )
                 if taken:
                     raise ValueError("Такой email уже зарегистрирован")
+                uid = f"u-{uuid4().hex[:8]}"
+                key, review = claim_company_key(session, uid, bin_no)
                 user = User(
                     id=uid,
                     email=email,

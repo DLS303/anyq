@@ -57,10 +57,31 @@ def _auth(token: str) -> dict[str, str]:
 def _promote(email: str, role: str = "owner") -> User:
     user = store.get_user_by_email(email)
     assert user is not None
+    if role == "owner":
+        moved = False
+        for existing in list(store.users_by_id.values()):
+            if existing.id == user.id or existing.role != "owner":
+                continue
+            demoted = existing.model_copy(update={"role": "buyer"})
+            store.users_by_id[existing.id] = demoted
+            if existing.email:
+                store.users[existing.email.lower()] = demoted
+            moved = True
+        if moved:
+            store._save()
     updated = user.model_copy(update={"role": role})
     store.users_by_id[user.id] = updated
     store.users[email.lower()] = updated
+    store._save()
     return updated
+
+
+@pytest.fixture(autouse=True)
+def _restore_demo_owner():
+    yield
+    demo = store.get_user("u-owner")
+    if demo is not None and demo.role != "owner":
+        _promote(demo.email, "owner")
 
 
 def _owner_token(email: str, bin_no: str) -> str:
@@ -445,6 +466,7 @@ def test_query_pid_cannot_open_a_disabled_feature(monkeypatch):
         headers=_auth(owner),
     )
     assert progress.status_code == 404, progress.text
+    _promote("owner@demo.superapp", "owner")
     enabled = client.post(
         "/v1/org/features",
         json={"key": "gantt", "enabled": True, "row_version": 0},
@@ -657,12 +679,13 @@ def test_audit_partition_statements_cover_truncate_and_revoke():
 def test_failed_register_does_not_keep_the_bin(monkeypatch):
     from sqlalchemy import text
 
+    import app.store as store_mod
     from app.schemas import RegisterBody
 
-    def boom(self, _store, session=None):
+    def boom(*_args, **_kwargs):
         raise RuntimeError("disk")
 
-    monkeypatch.setattr(store._sql, "_flush_once", boom)
+    monkeypatch.setattr(store_mod, "bump_revisions", boom)
     bin_no = f"{uuid4().int % 10**12:012d}"
     with pytest.raises(RuntimeError):
         store.register(
