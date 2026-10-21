@@ -899,7 +899,10 @@ export function grantCrossBorderConsent(provider: string, country: string) {
 }
 
 export function fetchBootstrap(signal?: AbortSignal) {
-  return request<{ needs_owner: boolean; demo_mode: boolean }>("/v1/auth/bootstrap", { auth: false, signal });
+  return request<{ needs_owner: boolean; demo_mode: boolean; registration_enabled: boolean }>("/v1/auth/bootstrap", {
+    auth: false,
+    signal,
+  });
 }
 
 export function revokeConsent(id: string) {
@@ -1007,8 +1010,26 @@ export function quickProcRequest(
   });
 }
 
+export function repeatPreviousProc(projectId: string, idempotencyKey?: string) {
+  return request<{ request: { id: string; title: string; status: string }; lines: ProcRepeatLine[]; source_id: string }>(
+    `/v1/procurement/projects/${projectId}/repeat-previous`,
+    { method: "POST", headers: withKey(idempotencyKey) },
+  );
+}
+
+export function publishProcRequest(requestId: string, idempotencyKey?: string) {
+  return request<{ id: string; status: string }>(`/v1/procurement/requests/${requestId}/publish`, {
+    method: "POST",
+    headers: withKey(idempotencyKey),
+  });
+}
+
+export function confirmProcOffer(offerId: string) {
+  return request(`/v1/procurement/offers/${offerId}/confirm`, { method: "POST" });
+}
+
 export function repeatProcRequest(requestId: string, idempotencyKey?: string) {
-  return request<{ request: { id: string; title: string }; lines: ProcRepeatLine[] }>(
+  return request<{ request: { id: string; title: string; status: string }; lines: ProcRepeatLine[] }>(
     `/v1/procurement/requests/${requestId}/repeat`,
     { method: "POST", headers: withKey(idempotencyKey) },
   );

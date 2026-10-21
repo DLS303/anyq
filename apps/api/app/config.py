@@ -8,6 +8,14 @@ def demo_mode() -> bool:
     return os.getenv("ANYQ_DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def registration_enabled() -> bool:
+    """Public sign-up. On unless REGISTRATION_ENABLED is explicitly off."""
+    raw = os.getenv("REGISTRATION_ENABLED")
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def resolve_cors_origins() -> list[str]:
     env = os.getenv("ANYQ_ENV", "development").strip().lower()
     raw = os.getenv("CORS_ORIGINS", "")
@@ -30,6 +38,10 @@ class Settings(BaseModel):
     vat_rate: float = float(os.getenv("ANYQ_VAT_RATE", "0.16"))
     # An offer this far above the website reference is flagged. It is not a saving.
     overprice_threshold: float = float(os.getenv("ANYQ_OVERPRICE_THRESHOLD", "0.15"))
+    # A price more than this far under the VAT-inclusive median is suspicious.
+    price_suspicious_below: float = float(os.getenv("ANYQ_PRICE_SUSPICIOUS_BELOW", "0.5"))
+    # Other offers for the same item are taken from this many days.
+    price_compare_days: int = int(os.getenv("ANYQ_PRICE_COMPARE_DAYS", "30"))
 
 
 settings = Settings()

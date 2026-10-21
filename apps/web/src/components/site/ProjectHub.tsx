@@ -229,7 +229,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   }
 
   return (
-    <div className={pilot ? "min-w-0 max-w-full pb-24 sm:pb-0" : "min-w-0 max-w-full"}>
+    <div className={pilot ? "min-w-0 max-w-full pb-[calc(env(safe-area-inset-bottom)+8rem)] sm:pb-0" : "min-w-0 max-w-full"}>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div className="min-w-0">
           <h1 className="text-2xl sm:text-4xl font-medium tracking-tight">{p.title}</h1>
@@ -663,7 +663,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
       ) : null}
 
       {tab === "money" ? (
-        <div className="grid gap-4">
+        <div className="grid gap-4 pb-8" data-money-pad>
           <ObjectBudgetCard locale={locale} projectId={p.id} />
           {pilot && budget.length === 0 && changes.length === 0 && !showExtra ? (
             <button type="button" className="min-h-12 w-fit text-sm underline" onClick={() => setShowExtra(true)}>
@@ -741,9 +741,9 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
                       });
                     }}
                   >
-                    <input name="title" required placeholder={m.hubExtraTitle} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
-                    <input name="amount" required type="number" placeholder={m.hubAmount} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
-                    <input name="reason" placeholder={m.hubReason} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
+                    <input name="title" required aria-label={m.hubExtraTitle} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
+                    <input name="amount" required type="number" aria-label={m.hubAmount} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
+                    <input name="reason" aria-label={m.hubReason} className="border border-ink/15 px-2 py-2 text-sm min-h-12" />
                     <button className={primaryBtn} disabled={forms.submitting}>
                       {m.hubMoneyAction}
                     </button>

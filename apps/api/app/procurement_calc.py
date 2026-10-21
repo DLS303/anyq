@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from app.money import as_decimal, round_kzt
-from app.procurement_models import ProcDocument, ProcLine, ProcOffer
+from app.procurement_models import ProcDocument, ProcLine, ProcOffer, kzt_to_tiyn
 
 STATUS_TEXT = {
     "no_price": "нет цены",
@@ -58,6 +58,51 @@ def pos_key(pos: str) -> tuple:
     return tuple(key)
 
 
+def gross_tiyn(tiyn: int, vat_included: bool | None, vat_rate: float) -> int:
+    """Quote every price with VAT included. An unknown VAT flag is left as written."""
+    if vat_included is False:
+        gross = (Decimal(tiyn) * (Decimal(1) + Decimal(str(vat_rate)))).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        return int(gross)
+    return tiyn
+
+
+def _median(values: list[int]) -> Decimal:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return Decimal(ordered[mid])
+    return (Decimal(ordered[mid - 1]) + Decimal(ordered[mid])) / 2
+
+
+def price_is_suspicious(
+    gross: int,
+    recent_gross: list[int],
+    last_confirmed_gross: int | None,
+    *,
+    below: float,
+) -> bool:
+    """Suspicious when the VAT-inclusive tiyn price is more than `below` under the benchmark.
+
+    `recent_gross` is the median input: other confirmed, sourced prices in tiyn with
+    VAT included, as of this offer's date. It is not a list of raw tenge amounts.
+    With none of those, the benchmark is the last confirmed price. With neither,
+    the price waits for a person.
+    """
+    if below <= 0 or below >= 1:
+        raise ValueError("Порог подозрительной цены должен быть между 0 и 1")
+    floor = Decimal(1) - Decimal(str(below))
+    if recent_gross:
+        return Decimal(gross) < _median(recent_gross) * floor
+    if last_confirmed_gross is not None and last_confirmed_gross > 0:
+        return Decimal(gross) < Decimal(last_confirmed_gross) * floor
+    return True
+
+
+def in_comparison(offer: ProcOffer) -> bool:
+    """A suspiciously low price stays out of the sheet until a person confirms it."""
+    return not offer.suspicious or offer.suspicion_confirmed
+
+
 def _offer_view(offer: ProcOffer, line: ProcLine, best_id: str | None, selected_id: str | None) -> dict:
     short = offer.qty_available is not None and offer.qty_available < line.qty
     return {
@@ -65,6 +110,7 @@ def _offer_view(offer: ProcOffer, line: ProcLine, best_id: str | None, selected_
         "line_id": offer.line_id,
         "supplier_name": offer.supplier_name,
         "price_kzt": offer.price_kzt,
+        "price_tiyn": offer.price_tiyn,
         "vat_included": offer.vat_included,
         "qty_available": offer.qty_available,
         "source_doc_id": offer.source_doc_id,
@@ -73,8 +119,11 @@ def _offer_view(offer: ProcOffer, line: ProcLine, best_id: str | None, selected_
         "confirmed": offer.confirmed,
         "note": offer.note,
         "delivery_term": offer.delivery_term,
-        "is_best": offer.id == best_id,
+        "is_best": offer.id == best_id and in_comparison(offer),
         "is_selected": offer.id == selected_id,
+        "suspicious": offer.suspicious,
+        "suspicion_confirmed": offer.suspicion_confirmed,
+        "source_kind": offer.source_kind,
         "short": short,
     }
 
@@ -126,7 +175,8 @@ def build_sheet(lines: list[ProcLine], offers: list[ProcOffer]) -> dict:
     out_lines = []
     for line in ordered:
         group = by_line.get(line.id, [])
-        status, comparable, best = _classify(group)
+        compared = [offer for offer in group if in_comparison(offer)]
+        status, comparable, best = _classify(compared)
         best_id = best.id if best else None
         views = [_offer_view(offer, line, best_id, line.selected_offer_id) for offer in group]
         by_supplier: dict[str, list[ProcOffer]] = defaultdict(list)
@@ -134,15 +184,17 @@ def build_sheet(lines: list[ProcLine], offers: list[ProcOffer]) -> dict:
             by_supplier[offer.supplier_name].append(offer)
         cells = {}
         for name in supplier_names:
-            bucket = by_supplier.get(name) or []
-            if not bucket:
+            bucket = [offer for offer in (by_supplier.get(name) or []) if in_comparison(offer)]
+            visible = by_supplier.get(name) or []
+            if not visible:
                 cells[name] = None
                 continue
-            chosen = _display_offer(bucket)
+            chosen = _display_offer(bucket or visible)
             cells[name] = _offer_view(chosen, line, best_id, line.selected_offer_id)
-            totals[name] += chosen.price_kzt * line.qty
-            priced[name] += 1
-            vat_sets[name].add(chosen.vat_included)
+            if bucket:
+                totals[name] += chosen.price_kzt * line.qty
+                priced[name] += 1
+                vat_sets[name].add(chosen.vat_included)
         focus = None
         if line.selected_offer_id:
             focus = next((offer for offer in group if offer.id == line.selected_offer_id), None)

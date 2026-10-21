@@ -28,11 +28,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
       <HomeStage locale={locale} />
       <HomeRise />
 
-      <div className="home-flow relative z-20">
-        <div
-          className="home-veil pointer-events-none ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] w-screen"
-          aria-hidden
-        />
+      <div className="relative z-20">
         <div className="relative">
           <div
             className="pointer-events-none absolute inset-0 -z-10 ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] w-screen bg-[#f8fafc]"

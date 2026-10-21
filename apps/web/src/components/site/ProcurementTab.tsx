@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  confirmProcOffer,
   createProcOffer,
   createProcRequest,
   deleteProcOffer,
@@ -15,7 +16,9 @@ import {
   importProcOffers,
   openProcFile,
   patchProcLine,
+  publishProcRequest,
   quickProcRequest,
+  repeatPreviousProc,
   repeatProcRequest,
   selectProcBest,
   selectProcOffer,
@@ -41,7 +44,7 @@ type Picked = { title: string; unit: string };
 type DraftLine = { id: string; title: string; unit: string; qty: string };
 type Screen =
   | { kind: "ask"; step: 1 | 2 | 3 }
-  | { kind: "edit"; title: string; lines: DraftLine[] }
+  | { kind: "edit"; requestId: string; title: string; status: string; lines: DraftLine[] }
   | { kind: "prices"; requestId: string };
 
 function fill(template: string, values: Record<string, string | number>) {
@@ -240,6 +243,8 @@ export function ProcurementTab({
   };
   const sendForm = useGuardedSubmit(m.procSent, m.hubSaveError, reload);
   const repeatForm = useGuardedSubmit(m.procRepeated, m.hubSaveError, reload);
+  const repeatLastForm = useGuardedSubmit(m.procDraftReady, m.hubSaveError, reload);
+  const publishForm = useGuardedSubmit(m.procSent, m.hubSaveError, reload);
   const saveForm = useGuardedSubmit(m.procSaveQty, m.hubSaveError, reload);
   const offerForm = useGuardedSubmit(m.procSavedOffer, m.hubSaveError, reload);
   const winnerForm = useGuardedSubmit(m.procSelected, m.hubSaveError, () => {
@@ -266,7 +271,13 @@ export function ProcurementTab({
   const recent = pickerQuery.data?.recent || [];
   const catalog = pickerQuery.data?.catalog || [];
   const named = query.trim();
-  const known = [...recent, ...catalog].some((item) => item.title.toLocaleLowerCase() === named.toLocaleLowerCase());
+  const namedKey = named.toLocaleLowerCase();
+  const known = [...recent, ...catalog].some((item) => item.title.toLocaleLowerCase() === namedKey);
+  const catalogMatch = catalog.find((item) => {
+    const title = item.title.toLocaleLowerCase();
+    return Boolean(item.unit.trim()) && namedKey && (title === namedKey || title.startsWith(namedKey));
+  });
+  const previous = listQuery.data.previous_completed;
   const objects = [
     { id: projectId, title: projectTitle || projectId },
     ...(projectsQuery.data || []).filter((item) => item.id !== projectId),
@@ -274,7 +285,7 @@ export function ProcurementTab({
   const requests = [...listQuery.data.requests].reverse();
 
   function chooseMaterial(item: { title: string; unit: string; qty?: number }) {
-    setPicked({ title: item.title, unit: item.unit || "шт" });
+    setPicked({ title: item.title, unit: (item.unit || "").trim() });
     setQty(item.qty != null ? String(item.qty) : "");
     setScreen({ kind: "ask", step: 2 });
   }
@@ -331,17 +342,56 @@ export function ProcurementTab({
           </p>
           {screen.step === 1 ? (
             <div className="grid gap-3">
+              {previous ? (
+                <button
+                  type="button"
+                  className={primary}
+                  data-repeat-last
+                  disabled={repeatLastForm.submitting}
+                  onClick={() =>
+                    void repeatLastForm.submit(async (key) => {
+                      const result = await repeatPreviousProc(projectId, key);
+                      setScreen({
+                        kind: "edit",
+                        requestId: result.request.id,
+                        title: result.request.title,
+                        status: result.request.status,
+                        lines: result.lines.map((line) => ({
+                          id: line.id,
+                          title: line.title,
+                          unit: line.unit,
+                          qty: String(line.qty),
+                        })),
+                      });
+                    })
+                  }
+                >
+                  {m.procRepeatLast}
+                </button>
+              ) : null}
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder={m.procSearch}
                 className={field}
                 aria-label={m.procSearch}
               />
-              {named && !known ? (
-                <button type="button" className={ghost} onClick={() => chooseMaterial({ title: named, unit: "шт" })}>
-                  {fill(m.procUseName, { name: named })}
-                </button>
+              {catalog.length ? (
+                <div className="grid gap-2" data-catalog>
+                  <h2 className="text-sm font-medium">{m.procCatalog}</h2>
+                  {catalog.filter((item) => item.unit.trim()).map((item) => (
+                    <button
+                      key={item.id || item.title}
+                      type="button"
+                      data-catalog-item
+                      data-unit={item.unit}
+                      className={`${ghost} justify-between text-left`}
+                      onClick={() => chooseMaterial({ title: item.title, unit: item.unit })}
+                    >
+                      <span className="min-w-0 break-words">{item.title}</span>
+                      <span className="shrink-0 text-ink/50">{item.unit}</span>
+                    </button>
+                  ))}
+                </div>
               ) : null}
               {recent.length ? (
                 <div className="grid gap-2">
@@ -350,6 +400,7 @@ export function ProcurementTab({
                     <button
                       key={`recent-${item.title}`}
                       type="button"
+                      data-recent-item
                       className={`${ghost} justify-between text-left`}
                       onClick={() => chooseMaterial(item)}
                     >
@@ -362,21 +413,15 @@ export function ProcurementTab({
                   ))}
                 </div>
               ) : null}
-              {catalog.length ? (
-                <div className="grid gap-2">
-                  <h2 className="text-sm font-medium">{m.procCatalog}</h2>
-                  {catalog.map((item) => (
-                    <button
-                      key={item.id || item.title}
-                      type="button"
-                      className={`${ghost} justify-between text-left`}
-                      onClick={() => chooseMaterial(item)}
-                    >
-                      <span className="min-w-0 break-words">{item.title}</span>
-                      <span className="shrink-0 text-ink/50">{item.unit}</span>
-                    </button>
-                  ))}
-                </div>
+              {named && !known && catalogMatch?.unit ? (
+                <button
+                  type="button"
+                  data-use-name
+                  className={ghost}
+                  onClick={() => chooseMaterial({ title: catalogMatch.title, unit: catalogMatch.unit })}
+                >
+                  {fill(m.procUseName, { name: catalogMatch.title })}
+                </button>
               ) : null}
             </div>
           ) : null}
@@ -411,11 +456,17 @@ export function ProcurementTab({
               <button
                 type="button"
                 className={primary}
-                disabled={parseQty(qty) == null || !picked.unit.trim()}
-                onClick={() => setScreen({ kind: "ask", step: 3 })}
+                data-send-request
+                disabled={parseQty(qty) == null || !picked.unit.trim() || sendForm.submitting}
+                onClick={() => sendTo(projectId)}
               >
-                {m.procNext}
+                {m.procSendNow}
               </button>
+              {objects.length > 1 ? (
+                <button type="button" className={ghost} onClick={() => setScreen({ kind: "ask", step: 3 })}>
+                  {m.procOtherObject}
+                </button>
+              ) : null}
             </div>
           ) : null}
           {screen.step === 3 && picked ? (
@@ -491,24 +542,48 @@ export function ProcurementTab({
               />
             </label>
           ))}
-          <button
-            type="button"
-            className={primary}
-            disabled={saveForm.submitting}
-            onClick={() =>
-              void saveForm.submit(async () => {
-                if (screen.kind !== "edit") return;
-                const next = screen.lines.map((line) => {
-                  const amount = parseQty(line.qty);
-                  if (amount == null) throw new Error(m.procErrQty);
-                  return { id: line.id, qty: amount };
-                });
-                await Promise.all(next.map((line) => patchProcLine(line.id, line.qty)));
-              })
-            }
-          >
-            {m.procQtySave}
-          </button>
+          {screen.status === "draft" ? (
+            <button
+              type="button"
+              className={primary}
+              data-publish-draft
+              disabled={publishForm.submitting}
+              onClick={() =>
+                void publishForm.submit(async (key) => {
+                  if (screen.kind !== "edit") return;
+                  const next = screen.lines.map((line) => {
+                    const amount = parseQty(line.qty);
+                    if (amount == null) throw new Error(m.procErrQty);
+                    return { id: line.id, qty: amount };
+                  });
+                  await Promise.all(next.map((line) => patchProcLine(line.id, line.qty)));
+                  await publishProcRequest(screen.requestId, key);
+                  setScreen({ kind: "ask", step: 1 });
+                })
+              }
+            >
+              {m.procSendNow}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={primary}
+              disabled={saveForm.submitting}
+              onClick={() =>
+                void saveForm.submit(async () => {
+                  if (screen.kind !== "edit") return;
+                  const next = screen.lines.map((line) => {
+                    const amount = parseQty(line.qty);
+                    if (amount == null) throw new Error(m.procErrQty);
+                    return { id: line.id, qty: amount };
+                  });
+                  await Promise.all(next.map((line) => patchProcLine(line.id, line.qty)));
+                })
+              }
+            >
+              {m.procQtySave}
+            </button>
+          )}
         </section>
       ) : null}
 
@@ -566,6 +641,12 @@ export function ProcurementTab({
                 onSelect={(lineId, offerId) =>
                   void winnerForm.submit(async (key) => {
                     await selectProcOffer(lineId, offerId, key);
+                  })
+                }
+                onConfirm={(offerId) =>
+                  void run(async () => {
+                    await confirmProcOffer(offerId);
+                    reload();
                   })
                 }
               />
@@ -837,7 +918,9 @@ export function ProcurementTab({
                       const result = await repeatProcRequest(item.id, key);
                       setScreen({
                         kind: "edit",
+                        requestId: result.request.id,
                         title: result.request.title,
+                        status: result.request.status,
                         lines: result.lines.map((line) => ({
                           id: line.id,
                           title: line.title,

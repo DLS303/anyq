@@ -3,7 +3,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
-from app.config import demo_mode
+from app.config import demo_mode, registration_enabled
 from app.deps import require_roles, require_user
 from app.legal import consent_documents
 from app.ratelimit import RateLimited, login_limiter
@@ -15,7 +15,14 @@ router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 @router.get("/bootstrap")
 def bootstrap():
-    return {"ok": True, "data": {"needs_owner": not store.users_by_id, "demo_mode": demo_mode()}}
+    return {
+        "ok": True,
+        "data": {
+            "needs_owner": not store.users_by_id,
+            "demo_mode": demo_mode(),
+            "registration_enabled": registration_enabled(),
+        },
+    }
 
 
 def _client_meta(request: Request) -> tuple[str, str]:
@@ -26,6 +33,8 @@ def _client_meta(request: Request) -> tuple[str, str]:
 
 @router.post("/register")
 def register(body: RegisterBody, request: Request):
+    if not registration_enabled():
+        raise HTTPException(status_code=403, detail="Регистрация отключена")
     ip, ua = _client_meta(request)
     try:
         user, token = store.register(body, ip=ip, user_agent=ua)

@@ -39,6 +39,23 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def test_registration_enabled_defaults_on_and_can_be_turned_off(monkeypatch):
+    open_boot = client.get("/v1/auth/bootstrap")
+    assert open_boot.status_code == 200
+    assert open_boot.json()["data"]["registration_enabled"] is True
+
+    monkeypatch.setenv("REGISTRATION_ENABLED", "false")
+    closed_boot = client.get("/v1/auth/bootstrap")
+    assert closed_boot.json()["data"]["registration_enabled"] is False
+    denied = _register("registration-off@example.com", bin_no="123456789014")
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Регистрация отключена"
+
+    monkeypatch.setenv("REGISTRATION_ENABLED", "true")
+    allowed = _register("registration-on@example.com", bin_no="123456789015")
+    assert allowed.status_code == 200, allowed.text
+
+
 def _jpeg() -> bytes:
     img = Image.new("RGB", (32, 24), (12, 80, 200))
     exif = img.getexif()

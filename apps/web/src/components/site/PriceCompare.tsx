@@ -51,6 +51,9 @@ function OfferFacts({
         {offer.is_best ? ` · ${m.procBest}` : ""}
         {offer.is_selected ? ` · ${m.procSelected}` : ""}
       </span>
+      {offer.suspicious && !offer.suspicion_confirmed ? (
+        <span className="mt-1 block text-xs text-amber-800">{m.procSuspicious}</span>
+      ) : null}
       {warn ? <span className="mt-1 block break-words text-xs text-rose-700">{warn}</span> : null}
       {offer.short && offer.qty_available != null ? (
         <span className="mt-1 block text-xs text-ink/60">
@@ -69,6 +72,7 @@ export function PriceCompare({
   pending,
   warnOf,
   onSelect,
+  onConfirm,
 }: {
   locale: Locale;
   lines: ProcSheetLine[];
@@ -77,12 +81,16 @@ export function PriceCompare({
   pending: boolean;
   warnOf: (offerId: string) => string | undefined;
   onSelect: (lineId: string, offerId: string) => void;
+  onConfirm?: (offerId: string) => void;
 }) {
   const m = t(locale);
   return (
     <>
       <div className="grid min-w-0 gap-3 overflow-x-hidden md:hidden" data-price-cards>
-        {lines.map((line) => (
+        {lines.map((line) => {
+          const priced = suppliers.filter((item) => line.cells[item.name]);
+          const columns = Math.min(3, Math.max(priced.length, 1));
+          return (
           <article key={line.id} className="min-w-0 rounded-2xl border border-ink/10 bg-white/70 p-3">
             <h3 className="break-words font-medium">
               {line.pos_no}. {line.title}
@@ -91,52 +99,72 @@ export function PriceCompare({
               {line.qty} {line.unit}
               {line.status_code ? ` · ${statusText(line.status_code, m)}` : ""}
             </p>
-            <ul className="mt-2 grid gap-2">
-              {suppliers.map((item) => {
-                const offer = line.cells[item.name] || null;
-                const warn = offer ? warnOf(offer.id) : undefined;
-                const marked = offer?.is_best ? "border-emerald-600 bg-emerald-100" : "border-ink/10 bg-white";
-                if (!offer || !canDecide) {
+            <div
+              className="mt-2 grid gap-1.5"
+              data-supplier-grid
+              style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+            >
+              {priced.map((item) => {
+                const offer = line.cells[item.name];
+                if (!offer) return null;
+                const warn = warnOf(offer.id);
+                const held = Boolean(offer.suspicious && !offer.suspicion_confirmed);
+                const marked = offer.is_best ? "border-emerald-600 bg-emerald-100" : "border-ink/10 bg-white";
+                if (held && onConfirm) {
                   return (
-                    <li key={item.name} className={`min-w-0 rounded-xl border px-3 py-2 ${marked}`}>
-                      <p className="break-words text-sm font-medium">{item.name}</p>
-                      {offer ? (
-                        <OfferFacts offer={offer} lineQty={line.qty} locale={locale} warn={warn} />
-                      ) : (
-                        <p className="text-sm text-ink/40">—</p>
-                      )}
-                    </li>
+                    <button
+                      key={item.name}
+                      type="button"
+                      data-suspicious="true"
+                      className={`min-h-12 min-w-0 rounded-xl border px-1.5 py-2 text-left ${marked}`}
+                      onClick={() => onConfirm(offer.id)}
+                    >
+                      <span className="block break-words text-[11px] font-medium leading-tight">{item.name}</span>
+                      <OfferFacts offer={offer} lineQty={line.qty} locale={locale} warn={warn} />
+                      <span className="mt-1 block text-[11px] text-pine">{m.procConfirmPrice}</span>
+                    </button>
+                  );
+                }
+                if (!canDecide) {
+                  return (
+                    <div key={item.name} className={`min-w-0 rounded-xl border px-1.5 py-2 ${marked}`}>
+                      <p className="break-words text-[11px] font-medium leading-tight">{item.name}</p>
+                      <OfferFacts offer={offer} lineQty={line.qty} locale={locale} warn={warn} />
+                    </div>
                   );
                 }
                 return (
-                  <li key={item.name}>
-                    <button
-                      type="button"
-                      disabled={pending}
-                      aria-pressed={offer.is_selected}
-                      data-best={offer.is_best ? "true" : "false"}
-                      className={`grid min-h-12 w-full min-w-0 grid-cols-[1fr_auto] items-center gap-2 rounded-xl border px-3 py-2 text-left ${marked}`}
-                      onClick={() => onSelect(line.id, offer.id)}
-                    >
-                      <span className="min-w-0">
-                        <span className="block break-words text-sm font-medium">{item.name}</span>
-                        <OfferFacts offer={offer} lineQty={line.qty} locale={locale} warn={warn} />
-                      </span>
-                      <span className="text-xs text-pine">{offer.is_selected ? m.procSelected : m.procSelect}</span>
-                    </button>
-                  </li>
+                  <button
+                    key={item.name}
+                    type="button"
+                    disabled={pending}
+                    aria-pressed={offer.is_selected}
+                    data-best={offer.is_best ? "true" : "false"}
+                    data-offer={offer.id}
+                    className={`min-h-12 min-w-0 rounded-xl border px-1.5 py-2 text-left ${marked}`}
+                    onClick={() => onSelect(line.id, offer.id)}
+                  >
+                    <span className="block break-words text-[11px] font-medium leading-tight">{item.name}</span>
+                    <OfferFacts offer={offer} lineQty={line.qty} locale={locale} warn={warn} />
+                    <span className="mt-1 block text-[11px] text-pine">{offer.is_selected ? m.procSelected : m.procSelect}</span>
+                  </button>
                 );
               })}
-            </ul>
+            </div>
           </article>
-        ))}
+          );
+        })}
         <article className="min-w-0 rounded-2xl border border-ink/10 p-3 text-sm">
           <h3 className="font-medium">{m.procTotal}</h3>
-          <ul className="mt-2 grid gap-1">
+          <ul
+            className="mt-2 grid gap-1.5"
+            data-supplier-totals
+            style={{ gridTemplateColumns: `repeat(${Math.min(3, Math.max(suppliers.length, 1))}, minmax(0, 1fr))` }}
+          >
             {suppliers.map((item) => (
-              <li key={item.name} className="flex items-baseline justify-between gap-3">
-                <span className="min-w-0 break-words">{item.name}</span>
-                <span className="shrink-0 font-medium">
+              <li key={item.name} className="min-w-0">
+                <span className="block break-words text-[11px] leading-tight">{item.name}</span>
+                <span className="font-medium">
                   {tenge(item.total_kzt, locale)}
                   {item.vat_mixed ? <span className="mt-1 block text-xs font-normal text-ink/60">{m.procVatMixed}</span> : null}
                 </span>

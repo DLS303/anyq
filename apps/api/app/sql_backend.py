@@ -208,6 +208,32 @@ class ConsentEvent(Base):
     )
 
 
+class InvoiceIdentity(Base):
+    """Live invoice identity. The unique index is the duplicate check inside the write transaction."""
+
+    __tablename__ = "invoice_identities"
+
+    doc_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    company_id: Mapped[str] = mapped_column(String(80), default="")
+    supplier_id: Mapped[str] = mapped_column(String(80), default="")
+    number: Mapped[str] = mapped_column(String(80), default="")
+    doc_date: Mapped[str] = mapped_column(String(40), default="")
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "uq_invoice_identity_live",
+            "company_id",
+            "supplier_id",
+            "number",
+            "doc_date",
+            unique=True,
+            sqlite_where=text("deleted = 0"),
+            postgresql_where=text("deleted = false"),
+        ),
+    )
+
+
 class RecordTombstone(Base):
     """Deleted record ids so another worker can drop them without a full reload."""
 
@@ -827,7 +853,64 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-SCHEMA_HEAD = "20261019_0001b_store_fixes"
+class DuplicateInvoice(Exception):
+    """A live invoice already has this company, supplier, number and date."""
+
+
+def _invoice_key(payload: dict) -> tuple[str, str, str, str] | None:
+    company = str(payload.get("company_id") or "").strip()
+    supplier = str(payload.get("supplier_id") or "").strip()
+    number = " ".join(str(payload.get("number") or payload.get("doc_number") or "").casefold().split())
+    date = str(payload.get("doc_date") or payload.get("date") or "").strip()[:10]
+    if not (company and supplier and number and date):
+        return None
+    return company, supplier, number, date
+
+
+def _release_invoice_identity(session: Session, collection: str, doc_id: str) -> None:
+    if collection != "proc_docs":
+        return
+    session.execute(delete(InvoiceIdentity).where(InvoiceIdentity.doc_id == doc_id))
+
+
+def _reserve_invoice_identity(session: Session, collection: str, doc_id: str, payload: dict) -> None:
+    """Reject a repeated invoice in the same transaction that writes the document."""
+    if collection != "proc_docs":
+        return
+    key = _invoice_key(payload)
+    if key is None:
+        _release_invoice_identity(session, collection, doc_id)
+        return
+    company, supplier, number, date = key
+    deleted = bool(payload.get("deleted"))
+    conflict = session.scalar(
+        select(InvoiceIdentity).where(
+            InvoiceIdentity.company_id == company,
+            InvoiceIdentity.supplier_id == supplier,
+            InvoiceIdentity.number == number,
+            InvoiceIdentity.doc_date == date,
+            InvoiceIdentity.deleted.is_(False),
+            InvoiceIdentity.doc_id != doc_id,
+        )
+    )
+    if conflict is not None and not deleted:
+        raise DuplicateInvoice()
+    current = session.get(InvoiceIdentity, doc_id)
+    if current is None:
+        current = InvoiceIdentity(doc_id=doc_id)
+        session.add(current)
+    current.company_id = company
+    current.supplier_id = supplier
+    current.number = number
+    current.doc_date = date
+    current.deleted = deleted
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        raise DuplicateInvoice() from exc
+
+
+SCHEMA_HEAD = "20261020_0002_invoice_keys"
 MIGRATION_LOCK = 21419007
 
 
@@ -1416,6 +1499,8 @@ class SqlRuntime:
                 return self._flush_once(store)
             except ChangedByOther:
                 raise
+            except DuplicateInvoice:
+                raise
             except IntegrityError as exc:
                 if _record_pk_conflict(exc):
                     raise ChangedByOther() from exc
@@ -1505,6 +1590,13 @@ class SqlRuntime:
     def _flush_dict(self, session: Session, store, collection: str, bag: TrackedDict) -> None:
         deleted = [str(key) for key in bag.deleted]
         dirty = [str(key) for key in bag.dirty]
+        if collection == "proc_docs":
+            def _invoice_released(key: str) -> bool:
+                if key not in bag:
+                    return True
+                return bool(_dump(bag.peek(key)).get("deleted"))
+
+            dirty.sort(key=lambda key: (0 if _invoice_released(key) else 1, key))
         ids = list(dict.fromkeys(deleted + dirty))
         existing: dict[str, int] = {}
         for chunk in _chunks(ids, 200):
@@ -1525,6 +1617,7 @@ class SqlRuntime:
                 seq = alloc_seq(session, collection)
                 session.merge(RecordTombstone(collection=collection, doc_id=key, seq=seq))
                 bag.last_seq = max(bag.last_seq, seq)
+            _release_invoice_identity(session, collection, key)
             session.execute(delete(RecordLink).where(RecordLink.collection == collection, RecordLink.doc_id == key))
             bag.versions.pop(key, None)
             existing.pop(key, None)
@@ -1570,6 +1663,7 @@ class SqlRuntime:
                 bag.versions[key] = expected + 1
                 existing[doc_id] = expected + 1
             bag.last_seq = max(bag.last_seq, seq)
+            _reserve_invoice_identity(session, collection, doc_id, payload)
             if collection == "deals":
                 pending.append((doc_id, _deal_holders(store, payload)))
         session.flush()
