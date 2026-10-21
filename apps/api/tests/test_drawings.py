@@ -68,12 +68,37 @@ def _auth(token: str) -> dict[str, str]:
 
 
 def _promote(email: str, role: str) -> None:
+    """Move the single site-owner slot, then store the new role.
+
+    records.status is 'owner' for at most one users row. Demote the current
+    site owner and commit that before assigning the slot again.
+    """
     user = store.get_user_by_email(email)
     assert user is not None
+    if role == "owner":
+        moved = False
+        for existing in list(store.users_by_id.values()):
+            if existing.id == user.id or existing.role != "owner":
+                continue
+            demoted = existing.model_copy(update={"role": "buyer"})
+            store.users_by_id[existing.id] = demoted
+            if existing.email:
+                store.users[existing.email.lower()] = demoted
+            moved = True
+        if moved:
+            store._save()
     updated = user.model_copy(update={"role": role})
     store.users_by_id[user.id] = updated
     store.users[email.lower()] = updated
     store._save()
+
+
+@pytest.fixture(autouse=True)
+def _restore_demo_owner():
+    yield
+    demo = store.get_user("u-owner")
+    if demo is not None and demo.role != "owner":
+        _promote(demo.email, "owner")
 
 
 def _project(token: str, title: str) -> str:
@@ -117,9 +142,7 @@ def _upload(token: str, pid: str, **extra) -> object:
 
 def test_foreign_company_is_hidden_on_read_write_file_and_link(monkeypatch):
     owner = _register("draw-owner@example.com", BIN_A)
-    _promote("draw-owner@example.com", "owner")
     other = _register("draw-other@example.com", BIN_B)
-    _promote("draw-other@example.com", "owner")
     buyer = _register("draw-buyer@example.com", BIN_A)
     tech = _register("draw-tech@example.com", BIN_C)
     crew = _register("draw-crew@example.com", BIN_C)
@@ -134,7 +157,9 @@ def test_foreign_company_is_hidden_on_read_write_file_and_link(monkeypatch):
     )
     assert opened.status_code == 404, opened.text
 
+    _promote("draw-owner@example.com", "owner")
     _enable(owner["token"])
+    _promote("draw-other@example.com", "owner")
     _enable(other["token"])
     added = client.post(
         f"/v1/site/projects/{pid}/members",
@@ -294,12 +319,12 @@ def test_new_revision_becomes_current_and_conflict_is_409():
 
 def test_reused_file_id_leaves_the_other_file_unchanged():
     owner = _register("draw-file-a@example.com", "510000000011")
-    _promote("draw-file-a@example.com", "owner")
     other = _register("draw-file-b@example.com", "510000000012")
-    _promote("draw-file-b@example.com", "owner")
     pid = _project(owner["token"], "File yard")
     other_pid = _project(other["token"], "Other file yard")
+    _promote("draw-file-a@example.com", "owner")
     _enable(owner["token"])
+    _promote("draw-file-b@example.com", "owner")
     _enable(other["token"])
     shared = str(uuid4())
     created = _upload(owner["token"], pid, file_id=shared)
