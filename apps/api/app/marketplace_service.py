@@ -52,7 +52,7 @@ from app.marketplace_score import (
     Score,
     aggregate,
 )
-from app.recipient_stub import RequestRecipient
+from app.sql_backend import RequestRecipient
 
 REVIEW_LIMIT = 5
 REVIEW_WINDOW_S = 3600
@@ -867,10 +867,12 @@ def create_request(session: Session, user, body: dict) -> dict:
     for company_id in suppliers:
         session.add(
             RequestRecipient(
-                id=uuid4().hex[:16],
                 request_id=request.id,
-                company_id=company_id,
+                supplier_company_id=company_id,
+                status="sent",
+                sent_at=now,
                 created_at=now,
+                updated_at=now,
             )
         )
     session.flush()
@@ -902,7 +904,7 @@ def repeat_request(session: Session, user, request_id: str) -> dict:
             "title": previous.title,
             "project_id": previous.project_id,
             "repeated_from": previous.id,
-            "supplier_ids": [row.company_id for row in recipients],
+            "supplier_ids": [row.supplier_company_id for row in recipients],
             "lines": [
                 {
                     "catalog_id": line.catalog_id,
@@ -943,12 +945,7 @@ def request_view(session: Session, user, request_id: str, supplier: bool = False
         if user.role not in ("supplier", "admin"):
             raise MarketError("Недостаточно прав", 403)
         company_id = company_of(session, user, "supplier")
-        allowed = session.scalar(
-            select(RequestRecipient.id).where(
-                RequestRecipient.request_id == request_id,
-                RequestRecipient.company_id == company_id,
-            )
-        )
+        allowed = session.get(RequestRecipient, (request_id, company_id))
         if not allowed and user.role != "admin":
             raise MarketError("Недостаточно прав", 403)
         supplier = True
@@ -977,7 +974,7 @@ def request_view(session: Session, user, request_id: str, supplier: bool = False
             }
             for line in lines
         ],
-        "suppliers": [row.company_id for row in recipients] if buyer_ok else [company_id],
+        "suppliers": [row.supplier_company_id for row in recipients] if buyer_ok else [company_id],
         "offers": [_offer_card(session, offer) for offer in _sorted_offers(session, offers)],
     }
 
@@ -1095,13 +1092,8 @@ def comparison(session: Session, user, request_id: str) -> dict:
 
 
 def _recipient_or_raise(session: Session, request_id: str, company_id: str) -> None:
-    found = session.scalar(
-        select(RequestRecipient.id).where(
-            RequestRecipient.request_id == request_id,
-            RequestRecipient.company_id == company_id,
-        )
-    )
-    if not found:
+    found = session.get(RequestRecipient, (request_id, company_id))
+    if found is None:
         raise MarketError("Заявка не адресована этой компании")
 
 
@@ -1479,7 +1471,7 @@ def assigned(session: Session, user) -> list[dict]:
     """Requests addressed to this supplier. The inbox screen belongs to registration."""
     profile = _own_profile(session, user)
     rows = session.scalars(
-        select(RequestRecipient).where(RequestRecipient.company_id == profile.company_id)
+        select(RequestRecipient).where(RequestRecipient.supplier_company_id == profile.company_id)
     ).all()
     out = []
     for row in rows:

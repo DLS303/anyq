@@ -1,8 +1,7 @@
-"""Hand-off to the registration agent's inbox.
+"""Hand-off to the registration inbox.
 
-TODO(registration): request_recipients and the supplier «Входящие» inbox are
-owned by the registration branch. This hook is the only integration point.
-Do not build that inbox here. Drop recipient_stub when their model lands.
+Recipients are sql_backend.RequestRecipient. The supplier «Входящие» screen
+stays with registration. These hooks are the integration point.
 """
 
 from __future__ import annotations

@@ -1,23 +1,26 @@
 """Marketplace profiles, catalog, offers, deals, reviews, and the price index.
 
 Revision ID: 20261021_0002_marketplace
-Revises: 20261021_0001c_app_role
+Revises: 20261021_0003_recipient_status
 Create Date: 2026-10-21
 
-NOT FINAL. The linear chain is 20261021_0001c_app_role, then
-20261019_0002_pf0 (#18), then the registration revision, then this file,
-then 20261021_0003_price_index. There is one alembic head.
+Linear chain, one alembic head:
 
-The registration revision id is not published. Until it is, down_revision
-stays 20261021_0001c_app_role so this branch upgrades. Point it at the
-registration revision when that id arrives, and drop the temporary
-request_recipients block in the same rebase.
+20261021_0001c_app_role
+→ 20261019_0002_pf0
+→ 20261021_0002_signup_accounts
+→ 20261021_0003_recipient_status
+→ 20261021_0002_marketplace
+→ 20261021_0003_price_index
+
+request_recipients belongs to the signup revision. This file does not
+create or drop that table.
 
 The application role cannot run DDL or TRUNCATE. The append-only trigger on
 price_observations is created here, not at runtime.
 
 Downgrade drops the marketplace tables and the price trigger. Consent rows,
-the app role, and earlier tables stay.
+the app role, request_recipients, and earlier tables stay.
 """
 
 import sqlalchemy as sa
@@ -25,9 +28,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20261021_0002_marketplace"
-# Provisional. Replace with the registration revision id. That revision
-# revises 20261019_0002_pf0. Do not point this file at 0002_pf0 itself.
-down_revision = "20261021_0001c_app_role"
+down_revision = "20261021_0003_recipient_status"
 branch_labels = None
 depends_on = None
 
@@ -301,16 +302,6 @@ def upgrade() -> None:
         sa.Column("category", sa.String(80), nullable=False),
     )
     op.create_index("ix_market_request_lines_request", "market_request_lines", ["request_id"])
-    # TEMPORARY until the registration revision creates request_recipients.
-    op.create_table(
-        "request_recipients",
-        sa.Column("id", _tech(40), primary_key=True),
-        sa.Column("request_id", _tech(40), nullable=False),
-        sa.Column("company_id", _tech(40), nullable=False),
-        sa.Column("created_at", sa.String(40), nullable=False),
-        sa.UniqueConstraint("request_id", "company_id", name="uq_request_recipients_pair"),
-    )
-    op.create_index("ix_request_recipients_company", "request_recipients", ["company_id"])
     op.create_table(
         "offers",
         sa.Column("id", _tech(40), primary_key=True),
@@ -435,8 +426,6 @@ def downgrade() -> None:
     op.drop_index("ix_offers_supplier", table_name="offers")
     op.drop_index("ix_offers_request", table_name="offers")
     op.drop_table("offers")
-    op.drop_index("ix_request_recipients_company", table_name="request_recipients")
-    op.drop_table("request_recipients")
     op.drop_index("ix_market_request_lines_request", table_name="market_request_lines")
     op.drop_table("market_request_lines")
     op.drop_index("ix_market_requests_buyer", table_name="market_requests")
