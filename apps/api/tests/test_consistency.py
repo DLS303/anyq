@@ -179,6 +179,13 @@ def test_consent_events_reject_delete(tmp_path, monkeypatch):
     with store._sql.factory() as session:
         again = session.execute(text("SELECT count(*) FROM consent_events")).scalar()
     assert again == count
+    if store._sql.dialect() == "postgresql":
+        with pytest.raises(DatabaseError), store._sql.factory() as session:
+            session.execute(text("TRUNCATE TABLE consent_events"))
+            session.commit()
+        with store._sql.factory() as session:
+            after = session.execute(text("SELECT count(*) FROM consent_events")).scalar()
+        assert after == count
 
 
 def test_baseline_revision_cannot_be_downgraded():
@@ -676,15 +683,29 @@ def _run_meta_lock_order(store, seen) -> None:
 def test_schema_head_matches_alembic_heads():
     from alembic.script import ScriptDirectory
 
-    from app.sql_backend import SCHEMA_HEAD
+    from app.sql_backend import SCHEMA_HEAD, database_revision_ready
 
-    cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    root = Path(__file__).resolve().parents[1]
+    cfg = Config(str(root / "alembic.ini"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
     assert heads == [SCHEMA_HEAD]
-    source = (Path(__file__).resolve().parents[1] / "alembic" / "versions" / "20261019_0001b_store_fixes.py").read_text()
-    assert "app.schemas" not in source
-    assert "app.sql_backend" not in source
-    assert "consent_events back into records" in source
+    versions = root / "alembic" / "versions"
+    for path in versions.glob("*.py"):
+        source = path.read_text()
+        assert "app.schemas" not in source
+        assert "app.sql_backend" not in source
+    fixes = (versions / "20261019_0001b_store_fixes.py").read_text()
+    assert "consent_events back into records" in fixes
+    current = (versions / "20261021_0001c_app_role.py").read_text()
+    assert "def downgrade" in current
+    assert "BEFORE TRUNCATE" in current
+    assert "SET lock_timeout = '5s'" in current
+    assert "CONCURRENTLY" in current
+    assert "SET lock_timeout = '5s'" in (root / "alembic" / "env.py").read_text()
+    assert database_revision_ready(SCHEMA_HEAD)
+    assert database_revision_ready(SCHEMA_HEAD, expected="20261019_0001b_store_fixes")
+    assert not database_revision_ready("20261019_0001b_store_fixes")
+    assert not database_revision_ready("20261019_0001")
 
 
 def test_upgrade_dedupes_emails_and_restores_consents(tmp_path, capsys):
@@ -758,7 +779,7 @@ def test_upgrade_dedupes_emails_and_restores_consents(tmp_path, capsys):
         assert [(row[0], row[1]) for row in events] == [("grant", 1), ("withdraw", 2)]
         assert int(revision) == 2
         assert failures == 0
-        command.downgrade(cfg, "-1")
+        command.downgrade(cfg, "20261019_0001")
         with engine.connect() as connection:
             restored = connection.execute(
                 text("SELECT payload FROM records WHERE collection = 'consents' AND doc_id = 'c-1'")
@@ -936,3 +957,181 @@ def test_ready_is_unavailable_until_schema_head(tmp_path, monkeypatch):
     ready.engine.dispose()
     assert opened.status_code == 200
     assert opened.json()["ok"] is True
+
+
+def test_concurrent_first_registration_keeps_one_owner(tmp_path, monkeypatch):
+    _isolated(monkeypatch, tmp_path)
+    left = MemoryStore()
+    right = MemoryStore()
+    import app.store as store_mod
+
+    real = store_mod.lock_meta
+    holding = threading.Event()
+    arrived = threading.Event()
+    release = threading.Event()
+    counter = {"n": 0}
+    counter_lock = threading.Lock()
+
+    def wrapped(session, ids):
+        if "owner_gate" not in ids:
+            return real(session, ids)
+        with counter_lock:
+            counter["n"] += 1
+            turn = counter["n"]
+        if turn == 1:
+            real(session, ids)
+            holding.set()
+            if not release.wait(5):
+                raise TimeoutError("owner gate was not released")
+            return None
+        arrived.set()
+        return real(session, ids)
+
+    monkeypatch.setattr(store_mod, "lock_meta", wrapped)
+    errors: list[BaseException] = []
+    roles: list[str] = []
+
+    def sign_up(store: MemoryStore, email: str, bin_no: str) -> None:
+        try:
+            user, _token = store.register(
+                RegisterBody(
+                    email=email,
+                    password="secret12",
+                    full_name="First Registrar",
+                    phone="+77010001122",
+                    company="Race Test LLP",
+                    company_bin=bin_no,
+                    role="buyer",
+                    consent_offer_pd=True,
+                )
+            )
+            roles.append(user.role)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    workers = [
+        threading.Thread(target=sign_up, args=(left, "first.a@example.com", "880000000011")),
+        threading.Thread(target=sign_up, args=(right, "first.b@example.com", "880000000012")),
+    ]
+    for worker in workers:
+        worker.start()
+    assert holding.wait(5)
+    assert arrived.wait(5)
+    release.set()
+    for worker in workers:
+        worker.join(10)
+    assert not errors
+    assert all(not worker.is_alive() for worker in workers)
+    assert sorted(roles) == ["buyer", "owner"]
+    fresh = MemoryStore()
+    owners = [user.role for user in fresh.users_by_id.values()]
+    assert owners.count("owner") == 1
+    assert len(owners) == 2
+
+
+def test_user_list_by_address_skips_quarantine(tmp_path, monkeypatch):
+    _isolated(monkeypatch, tmp_path)
+    bootstrap = MemoryStore()
+    cast = "CAST(:payload AS json)" if bootstrap._sql.dialect() == "postgresql" else ":payload"
+    kept = {
+        "id": "u-keep",
+        "email": "kept@example.com",
+        "full_name": "Kept User",
+        "role": "buyer",
+    }
+    extra = {**kept, "id": "u-extra"}
+    other = {**kept, "id": "u-other", "email": "other@example.com"}
+    insert = (
+        "INSERT INTO records (collection, doc_id, email, user_id, seq, search_text, payload) "
+        f"VALUES ('users', :doc_id, :email, :doc_id, :seq, '', {cast})"
+    )
+    with bootstrap._sql.engine.begin() as connection:
+        connection.execute(
+            text(insert),
+            {"doc_id": "u-keep", "email": "kept@example.com", "seq": 1, "payload": json.dumps(kept)},
+        )
+        connection.execute(
+            text(insert),
+            {"doc_id": "u-extra", "email": None, "seq": 2, "payload": json.dumps(extra)},
+        )
+        connection.execute(
+            text(insert),
+            {"doc_id": "u-other", "email": "other@example.com", "seq": 3, "payload": json.dumps(other)},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO email_quarantine (doc_id, reason, reported_at) VALUES "
+                "('u-extra', 'duplicate', '2026-01-01T00:00:00+00:00'), "
+                "('u-other', 'duplicate', '2026-01-01T00:00:00+00:00')"
+            )
+        )
+    fresh = MemoryStore()
+    assert list(fresh.users) == ["kept@example.com"]
+    assert fresh.users["kept@example.com"].id == "u-keep"
+    assert "u-extra" in fresh.users_by_id
+    assert "u-other" in fresh.users_by_id
+    found = fresh.get_user_by_email("kept@example.com")
+    assert found is not None and found.id == "u-keep"
+
+
+def test_app_role_cannot_rewrite_consent_events(tmp_path, monkeypatch):
+    _isolated(monkeypatch, tmp_path)
+    store = MemoryStore()
+    if store._sql.dialect() != "postgresql":
+        return
+    _register(store)
+    password = "test-only-app-password"
+    with store._sql.engine.begin() as connection:
+        connection.execute(text("CREATE TEMP TABLE app_password_once (value text) ON COMMIT DROP"))
+        connection.execute(
+            text("INSERT INTO app_password_once (value) VALUES (:password)"),
+            {"password": password},
+        )
+        connection.execute(
+            text(
+                """
+                DO $$
+                DECLARE secret text;
+                BEGIN
+                  SELECT value INTO secret FROM app_password_once;
+                  EXECUTE format('ALTER ROLE anyq_app WITH LOGIN PASSWORD %L', secret);
+                END
+                $$;
+                """
+            )
+        )
+    app_engine = create_engine(
+        make_url(store._sql.url).set(username="anyq_app", password=password),
+        future=True,
+    )
+    try:
+        with app_engine.connect() as connection:
+            count = connection.execute(text("SELECT count(*) FROM consent_events")).scalar()
+        assert count >= 1
+        for statement in (
+            "DELETE FROM consent_events",
+            "UPDATE consent_events SET ip = ''",
+            "TRUNCATE TABLE consent_events",
+        ):
+            with pytest.raises(DatabaseError), app_engine.begin() as connection:
+                connection.execute(text(statement))
+        with app_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO consent_events ("
+                    "seq, legacy_id, event_uuid, subject_user_id, purpose, text_version, "
+                    "text_sha256, action, occurred_at, evidence"
+                    ") VALUES ("
+                    "900000, 'c-app-role', :event_uuid, 'u-app', 'offer_pd', 'v', "
+                    "'abc', 'grant', '2026-01-01T00:00:00+00:00', CAST('{}' AS json)"
+                    ")"
+                ),
+                {"event_uuid": str(uuid4())},
+            )
+        with store._sql.factory() as session:
+            stored = session.execute(
+                text("SELECT count(*) FROM consent_events WHERE legacy_id = 'c-app-role'")
+            ).scalar()
+        assert stored == 1
+    finally:
+        app_engine.dispose()

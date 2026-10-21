@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -280,6 +284,47 @@ def test_login_hash_secret_is_separate_and_required(monkeypatch):
     monkeypatch.delenv("LOGIN_HASH_SECRET", raising=False)
     with pytest.raises(RuntimeError, match="LOGIN_HASH_SECRET"):
         login_hash_secret()
+    monkeypatch.setenv("ANYQ_ENV", "development")
+    monkeypatch.setenv("APP_ENV", "prod")
+    with pytest.raises(RuntimeError, match="LOGIN_HASH_SECRET"):
+        login_hash_secret()
+    monkeypatch.delenv("APP_ENV", raising=False)
+    assert login_hash_secret()
+
+
+def _import_main(tmp_path, **env):
+    child = os.environ.copy()
+    child.pop("LOGIN_HASH_SECRET", None)
+    child.pop("APP_ENV", None)
+    child["ANYQ_ENV"] = "development"
+    child["ANYQ_DEMO_MODE"] = ""
+    child["ANYQ_DEMO_PASSWORD"] = ""
+    child["DATABASE_URL"] = "sqlite:///" + (tmp_path / "startup.sqlite").as_posix()
+    child["ANYQ_DB_PATH"] = str(tmp_path / "startup.json")
+    child["ANYQ_UPLOADS_DIR"] = str(tmp_path / "uploads")
+    child["JWT_SECRET"] = "test-only-secret-value-with-32-characters"
+    child["CORS_ORIGINS"] = "https://example.kz"
+    child.update(env)
+    return subprocess.run(
+        [sys.executable, "-c", "import app.main"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=child,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+
+
+def test_production_refuses_to_start_without_login_hash_secret(tmp_path):
+    missing = _import_main(tmp_path, ANYQ_ENV="production")
+    assert missing.returncode != 0
+    assert "LOGIN_HASH_SECRET" in missing.stderr
+    flagged = _import_main(tmp_path, APP_ENV="prod")
+    assert flagged.returncode != 0
+    assert "LOGIN_HASH_SECRET" in flagged.stderr
+    development = _import_main(tmp_path)
+    assert development.returncode == 0, development.stderr
 
 
 def test_login_failures_store_a_hash_and_expire():

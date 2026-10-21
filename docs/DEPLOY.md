@@ -102,13 +102,14 @@ openssl rand -base64 48
 - `ACME_EMAIL` — почта для уведомлений выпуска сертификата.
 - `CORS_ORIGINS` — `https://` и то же имя, без пробелов. Если имён несколько, перечислите через запятую, и `https://<DOMAIN>` обязан быть в списке.
 - `ANYQ_DEMO_PASSWORD` оставьте пустым.
-- `POSTGRES_PASSWORD` — длинный пароль с сервера (`openssl rand -base64 32`). Не используйте `anyq`, `postgres`, `superapp`, `changeme`.
-- `DATABASE_URL` — `postgresql+psycopg://anyq:<тот же пароль>@postgres:5432/anyq`. Compose подставляет пароль из `POSTGRES_PASSWORD` сам, но в файле адрес тоже должен быть адресом PostgreSQL.
+- `POSTGRES_PASSWORD` — длинный пароль роли-владельца `anyq` (`openssl rand -base64 32`). Эту роль используют только миграции и резервные копии. Не используйте `anyq`, `postgres`, `superapp`, `changeme`.
+- `ANYQ_APP_PASSWORD` — отдельный пароль роли `anyq_app`, под которой работает API. Сгенерируйте его второй командой `openssl rand -base64 32`. Он не должен совпадать с `POSTGRES_PASSWORD`.
+- `DATABASE_URL` в файле — адрес PostgreSQL. Compose подставляет его сам: API получает `postgresql+psycopg://anyq_app:<ANYQ_APP_PASSWORD>@postgres:5432/anyq`, сервис `migrate` — `postgresql+psycopg://anyq:<POSTGRES_PASSWORD>@postgres:5432/anyq`.
 - `WEB_CONCURRENCY` оставьте `2` или поставьте число от 1 до 8.
 - `NEXT_PUBLIC_PILOT_MODE=1` включает пилотный интерфейс. Значение попадает в образ сайта на сборке. Смена потребует нового `deploy.sh`.
 - `INTERNAL_API_URL` оставьте `http://api:8010`.
 
-Контейнер API не стартует, если `JWT_SECRET` или `LOGIN_HASH_SECRET` пустой, короче 32 символов или похож на заготовку (`changeme`, `replace-me`, `test-only`, `superapp`, `your-secret` и те же слова в другом регистре). Пустой `CORS_ORIGINS`, символ `*` в нём, непустой демо-пароль и пароль базы по умолчанию тоже останавливают запуск. Тот же набор проверяет `deploy/check_env.sh` до сборки. Процесс Python дополнительно отказывается стартовать без `JWT_SECRET` и `LOGIN_HASH_SECRET` достаточной длины и без `CORS_ORIGINS`.
+Контейнер API не стартует, если `JWT_SECRET` или `LOGIN_HASH_SECRET` пустой, короче 32 символов или похож на заготовку (`changeme`, `replace-me`, `test-only`, `superapp`, `your-secret` и те же слова в другом регистре). Пустой `CORS_ORIGINS`, символ `*` в нём, непустой демо-пароль и пароль базы по умолчанию тоже останавливают запуск. Тот же набор проверяет `deploy/check_env.sh` до сборки, вместе с `ANYQ_APP_PASSWORD` (не короче 16 символов и не равен `POSTGRES_PASSWORD`). Процесс Python при запуске, до приёма запросов, отказывается работать без `JWT_SECRET` и `CORS_ORIGINS`. Пустой или короткий `LOGIN_HASH_SECRET` останавливает процесс, когда `ANYQ_ENV=production` или `APP_ENV=prod`. В development и в демо-режиме отсутствие `LOGIN_HASH_SECRET` запуск не блокирует.
 
 ```bash
 ./deploy/check_env.sh
@@ -146,7 +147,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml logs --t
 - `anyq-postgres` — данные PostgreSQL. Удаление тома стирает базу.
 - `anyq-caddy-data` и `anyq-caddy-config` — сертификаты. Удаление этих томов заставит Caddy запросить сертификат заново.
 
-Логи контейнеров пишутся драйвером `json-file`: не больше 10 МБ на файл и 5 файлов на сервис. Лимиты ресурсов в compose-файле рассчитаны на 2 vCPU и 4 ГБ: API до 1 CPU и 1536 МБ, PostgreSQL до 0.5 CPU и 512 МБ, сайт до 0.75 CPU и 768 МБ, Caddy до 0.25 CPU и 128 МБ. Политика перезапуска — `unless-stopped`. Сервис `db-backup` до старта `migrate` пишет `pg_dump -Fc` в том `anyq-backups`. Имя файла содержит время UTC (`pre-migrate-YYYYMMDDTHHMMSSZ.dump`), поэтому новый запуск не затирает предыдущий. `umask 077` задаёт доступ только владельцу. В томе остаются три последних снимка. Если дамп не создался, `migrate` не запускается. Сервис `migrate` один раз выполняет `alembic upgrade head` до старта API. API при старте таблицы не создаёт и отвечает 503 на `/ready`, пока версия схемы не совпадает с ожидаемой.
+Логи контейнеров пишутся драйвером `json-file`: не больше 10 МБ на файл и 5 файлов на сервис. Лимиты ресурсов в compose-файле рассчитаны на 2 vCPU и 4 ГБ: API до 1 CPU и 1536 МБ, PostgreSQL до 0.5 CPU и 512 МБ, сайт до 0.75 CPU и 768 МБ, Caddy до 0.25 CPU и 128 МБ. Политика перезапуска — `unless-stopped`. Сервис `db-backup` до старта `migrate` пишет `pg_dump -Fc` в том `anyq-backups`. Имя файла содержит время UTC (`pre-migrate-YYYYMMDDTHHMMSSZ.dump`), поэтому новый запуск не затирает предыдущий. `umask 077` задаёт доступ только владельцу. В томе остаются три последних снимка. Если дамп не создался, `migrate` не запускается. Сервис `migrate` один раз выполняет `alembic upgrade head` от роли `anyq` до старта API и затем задаёт пароль роли `anyq_app`. API подключается только как `anyq_app`. Журнал `consent_events` не принимает `TRUNCATE`. API при старте таблицы не создаёт и отвечает 503 на `/ready`, пока версия схемы старше ожидаемой. Более новая схема тот же процесс не останавливает.
 
 ## 5. Проверка HTTPS
 

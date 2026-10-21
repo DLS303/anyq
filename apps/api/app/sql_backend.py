@@ -91,6 +91,13 @@ class Record(Base):
             sqlite_where=text("collection = 'users'"),
             postgresql_where=text("collection = 'users'"),
         ),
+        Index(
+            "ux_records_single_owner",
+            "status",
+            unique=True,
+            sqlite_where=text("collection = 'users' AND status = 'owner'"),
+            postgresql_where=text("collection = 'users' AND status = 'owner'"),
+        ),
     )
 
 
@@ -691,6 +698,8 @@ def index_values(store, collection: str, doc_id: str, payload: dict) -> dict:
         payload.get("email"),
     ]
     search_text = " ".join(str(bit) for bit in search_bits if bit).lower()[:4000]
+    if collection == "users" and str(payload.get("role") or "").strip() == "owner":
+        status = "owner"
     return {
         "project_id": project_id,
         "company_key": company_key,
@@ -827,12 +836,64 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-SCHEMA_HEAD = "20261019_0001b_store_fixes"
+SCHEMA_HEAD = "20261021_0001c_app_role"
 MIGRATION_LOCK = 21419007
 
 
 def _production() -> bool:
     return os.getenv("ANYQ_ENV", "development").strip().lower() == "production"
+
+
+def database_revision_ready(version: str, expected: str | None = None) -> bool:
+    """True when the database is at the image revision or a later one in its chain.
+
+    A newer schema still serves the previous image (expand). An older schema does not.
+    """
+    target = expected or SCHEMA_HEAD
+    current = (version or "").strip()
+    if not current:
+        return False
+    if current == target:
+        return True
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        from alembic.util import CommandError
+
+        cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+        script = ScriptDirectory.from_config(cfg)
+    except (OSError, ValueError, CommandError):
+        return False
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        try:
+            rev = script.get_revision(current)
+        except CommandError:
+            return False
+        down = rev.down_revision
+        if down is None:
+            return False
+        if isinstance(down, tuple):
+            return target in down
+        if down == target:
+            return True
+        current = str(down)
+    return False
+
+
+def users_by_address(users, addresses: dict[str, str | None], quarantined: set[str]) -> dict:
+    """Email index. Quarantined rows and rows without an address are left out."""
+    indexed = {}
+    for user in users:
+        doc_id = getattr(user, "id", None)
+        if not doc_id or doc_id in quarantined:
+            continue
+        email = addresses.get(doc_id)
+        if email is None or not str(email).strip():
+            continue
+        indexed[str(email).strip().lower()] = user
+    return indexed
 
 
 def _record_pk_conflict(exc: IntegrityError) -> bool:
@@ -1059,6 +1120,12 @@ def _trigger_sql(dialect: str) -> list[str]:
             BEFORE DELETE ON consent_events
             FOR EACH ROW EXECUTE FUNCTION consent_events_append_only()
             """,
+            "DROP TRIGGER IF EXISTS consent_events_no_truncate ON consent_events",
+            """
+            CREATE TRIGGER consent_events_no_truncate
+            BEFORE TRUNCATE ON consent_events
+            FOR EACH STATEMENT EXECUTE FUNCTION consent_events_append_only()
+            """,
         ]
     return []
 
@@ -1182,7 +1249,7 @@ class SqlRuntime:
                 if not found:
                     return False
                 version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-                return str(version or "") == SCHEMA_HEAD
+                return database_revision_ready(str(version or ""))
         except SQLAlchemyError:
             return False
 
@@ -1299,12 +1366,23 @@ class SqlRuntime:
             rows = session.scalars(select(Record).order_by(Record.seq, Record.doc_id)).all()
             consent_rows = session.scalars(select(ConsentEvent).order_by(ConsentEvent.seq)).all()
             snapshot = [
-                (row.collection, row.doc_id, dict(row.payload or {}), int(row.row_version or 1), int(row.seq or 0))
+                (
+                    row.collection,
+                    row.doc_id,
+                    dict(row.payload or {}),
+                    int(row.row_version or 1),
+                    int(row.seq or 0),
+                    row.email,
+                )
                 for row in rows
             ]
             consents = [consent_record_from_event(row) for row in consent_rows]
             consent_last = max((int(row.seq or 0) for row in consent_rows), default=0)
-        for collection, doc_id, payload, version, seq in snapshot:
+            quarantined = set(session.scalars(select(EmailQuarantine.doc_id)).all())
+        user_addresses: dict[str, str | None] = {}
+        for collection, doc_id, payload, version, seq, email in snapshot:
+            if collection == "users":
+                user_addresses[doc_id] = email
             last_seq[collection] = max(last_seq.get(collection, 0), seq)
             if collection == "credentials":
                 buckets.setdefault("credentials", {})[doc_id] = str(payload.get("password_hash") or "")
@@ -1326,7 +1404,7 @@ class SqlRuntime:
         users = buckets.get("users", {})
         store.users_by_id.load_clean(users, versions.get("users", {}), last_seq.get("users", 0))
         if not store.users.dirty and not store.users.deleted:
-            store.users.load_clean({user.email.lower(): user for user in users.values()})
+            store.users.load_clean(users_by_address(users.values(), user_addresses, quarantined))
         for attr, collection in PERSISTED:
             if collection in {"users", "favorites", "consents"}:
                 continue
@@ -1360,6 +1438,13 @@ class SqlRuntime:
                 for row in rows
             ]
             tomb_ids = [(row.doc_id, int(row.seq or 0)) for row in tombs]
+            address_rows = []
+            quarantined: set[str] = set()
+            if collection == "users":
+                address_rows = session.execute(
+                    select(Record.doc_id, Record.email).where(Record.collection == "users")
+                ).all()
+                quarantined = set(session.scalars(select(EmailQuarantine.doc_id)).all())
         changed = {doc_id for doc_id, _payload, _version, _seq in packed}
         deleted = {doc_id for doc_id, _seq in tomb_ids if doc_id not in changed}
         last = since_seq
@@ -1386,7 +1471,10 @@ class SqlRuntime:
                 versions[doc_id] = version
             store.users_by_id.merge_changes(items, versions, deleted, last)
             if not store.users.dirty and not store.users.deleted:
-                store.users.load_clean({user.email.lower(): user for user in store.users_by_id.peek_values()})
+                addresses = {str(doc_id): email for doc_id, email in address_rows}
+                store.users.load_clean(
+                    users_by_address(store.users_by_id.peek_values(), addresses, quarantined)
+                )
             return
         model = models.get(collection)
         if model is None:
