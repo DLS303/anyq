@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   displayPriceTiyn,
   formatTiyn,
+  marketText,
   medianText,
   removeBasket,
   supplierIds,
@@ -31,6 +32,19 @@ describe("market money and basket", () => {
   it("prints a median only when the card has one", () => {
     expect(medianText("медиана", 320_000)).toContain("медиана");
     expect(medianText("мало данных", null)).toBe("мало данных");
+  });
+
+  it("names the city market and the overpay", () => {
+    const text = marketText({
+      median_label: "медиана",
+      median_tiyn: 320_000,
+      market_label: "Рыночная цена в Алматы",
+      overpay_label: "дороже рынка на 12%",
+      city: "Алматы",
+    });
+    expect(text).toContain("Рыночная цена в Алматы");
+    expect(text).toContain("дороже рынка на 12%");
+    expect(marketText({ median_label: "мало данных", median_tiyn: null })).toBe("мало данных");
   });
 
   it("keeps one line per card and the distinct suppliers", () => {

@@ -24,6 +24,10 @@ export type MarketCardItem = {
   supplier_name: string;
   median_tiyn: number | null;
   median_label: string;
+  market_city?: string;
+  market_label?: string;
+  overpay_pct?: number | null;
+  overpay_label?: string;
   rating: number;
   deal_count: number;
   review_count: number;
@@ -55,7 +59,11 @@ export type OfferLineView = {
   stale_label: string;
   suspicious: boolean;
   manual_review: boolean;
+  median_tiyn?: number | null;
   median_label: string;
+  market_label?: string;
+  overpay_pct?: number | null;
+  overpay_label?: string;
   lead_days: number;
 };
 
@@ -71,6 +79,10 @@ export type OfferView = {
   vat_label: string;
   esf_label: string;
   best: boolean;
+  median_tiyn?: number | null;
+  market_label?: string;
+  overpay_pct?: number | null;
+  overpay_label?: string;
   rating: number;
   deal_count: number;
   label: string;
@@ -162,6 +174,19 @@ export function formatTiyn(tiyn: number): string {
 export function medianText(label: string, medianTiyn: number | null): string {
   if (label === "медиана" && medianTiyn != null) return `медиана ${formatTiyn(medianTiyn)}`;
   return label || "мало данных";
+}
+
+export function marketText(item: {
+  median_label: string;
+  median_tiyn: number | null;
+  market_label?: string;
+  overpay_label?: string;
+  city?: string;
+}): string {
+  if (item.median_label !== "медиана" || item.median_tiyn == null) return "мало данных";
+  const title = item.market_label || (item.city ? `Рыночная цена в ${item.city}` : "Рыночная цена");
+  const price = formatTiyn(item.median_tiyn);
+  return item.overpay_label ? `${title} · ${price} · ${item.overpay_label}` : `${title} · ${price}`;
 }
 
 export function upsertBasket(lines: BasketLine[], next: BasketLine): BasketLine[] {

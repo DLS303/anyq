@@ -71,4 +71,27 @@ describe("MarketCard", () => {
     expect(screen.getByText("3 дней")).toBeTruthy();
     expect(screen.getByRole("button", { name: "В заявку" })).toBeTruthy();
   });
+
+  it("shows the city market price and whether the buyer overpays", () => {
+    render(
+      createElement(MarketCard, {
+        locale: "ru",
+        item: card({
+          median_label: "медиана",
+          median_tiyn: 320_000,
+          market_label: "Рыночная цена в Алматы",
+          overpay_pct: 12,
+          overpay_label: "дороже рынка на 12%",
+          city: "Алматы",
+        }),
+        inBasket: false,
+        onAdd: () => undefined,
+      }),
+    );
+    const text = screen.getByRole("article").textContent || "";
+    expect(text).toContain("Рыночная цена в Алматы");
+    expect(text).toContain(formatTiyn(320_000));
+    expect(text).toContain("дороже рынка на 12%");
+    expect(text).not.toContain("мало данных");
+  });
 });
