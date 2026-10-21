@@ -70,13 +70,38 @@ def _count(model) -> int:
         return int(session.scalar(select(func.count()).select_from(model)) or 0)
 
 
+def test_technical_fields_do_not_use_a_locale_collation():
+    from sqlalchemy import inspect
+
+    if store._sql.dialect() != "sqlite":
+        return
+    with store._sql.factory() as session:
+        email_sql = session.execute(
+            text("SELECT sql FROM sqlite_master WHERE name = 'ux_accounts_email'")
+        ).scalar()
+        user_sql = session.execute(
+            text("SELECT sql FROM sqlite_master WHERE name = 'ux_records_user_email'")
+        ).scalar()
+    assert email_sql and "lower(email)" in email_sql.lower()
+    assert user_sql and "lower(email)" in user_sql.lower()
+    phone = next(
+        index
+        for index in inspect(store._sql.engine).get_indexes("accounts")
+        if index["name"] == "ux_accounts_phone_verified"
+    )
+    assert phone["unique"]
+    assert phone["column_names"] == ["phone"]
+
+
 def test_revision_follows_app_role_without_truncate():
     path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "20261021_0002_signup_accounts.py"
     source = path.read_text()
     assert 'revision = "20261021_0002_signup_accounts"' in source
-    assert 'down_revision = "20261021_0001c_app_role"' in source
-    assert "op.execute" not in source
+    assert 'down_revision = "20261019_0002_pf0"' in source
+    assert "lower(email)" in source
+    assert 'COLLATE "C"' in source
     assert "CREATE ROLE" not in source
+    assert "TRUNCATE TABLE" not in source
 
 
 def test_roles_create_company_and_do_not_take_the_site_owner_slot(open_signup):

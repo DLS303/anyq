@@ -88,7 +88,7 @@ class Record(Base):
         Index("ix_records_coll_created", "collection", "created_at"),
         Index(
             "ux_records_user_email",
-            "email",
+            text("lower(email)"),
             unique=True,
             sqlite_where=text("collection = 'users'"),
             postgresql_where=text("collection = 'users'"),
@@ -246,25 +246,37 @@ class PhotoJob(Base):
 
 
 class CompanyRow(Base):
-    """Company created with a sign-up so consent and requests have a company id."""
+    """Sign-up profile columns on the company row introduced in 20261019_0002_pf0.
+
+    `legacy_key` stays the tenant id (`bin:` or `user:`). New columns are
+    nullable so rows reserved before sign-up remain valid.
+    """
 
     __tablename__ = "companies"
 
-    id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    role: Mapped[str] = mapped_column(String(40), nullable=False)
-    account_kind: Mapped[str] = mapped_column(String(20), nullable=False)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    legacy_key: Mapped[str] = mapped_column(String(180), nullable=False)
+    role: Mapped[str | None] = mapped_column(String(40))
+    account_kind: Mapped[str | None] = mapped_column(String(20))
+    name: Mapped[str | None] = mapped_column(String(200))
     bin: Mapped[str | None] = mapped_column(String(12))
     iin: Mapped[str | None] = mapped_column(String(12))
     city: Mapped[str | None] = mapped_column(String(120))
     categories: Mapped[str | None] = mapped_column(String(400))
     vat_included: Mapped[bool | None] = mapped_column(Boolean)
     e_invoice: Mapped[str | None] = mapped_column(String(120))
-    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[str | None] = mapped_column(String(40))
 
     __table_args__ = (
-        CheckConstraint("role IN ('supplier', 'contractor', 'customer')", name="ck_companies_role"),
-        CheckConstraint("account_kind IN ('individual', 'company')", name="ck_companies_kind"),
+        UniqueConstraint("legacy_key", name="uq_companies_legacy_key"),
+        CheckConstraint(
+            "role IS NULL OR role IN ('supplier', 'contractor', 'customer')",
+            name="ck_companies_role",
+        ),
+        CheckConstraint(
+            "account_kind IS NULL OR account_kind IN ('individual', 'company')",
+            name="ck_companies_kind",
+        ),
     )
 
 
@@ -293,7 +305,7 @@ class AccountRow(Base):
         CheckConstraint("status IN ('pending', 'active')", name="ck_accounts_status"),
         Index(
             "ux_accounts_email",
-            "email",
+            text("lower(email)"),
             unique=True,
             sqlite_where=text("email IS NOT NULL"),
             postgresql_where=text("email IS NOT NULL"),

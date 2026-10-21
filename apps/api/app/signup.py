@@ -219,7 +219,8 @@ def start_signup(
 
     code = issue_code() if channel == "email" else ""
     uid = f"u-{uuid4().hex[:8]}"
-    company_id = f"co-{uuid4().hex[:8]}"
+    company_id = str(uuid4())
+    legacy_key = f"user:{uid}"
     now = signup_now().replace(microsecond=0).isoformat()
     user = User(
         id=uid,
@@ -229,6 +230,7 @@ def start_signup(
         phone=phone or "",
         company="",
         company_bin="",
+        company_key=legacy_key,
         city="",
         company_id=company_id,
         account_kind=kind,
@@ -263,9 +265,10 @@ def start_signup(
         session.add(
             CompanyRow(
                 id=company_id,
+                legacy_key=legacy_key,
                 role=chosen,
                 account_kind=kind,
-                name=name,
+                name=name or None,
                 bin=None,
                 iin=None,
                 city=None,
@@ -293,7 +296,7 @@ def start_signup(
             )
         )
         consent_seq = alloc_seq(session, "consents")
-        event = consent_event_from_record(consent_row, company_id)
+        event = consent_event_from_record(consent_row, legacy_key)
         event.seq = consent_seq
         session.add(event)
         if channel == "email":
