@@ -22,6 +22,7 @@ from app.routers import (
     modules,
     org_features,
     plots,
+    marketplace,
     procurement,
     public,
     site,
@@ -64,6 +65,7 @@ app.include_router(org_features.router)
 app.include_router(invitations.router)
 app.include_router(budget.router)
 app.include_router(procurement.router)
+app.include_router(marketplace.router)
 app.include_router(public.router)
 app.include_router(files.router)
 
