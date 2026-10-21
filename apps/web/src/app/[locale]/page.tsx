@@ -28,17 +28,8 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
       <HomeStage locale={locale} />
       <HomeRise />
 
-      <div className="home-flow relative z-20">
-        <div
-          className="home-veil pointer-events-none ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] w-screen"
-          aria-hidden
-        />
-        <div className="relative">
-          <div
-            className="pointer-events-none absolute inset-0 -z-10 ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] w-screen bg-[#f8fafc]"
-            aria-hidden
-          />
-          <div className="grid gap-12 pt-6 sm:gap-16 sm:pt-10">
+      <div className="relative">
+          <div className="grid gap-12 pt-8 sm:gap-16 sm:pt-12">
       {PILOT_MODE ? null : (
       <>
       {/* Materials Showcase with Quick Action Buttons */}
@@ -190,7 +181,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
       </section>
       ) : null}
           </div>
-        </div>
       </div>
     </div>
   );
