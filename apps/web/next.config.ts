@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { NextConfig } from "next";
 
-// Leaflet tiles, the ArcGIS imagery layer, and the pdf.js worker on unpkg.
+// Leaflet tiles, the ArcGIS imagery layer, and a same-origin pdf.js worker.
 // Next hydration and that worker need inline/eval scripts; frame-ancestors blocks embedding.
 const WEB_CSP = [
   "default-src 'self'",
@@ -9,7 +9,7 @@ const WEB_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://server.arcgisonline.com",
   "connect-src 'self' https://*.tile.openstreetmap.org https://server.arcgisonline.com https://unpkg.com",
-  "worker-src 'self' blob: https://unpkg.com",
+  "worker-src 'self' blob:",
   "font-src 'self' data:",
   "frame-ancestors 'none'",
   "base-uri 'self'",

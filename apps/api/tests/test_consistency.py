@@ -784,6 +784,16 @@ def test_upgrade_dedupes_emails_and_restores_consents(tmp_path, capsys):
         assert [(row[0], row[1]) for row in events] == [("grant", 1), ("withdraw", 2)]
         assert int(revision) == 2
         assert failures == 0
+        names = set(inspect(engine).get_table_names())
+        assert {"files", "drawing_sets", "drawings", "drawing_revisions"} <= names
+        command.downgrade(cfg, "-1")
+        names = set(inspect(engine).get_table_names())
+        assert "drawings" not in names
+        assert "drawing_revisions" not in names
+        assert "drawing_sets" not in names
+        assert "files" not in names
+        assert "companies" in names
+        command.upgrade(cfg, "head")
         command.downgrade(cfg, "20261021_0002_signup_accounts")
         names = set(inspect(engine).get_table_names())
         recipient_columns = {column["name"] for column in inspect(engine).get_columns("request_recipients")}

@@ -49,6 +49,11 @@ describe("release visibility", () => {
     expect(menus.more).toContain("rfi");
     expect(menus.more).not.toContain("draw");
     expect(menus.more).not.toContain("gantt");
+    const drawings = objectMenus({ drawings: true }, { demo: false });
+    expect(drawings.main).not.toContain("draw");
+    expect(drawings.more).toContain("draw");
+    expect(drawings.main).toContain("today");
+    expect(drawings.main).toContain("procurement");
     expect(objectMenus({}, { demo: true }).pilot).toBe(false);
     expect(objectMenus({}, { demo: true }).main).not.toContain("today");
   });

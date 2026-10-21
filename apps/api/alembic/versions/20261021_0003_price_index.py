@@ -10,7 +10,7 @@ the append-only trigger. price_index_daily is rebuilt by the daily job, so the
 application role keeps ordinary row privileges on that table.
 
 This file revises 20261021_0002_marketplace. That revision revises
-20261021_0003_recipient_status. The single head is 20261021_0003_price_index.
+20261021_0003_recipient_status. Drawing revision 20261019_0003_pf1a revises this one.
 """
 
 import sqlalchemy as sa

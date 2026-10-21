@@ -35,6 +35,11 @@ const Bim3dViewer = dynamic(
   { ssr: false, loading: () => <ChunkFallback /> },
 );
 
+const DrawingSheets = dynamic(
+  () => loadWithin(import("./DrawingSheets").then((m) => m.DrawingSheets)),
+  { ssr: false, loading: () => <ChunkFallback /> },
+);
+
 const ProcurementTab = dynamic(
   () => import("./ProcurementTab").then((m) => m.ProcurementTab),
   {
@@ -70,6 +75,20 @@ type Tab =
   | "ks";
 
 type Msg = ReturnType<typeof t>;
+
+function drawingCards(rows: unknown) {
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row) => {
+    const item = row as { id?: string; code?: string; title?: string; revision?: string; current_rev?: string; current?: boolean };
+    return {
+      id: String(item.id || ""),
+      code: String(item.code || ""),
+      title: String(item.title || ""),
+      revision: String(item.current_rev || item.revision || ""),
+      current: Boolean(item.current_rev || item.current),
+    };
+  });
+}
 
 function tabLabel(id: Tab, m: Msg, pilot: boolean) {
   switch (id) {
@@ -221,7 +240,7 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
   }
 
   return (
-    <div className={pilot ? "min-w-0 max-w-full pb-24 sm:pb-0" : "min-w-0 max-w-full"}>
+    <div className={pilot ? "min-w-0 max-w-full pb-[calc(3rem+env(safe-area-inset-bottom))] sm:pb-0" : "min-w-0 max-w-full"}>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div className="min-w-0">
           <h1 className="text-2xl sm:text-4xl font-medium tracking-tight">{p.title}</h1>
@@ -619,21 +638,16 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
 
       {tab === "draw" && org.drawings ? (
         <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
-          <Bim3dViewer
-            locale={locale}
-            drawings={
-              (bundle.drawings as {
-                id: string;
-                code: string;
-                title: string;
-                revision: string;
-                current: boolean;
-                file?: string;
-              }[]) || []
-            }
-            projectId={p.id}
-            projectTitle={p.title}
-          />
+          {org.bim3d ? (
+            <Bim3dViewer
+              locale={locale}
+              drawings={drawingCards(bundle.drawings)}
+              projectId={p.id}
+              projectTitle={p.title}
+            />
+          ) : (
+            <DrawingSheets locale={locale} projectId={p.id} />
+          )}
         </WidgetBoundary>
       ) : null}
 

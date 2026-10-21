@@ -2725,21 +2725,23 @@ class MemoryStore:
         rfi_count = sum(1 for x in self.rfis.values() if x.project_id == p.id)
         insp_count = sum(1 for x in self.inspections.values() if x.project_id == p.id)
         drawing_count = sum(1 for x in self.drawings.values() if x.project_id == p.id and x.current)
+        from app.company_features import flag_map, project_company_id
         from app.config import demo_mode
 
-        if not demo_mode():
-            if flags is None:
-                from app.company_features import flag_map, project_company_id
+        live_flags = flags if flags is not None else flag_map(project_company_id(p))
+        if live_flags.get("drawings"):
+            from app.drawings import count_current_revisions
 
-                flags = flag_map(project_company_id(p))
-            if not flags.get("rfi"):
+            drawing_count = count_current_revisions(p.id)
+        elif not demo_mode():
+            drawing_count = 0
+        if not demo_mode():
+            if not live_flags.get("rfi"):
                 open_rfi = 0
                 rfi_count = 0
-            if not flags.get("checklists"):
+            if not live_flags.get("checklists"):
                 fail_insp = 0
                 insp_count = 0
-            if not flags.get("drawings"):
-                drawing_count = 0
         health = "green"
         over_budget = isinstance(budget, int) and budget > 0 and actual > budget * 0.85
         if open_inc or fail_insp:

@@ -176,6 +176,12 @@ def _audit(session, company_id: str, key: str, enabled: bool, actor: str, before
     )
 
 
+def legacy_rows_for_company(company_id: str):
+    from app.drawings import legacy_rows_for_company as rows_for_company
+
+    return rows_for_company(company_id)
+
+
 def set_feature(
     company_id: str,
     key: str,
@@ -192,6 +198,7 @@ def set_feature(
         raise HTTPException(status_code=400, detail="Некорректный идентификатор")
     stamp = _now()
     deleted_at = None if enabled else stamp
+    legacy_rows = legacy_rows_for_company(company_id) if key == "drawings" and enabled else None
     with store._sql.factory() as session:
         current = session.scalar(
             select(CompanyFeature).where(CompanyFeature.company_id == company_id, CompanyFeature.key == key)
@@ -215,6 +222,10 @@ def set_feature(
                 session.add(row)
                 session.flush()
                 _audit(session, company_id, key, enabled, actor, False)
+                if legacy_rows is not None:
+                    from app.drawings import import_legacy_drawings
+
+                    import_legacy_drawings(session, company_id, actor, stamp, legacy_rows)
                 session.commit()
             except IntegrityError as exc:
                 session.rollback()
@@ -244,6 +255,10 @@ def set_feature(
             session.rollback()
             raise HTTPException(status_code=409, detail="Изменено другим")
         _audit(session, company_id, key, enabled, actor, before)
+        if legacy_rows is not None:
+            from app.drawings import import_legacy_drawings
+
+            import_legacy_drawings(session, company_id, actor, stamp, legacy_rows)
         session.commit()
         current.enabled = enabled
         current.changed_by = actor

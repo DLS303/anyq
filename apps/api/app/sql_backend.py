@@ -970,8 +970,8 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-# One alembic head. 20261021_0002_marketplace revises 20261021_0003_recipient_status.
-SCHEMA_HEAD = "20261021_0003_price_index"
+# One alembic head. 20261019_0003_pf1a revises 20261021_0003_price_index.
+SCHEMA_HEAD = "20261019_0003_pf1a"
 MIGRATION_LOCK = 21419007
 
 
@@ -1690,6 +1690,10 @@ class SqlRuntime:
             for attr, collection in PERSISTED:
                 bag = getattr(store, attr)
                 if bag.dirty or bag.deleted:
+                    if collection == "drawings" and getattr(store, "_ready", False):
+                        from app.drawings import assert_legacy_mutable
+
+                        assert_legacy_mutable(session, bag)
                     self._flush_dict(session, store, collection, bag)
                     touched.add(collection)
                     allocated.add(collection)
