@@ -15,7 +15,9 @@ export const features = {
   estimateBaseDate: DEMO_MODE,
   land: DEMO_MODE,
   controlPanel: DEMO_MODE,
-  homeStage: DEMO_MODE,
 } as const;
+
+/** Public sign-up. Off until NEXT_PUBLIC_REGISTRATION_ENABLED=1. */
+export const REGISTRATION_ENABLED = process.env.NEXT_PUBLIC_REGISTRATION_ENABLED === "1";
 
 export const DEMO_ONLY_TABS = ["sub", "draw", "ks"] as const;
