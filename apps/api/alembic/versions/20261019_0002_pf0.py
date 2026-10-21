@@ -1,7 +1,7 @@
 """Company feature flags, audit log, and company-key backfill.
 
 Revision ID: 20261019_0002_pf0
-Revises: 20261019_0001b_store_fixes
+Revises: 20261021_0001c_app_role
 Create Date: 2026-10-19
 
 Existing users receive a stored company_key. A BIN that belongs to exactly one
@@ -26,7 +26,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20261019_0002_pf0"
-down_revision = "20261019_0001b_store_fixes"
+down_revision = "20261021_0001c_app_role"
 branch_labels = None
 depends_on = None
 

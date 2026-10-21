@@ -827,7 +827,7 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-SCHEMA_HEAD = "20261021_0001c_app_role"
+SCHEMA_HEAD = "20261019_0002_pf0"
 MIGRATION_LOCK = 21419007
 
 

@@ -272,12 +272,12 @@ docker logs anyq-api --tail 50
 
 Миграция `20261019_0002_pf0` создаёт партиции `audit_log` на октябрь и ноябрь 2026 года, партицию `DEFAULT`, триггер `BEFORE TRUNCATE` на каждой из них и `REVOKE UPDATE, DELETE, TRUNCATE` для роли `anyq_app`, если эта роль уже есть. Следующие месяцы сами не появляются. Строки без своей партиции попадают в `DEFAULT`, и на новой партиции не будет ни триггера, ни `REVOKE`.
 
-Раз в месяц, до начала следующего месяца, на сервере под пользователем `deploy`:
+Раз в месяц, до начала следующего месяца, на сервере под пользователем `deploy`. Скрипт создаёт таблицы, поэтому его запускает сервис `migrate` от роли `anyq`. Роль `anyq_app` не имеет `CREATE` и `TRUNCATE`, и контейнер API этим скриптом пользоваться не может.
 
 ```bash
 cd /opt/anyq
-docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml exec -T api \
-  python scripts/ensure_audit_partition.py
+docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml run --rm --no-deps \
+  migrate python scripts/ensure_audit_partition.py
 ```
 
 Скрипт создаёт партицию текущего месяца и следующего. Границы в UTC (`YYYY-MM-01 00:00:00+00`). На каждую новую партицию ставится `BEFORE TRUNCATE` и, если роль `anyq_app` существует, `REVOKE UPDATE, DELETE, TRUNCATE`. Повторный запуск ничего не ломает.
@@ -287,7 +287,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml exec -T 
 Пример cron на 25-е число, 03:00 по времени сервера:
 
 ```text
-0 3 25 * * cd /opt/anyq && docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml exec -T api python scripts/ensure_audit_partition.py
+0 3 25 * * cd /opt/anyq && docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml run --rm --no-deps migrate python scripts/ensure_audit_partition.py
 ```
 
 ## 11. Что скрипты не делают
