@@ -201,7 +201,7 @@ jobs:
           echo "detail=" >> "$GITHUB_OUTPUT"
 
       - name: Open or close the Demo down issue
-        if: success() || failure() || cancelled()
+        if: success() || failure()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           API_OK: ${{ steps.api.outputs.ok }}
@@ -281,11 +281,18 @@ jobs:
               }
             }
 
-            const failed = [
-              process.env.API_OK === "true" ? "" : process.env.API_DETAIL || "api /healthz",
-              process.env.WEB_OK === "true" ? "" : process.env.WEB_DETAIL || "web /ru",
-              process.env.CONTENT_OK === "true" ? "" : process.env.CONTENT_DETAIL || "content checks",
-            ].filter(Boolean);
+            const checks = [
+              [process.env.API_OK, process.env.API_DETAIL, "api /healthz"],
+              [process.env.WEB_OK, process.env.WEB_DETAIL, "web /ru"],
+              [process.env.CONTENT_OK, process.env.CONTENT_DETAIL, "content checks"],
+            ];
+            const reported = checks.filter(([ok]) => ok === "true" || ok === "false");
+            if (reported.length === 0) {
+              return;
+            }
+            const failed = reported
+              .filter(([ok]) => ok === "false")
+              .map(([, detail, fallback]) => detail || fallback);
 
             const passed = `Checks passed.\n\nRun: ${runUrl}`;
             if (failed.length === 0) {

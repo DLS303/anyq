@@ -39,7 +39,7 @@ When they run:
 
 Alerts are an e-mail and an issue.
 
-The job fails, so GitHub sends its workflow-failure e-mail. The GitHub scheduled workflow goes to whoever last changed the cron (the owner merges it, so alerts go to them). GitHub emails failures to whoever last changed the cron, so the owner should Watch the repo. GitHub disables schedules after 60 days without activity.
+The job fails, so GitHub sends its workflow-failure e-mail. The GitHub scheduled workflow goes to whoever last changed the cron (the owner merges it, so alerts go to them), so the owner should Watch the repo. GitHub disables schedules after 60 days without activity.
 
 The run opens or updates a single issue with the label `demo-alert`, created by `github-actions[bot]`, titled `Demo down`. The workflow finds that issue by the label and the creator. The issue includes the failing check and the run URL. A comment is added when a closed issue is opened again or the failing check changes. On success the workflow closes that issue if it is open.
 
