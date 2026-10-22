@@ -89,8 +89,6 @@ def upgrade() -> None:
         sa.Column("phone_verified_at", sa.String(length=40), nullable=True),
         sa.Column("status", sa.String(length=20), nullable=False),
         sa.Column("full_name", sa.String(length=200), nullable=False),
-        sa.Column("bin", sa.String(length=12), nullable=True),
-        sa.Column("iin", sa.String(length=12), nullable=True),
         sa.CheckConstraint("phone IS NOT NULL OR email IS NOT NULL", name="ck_accounts_contact"),
         sa.CheckConstraint("role IN ('supplier', 'contractor', 'customer')", name="ck_accounts_role"),
         sa.CheckConstraint("account_kind IN ('individual', 'company')", name="ck_accounts_kind"),

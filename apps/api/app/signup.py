@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import logging
 import os
 import re
 import smtplib
@@ -55,7 +54,6 @@ _CODE_TTL = timedelta(minutes=10)
 _MAX_ATTEMPTS = 5
 _SMS_LATER = "Подтверждение по SMS появится позже"
 _VAT_UNSET = "НДС не указан"
-log = logging.getLogger("anyq.mail")
 
 
 class SignupError(Exception):
@@ -99,7 +97,7 @@ def _demo_guard(channel: str, value: str) -> None:
         return
     if channel == "phone":
         raise SignupError(DEMO_PHONE_REJECTION, 422)
-    if not value.endswith(DEMO_EMAIL_SUFFIX):
+    if not value.lower().endswith(DEMO_EMAIL_SUFFIX):
         raise SignupError(DEMO_EMAIL_REJECTION, 422)
 
 
@@ -122,8 +120,6 @@ def hash_code(user_id: str, code: str) -> str:
 
 def deliver_code(email: str, code: str) -> None:
     env = os.getenv("ANYQ_ENV", "development").strip().lower()
-    if env != "production":
-        log.info("signup code for %s: %s", email, code)
     host = os.getenv("SMTP_HOST", "").strip()
     if not host:
         if env == "production":
@@ -232,7 +228,6 @@ def start_signup(
         role=chosen,  # type: ignore[arg-type]
         phone=phone or "",
         company="",
-        company_bin="",
         company_key=legacy_key,
         city="",
         company_id=company_id,
@@ -294,8 +289,6 @@ def start_signup(
                 phone_verified_at=None,
                 status="pending",
                 full_name=name,
-                bin=None,
-                iin=None,
             )
         )
         consent_seq = alloc_seq(session, "consents")
@@ -514,7 +507,6 @@ def profile_of(user: User) -> dict:
         "city": (company.city if company and company.city else "") or "",
         "categories": (company.categories if company and company.categories else "") or "",
         "e_invoice": (company.e_invoice if company and company.e_invoice else "") or "",
-        "bin": (company.bin if company and company.bin else "") or "",
         "vat_included": vat,
         "vat_label": label,
     }
@@ -527,18 +519,11 @@ def update_profile(
     city: str | None = None,
     categories: str | None = None,
     e_invoice: str | None = None,
-    company_bin: str | None = None,
     vat: str | None = None,
 ) -> dict:
     if user.status != "active":
         raise SignupError("Аккаунт не подтверждён", 403)
     company = _company(user.company_id) if user.company_id else None
-    bin_no = None
-    if company_bin is not None:
-        digits = re.sub(r"\D", "", company_bin)
-        if digits and len(digits) != 12:
-            raise SignupError("БИН должен быть из 12 цифр или пустым")
-        bin_no = digits or None
     session = store._sql.factory()
     try:
         record = session.get(Record, ("users", user.id))
@@ -556,8 +541,6 @@ def update_profile(
                     row.categories = categories.strip()[:400] or None
                 if e_invoice is not None:
                     row.e_invoice = e_invoice.strip()[:120] or None
-                if company_bin is not None:
-                    row.bin = bin_no
                 if vat == "unset":
                     row.vat_included = None
                 elif vat == "yes":

@@ -15,12 +15,19 @@ const ROLES = [
   { id: "customer", label: "Заказчик" },
 ] as const;
 
+const KINDS = [
+  { id: "individual", label: "физ. лицо" },
+  { id: "company", label: "юр. лицо" },
+] as const;
+
 type RoleId = (typeof ROLES)[number]["id"];
+type AccountKind = (typeof KINDS)[number]["id"];
 
 export function SignUpWindow({ locale, demo = DEMO_MODE }: { locale: Locale; demo?: boolean }) {
   const router = useRouter();
   const { login } = useAuth();
   const [role, setRole] = useState<RoleId | "">("");
+  const [accountKind, setAccountKind] = useState<AccountKind>("individual");
   const [contact, setContact] = useState("");
   const [name, setName] = useState("");
   const [consent, setConsent] = useState(false);
@@ -54,7 +61,7 @@ export function SignUpWindow({ locale, demo = DEMO_MODE }: { locale: Locale; dem
         role,
         contact: parsed.value,
         full_name: name.trim(),
-        account_kind: "individual",
+        account_kind: accountKind,
         consent_offer_pd: true,
       });
       if (data.channel === "phone") {
@@ -117,6 +124,21 @@ export function SignUpWindow({ locale, demo = DEMO_MODE }: { locale: Locale; dem
         {step === "contact" ? (
           <form className="grid gap-3" onSubmit={submitContact}>
             <DemoBanner show={demo} />
+            <fieldset className="grid grid-cols-2 gap-2">
+              <legend className="mb-1 text-sm text-slate-700">Тип лица</legend>
+              {KINDS.map((item) => (
+                <label key={item.id} className="flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-3 text-sm text-slate-800">
+                  <input
+                    type="radio"
+                    name="account_kind"
+                    value={item.id}
+                    checked={accountKind === item.id}
+                    onChange={() => setAccountKind(item.id)}
+                  />
+                  {item.label}
+                </label>
+              ))}
+            </fieldset>
             <label className="grid gap-1 text-sm text-slate-700">
               Телефон или почта
               <input

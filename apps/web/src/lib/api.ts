@@ -707,7 +707,6 @@ export type SupplierProfileData = {
   city: string;
   categories: string;
   e_invoice: string;
-  bin: string;
   vat_included: boolean | null;
   vat_label: string;
 };
@@ -750,7 +749,6 @@ export function patchProfile(body: {
   city?: string;
   categories?: string;
   e_invoice?: string;
-  company_bin?: string;
   vat?: string;
 }) {
   return request<SupplierProfileData>("/v1/auth/profile", {

@@ -64,7 +64,33 @@ describe("sign-up window", () => {
     expect(screen.queryByRole("button", { name: "Подтвердить" })).toBeNull();
     expect(screen.queryByRole("button", { name: /SMS/ })).toBeNull();
     expect(signupStart).toHaveBeenCalledWith(
-      expect.objectContaining({ role: "supplier", contact: "+77011112233", consent_offer_pd: true }),
+      expect.objectContaining({
+        role: "supplier",
+        contact: "+77011112233",
+        account_kind: "individual",
+        consent_offer_pd: true,
+      }),
+    );
+  });
+
+  it("sends физ. лицо or юр. лицо as account_kind", async () => {
+    signupStart.mockResolvedValue({
+      channel: "email",
+      notice: "",
+      access: "none",
+      status: "pending",
+    });
+    render(createElement(SignUpWindow, { locale: "ru", demo: false }));
+    fireEvent.click(screen.getByRole("button", { name: "Заказчик" }));
+    const individual = screen.getByRole("radio", { name: "физ. лицо" }) as HTMLInputElement;
+    const company = screen.getByRole("radio", { name: "юр. лицо" }) as HTMLInputElement;
+    expect(individual.checked).toBe(true);
+    fireEvent.click(company);
+    typeContact("person@example.com");
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Продолжить" }));
+    expect(signupStart).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "customer", contact: "person@example.com", account_kind: "company" }),
     );
   });
 });

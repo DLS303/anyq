@@ -66,7 +66,6 @@ class ProfileIn(BaseModel):
     city: str | None = None
     categories: str | None = None
     e_invoice: str | None = None
-    company_bin: str | None = None
     vat: str | None = Field(default=None)
 
 
@@ -122,7 +121,6 @@ def patch_profile(body: ProfileIn, user: User = Depends(require_user)):
             city=body.city,
             categories=body.categories,
             e_invoice=body.e_invoice,
-            company_bin=body.company_bin,
             vat=body.vat,
         )
     except SignupError as exc:

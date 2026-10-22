@@ -294,8 +294,6 @@ class AccountRow(Base):
     phone_verified_at: Mapped[str | None] = mapped_column(String(40))
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    bin: Mapped[str | None] = mapped_column(String(12))
-    iin: Mapped[str | None] = mapped_column(String(12))
 
     __table_args__ = (
         ForeignKeyConstraint(["company_id"], ["companies.id"], name="fk_accounts_company_id"),

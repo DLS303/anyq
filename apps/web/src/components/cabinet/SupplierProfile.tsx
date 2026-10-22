@@ -8,7 +8,6 @@ const EMPTY: SupplierProfileData = {
   city: "",
   categories: "",
   e_invoice: "",
-  bin: "",
   vat_included: null,
   vat_label: "НДС не указан",
 };
@@ -44,7 +43,6 @@ export function SupplierProfile() {
         city: profile.city,
         categories: profile.categories,
         e_invoice: profile.e_invoice,
-        company_bin: profile.bin,
         vat,
       });
       setProfile(next);
@@ -55,7 +53,7 @@ export function SupplierProfile() {
     }
   }
 
-  function field(label: string, key: "full_name" | "city" | "categories" | "e_invoice" | "bin") {
+  function field(label: string, key: "full_name" | "city" | "categories" | "e_invoice") {
     return (
       <label className="grid gap-1 text-sm text-slate-700">
         {label}
@@ -77,7 +75,6 @@ export function SupplierProfile() {
       {field("Город", "city")}
       {field("Категории", "categories")}
       {field("Электронная счёт-фактура", "e_invoice")}
-      {field("БИН", "bin")}
       <label className="grid gap-1 text-sm text-slate-700">
         НДС
         <select

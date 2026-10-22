@@ -102,6 +102,16 @@ def test_revision_follows_app_role_without_truncate():
     assert 'COLLATE "C"' in source
     assert "CREATE ROLE" not in source
     assert "TRUNCATE TABLE" not in source
+    assert 'sa.Column("bin"' not in source
+    assert 'sa.Column("iin"' not in source
+
+
+def test_accounts_do_not_store_national_ids():
+    from sqlalchemy import inspect
+
+    columns = {column["name"] for column in inspect(store._sql.engine).get_columns("accounts")}
+    assert "bin" not in columns
+    assert "iin" not in columns
 
 
 def test_roles_create_company_and_do_not_take_the_site_owner_slot(open_signup):
@@ -345,14 +355,43 @@ def test_profile_keeps_vat_unset(open_signup):
     profile = client.get("/v1/auth/profile", headers=headers)
     assert profile.status_code == 200, profile.text
     assert profile.json()["data"]["vat_label"] == "НДС не указан"
+    assert "bin" not in profile.json()["data"]
     saved = client.patch(
         "/v1/auth/profile",
-        json={"city": "Астана", "vat": "unset", "company_bin": ""},
+        json={"city": "Астана", "vat": "unset", "company_bin": "123456789012"},
         headers=headers,
     )
     assert saved.status_code == 200, saved.text
-    assert saved.json()["data"]["city"] == "Астана"
-    assert saved.json()["data"]["vat_included"] is None
+    body = saved.json()["data"]
+    assert "bin" not in body
+    assert body["city"] == "Астана"
+    assert body["vat_included"] is None
+    with store._sql.factory() as session:
+        company = session.get(CompanyRow, confirmed.json()["data"]["user"]["company_id"])
+    assert company is not None and company.bin is None and company.iin is None
+
+
+def test_demo_guard_lowercases_email_before_the_suffix_check(monkeypatch):
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    from app.signup import SignupError, _demo_guard
+
+    _demo_guard("email", "Person@DEMO.SUPERAPP")
+    with pytest.raises(SignupError) as caught:
+        _demo_guard("email", "Person@Example.COM")
+    assert caught.value.status == 422
+
+
+def test_signup_code_is_not_logged(monkeypatch, caplog):
+    import logging
+
+    from app.signup import deliver_code
+
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.setenv("ANYQ_ENV", "development")
+    secret = "135790"
+    with caplog.at_level(logging.DEBUG):
+        deliver_code("person@example.com", secret)
+    assert secret not in caplog.text
 
 
 def test_production_refuses_stub_code(tmp_path):
