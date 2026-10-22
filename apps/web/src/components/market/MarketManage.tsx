@@ -9,7 +9,18 @@ import type { Locale } from "@/lib/types";
 
 const UNITS = ["м", "м²", "т", "шт", "уп"];
 
-const empty = {
+type ManageForm = {
+  name: string;
+  category: string;
+  unit: string;
+  price_tiyn: string;
+  source: string;
+  city: string;
+  stock: string;
+  lead_days: string;
+};
+
+const empty: ManageForm = {
   name: "",
   category: CATEGORY_TITLES[0],
   unit: "шт",
@@ -30,7 +41,7 @@ export function MarketManage({ locale }: { locale: Locale }) {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
 
-  function field<K extends keyof typeof empty>(key: K, value: string) {
+  function field<K extends keyof ManageForm>(key: K, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
