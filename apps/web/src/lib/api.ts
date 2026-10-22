@@ -700,6 +700,7 @@ export type SignupResult = {
   role: string;
   account_kind: string;
   notice: string;
+  demo_stub?: boolean;
 };
 
 export type SupplierProfileData = {

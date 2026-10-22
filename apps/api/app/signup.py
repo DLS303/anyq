@@ -1,11 +1,12 @@
-"""Three-step sign-up: role, phone or email, then an email code.
+"""Three-step sign-up: role, phone or email, then a code.
 
-Phone numbers are not verified. The account stays pending with access `none`
-(no session, protected routes see nothing). Login by phone matches only a
-row whose phone_verified_at is set, so an unverified number does not block
-a later verified owner.
+Outside demo mode a phone stays pending. Live SMS is disabled, so no provider
+is called and no code is issued. Demo mode verifies a phone with a fixed stub
+code that the screen shows; that code is not written to a log. Email in demo
+mode still has to end with @demo.superapp.
 
-Demo mode accepts only @demo.superapp and never stores a phone.
+Login by phone matches only a row whose phone_verified_at is set, so an
+unverified number does not block a later verified owner.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from app.authutil import load_secret, make_token, verify_password
 from app.config import (
     DEMO_EMAIL_REJECTION,
     DEMO_EMAIL_SUFFIX,
-    DEMO_PHONE_REJECTION,
     demo_mode,
     refuse_stub_code_in_production,
 )
@@ -53,7 +53,9 @@ _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _CODE_TTL = timedelta(minutes=10)
 _MAX_ATTEMPTS = 5
 _SMS_LATER = "Подтверждение по SMS появится позже"
+_DEMO_PHONE_NOTICE = "Демо: SMS не отправляется. Введите код с экрана"
 _VAT_UNSET = "НДС не указан"
+DEMO_PHONE_STUB_CODE = "000000"
 
 
 class SignupError(Exception):
@@ -92,11 +94,19 @@ def parse_contact(raw: str) -> tuple[str, str]:
     return "phone", phone
 
 
+def demo_phone_verification() -> bool:
+    """Fixed on-screen code. Off in production, and off when demo mode is off."""
+    if not demo_mode():
+        return False
+    env = os.getenv("ANYQ_ENV", "development").strip().lower()
+    return env != "production"
+
+
 def _demo_guard(channel: str, value: str) -> None:
     if not demo_mode():
         return
     if channel == "phone":
-        raise SignupError(DEMO_PHONE_REJECTION, 422)
+        return
     if not value.lower().endswith(DEMO_EMAIL_SUFFIX):
         raise SignupError(DEMO_EMAIL_REJECTION, 422)
 
@@ -189,6 +199,8 @@ def start_signup(
     kind = _kind(account_kind)
     channel, value = parse_contact(contact)
     _demo_guard(channel, value)
+    if channel == "phone" and demo_mode() and not demo_phone_verification():
+        raise SignupError(_SMS_LATER)
     name = (full_name or "").strip()[:200]
     if not consent:
         raise SignupError("Нужно согласие на обработку персональных данных")
@@ -198,7 +210,8 @@ def start_signup(
         raise SignupError("Слишком много попыток. Повторите через 10 минут", 429) from exc
 
     email = value if channel == "email" else None
-    phone = None if channel == "email" or demo_mode() else value
+    phone = value if channel == "phone" else None
+    demo_stub = channel == "phone" and demo_phone_verification()
     if email and store.get_user_by_email(email):
         raise SignupError("Такой email уже зарегистрирован", 409)
     with store._sql.factory() as session:
@@ -216,7 +229,12 @@ def start_signup(
             if verified:
                 raise SignupError("Этот телефон уже зарегистрирован", 409)
 
-    code = issue_code() if channel == "email" else ""
+    if channel == "email":
+        code = issue_code()
+    elif demo_stub:
+        code = DEMO_PHONE_STUB_CODE
+    else:
+        code = ""
     uid = f"u-{uuid4().hex[:8]}"
     company_id = str(uuid4())
     legacy_key = f"user:{uid}"
@@ -295,7 +313,7 @@ def start_signup(
         event = consent_event_from_record(consent_row, legacy_key)
         event.seq = consent_seq
         session.add(event)
-        if channel == "email":
+        if code:
             expires = (signup_now() + _CODE_TTL).replace(microsecond=0).isoformat()
             session.add(
                 SignupCodeRow(
@@ -328,6 +346,12 @@ def start_signup(
     signup_limiter.record_failure(value, ip)
     if channel == "email":
         deliver_code(email or "", code)
+    if demo_stub:
+        notice = _DEMO_PHONE_NOTICE
+    elif channel == "phone":
+        notice = _SMS_LATER
+    else:
+        notice = ""
     return {
         "status": "pending",
         "channel": channel,
@@ -336,7 +360,8 @@ def start_signup(
         "company_id": company_id,
         "role": chosen,
         "account_kind": kind,
-        "notice": _SMS_LATER if channel == "phone" else "",
+        "demo_stub": demo_stub,
+        "notice": notice,
     }
 
 
@@ -349,9 +374,10 @@ def _parse_expiry(value: str) -> datetime:
 
 def confirm_signup(*, contact: str, code: str, ip: str = "") -> dict:
     channel, value = parse_contact(contact)
-    if channel == "phone":
+    if channel == "phone" and not demo_phone_verification():
         raise SignupError(_SMS_LATER)
-    _demo_guard(channel, value)
+    if channel == "email":
+        _demo_guard(channel, value)
     digits = re.sub(r"\D", "", code or "")
     if len(digits) != 6:
         raise SignupError("Неверный код")
@@ -367,7 +393,14 @@ def confirm_signup(*, contact: str, code: str, ip: str = "") -> dict:
     user_seq = 0
     session = store._sql.factory()
     try:
-        account = session.scalar(select(AccountRow).where(AccountRow.email == value).limit(1))
+        if channel == "email":
+            account = session.scalar(select(AccountRow).where(AccountRow.email == value).limit(1))
+        else:
+            account = session.scalar(
+                select(AccountRow)
+                .where(AccountRow.phone == value, AccountRow.status == "pending")
+                .limit(1)
+            )
         row = None
         if account is None or account.status != "pending":
             count_failure = True
@@ -404,6 +437,10 @@ def confirm_signup(*, contact: str, code: str, ip: str = "") -> dict:
                 else:
                     payload = dict(record.payload or {})
                     payload["status"] = "active"
+                    if channel == "phone":
+                        verified_at = signup_now().replace(microsecond=0).isoformat()
+                        payload["phone_verified_at"] = verified_at
+                        account.phone_verified_at = verified_at
                     fields = index_values(store, "users", account.user_id, payload)
                     record.payload = payload
                     record.row_version = int(record.row_version or 1) + 1
@@ -433,7 +470,8 @@ def confirm_signup(*, contact: str, code: str, ip: str = "") -> dict:
         local.suspend = True
         try:
             store.users_by_id.adopt(user.id, user, version, user_seq)
-            store.users.adopt(user.email.lower(), user, version, user_seq)
+            if user.email:
+                store.users.adopt(user.email.lower(), user, version, user_seq)
             store._mark_synced({"users"}, store._sql.revisions())
         finally:
             local.suspend = False

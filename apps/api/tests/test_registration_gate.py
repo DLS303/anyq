@@ -1,9 +1,13 @@
-"""Registration stays closed unless REGISTRATION_ENABLED is set, and demo mode keeps phones out."""
+"""Registration stays closed unless REGISTRATION_ENABLED is set.
+
+The older register route still drops a phone in demo mode. Sign-up by phone uses
+the demo stub code instead.
+"""
 
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select, text
+from sqlalchemy import String, cast, func, select
 
 from app.main import app
 from app.sql_backend import AccountRow, Record
@@ -53,8 +57,9 @@ def _phone_saved(phone: str) -> int:
     with store._sql.factory() as session:
         return int(
             session.scalar(
-                text("SELECT count(*) FROM records WHERE collection = 'users' AND payload LIKE :phone"),
-                {"phone": f"%{phone}%"},
+                select(func.count())
+                .select_from(Record)
+                .where(Record.collection == "users", cast(Record.payload, String).contains(phone))
             )
             or 0
         )
@@ -91,14 +96,18 @@ def test_demo_register_accepts_only_demo_email_and_drops_the_phone(monkeypatch):
     assert _phone_saved(phone) == 0
 
 
-def test_demo_signup_rejects_phone_and_foreign_email(monkeypatch):
+def test_demo_signup_accepts_a_phone_stub_and_rejects_a_foreign_email(monkeypatch):
     monkeypatch.setenv("REGISTRATION_ENABLED", "1")
     monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    monkeypatch.setenv("ANYQ_ENV", "development")
     before = _users()
-    phone = _signup("+77017778899")
     foreign = _signup(f"real-{uuid4().hex[:8]}@example.com")
-    assert phone.status_code == 422
-    assert "телефон" in phone.json()["detail"].lower()
     assert foreign.status_code == 422
     assert "@demo.superapp" in foreign.json()["detail"]
     assert _users() == before
+    phone = _signup("+7701" + f"{uuid4().int % 10_000_000:07d}")
+    assert phone.status_code == 200, phone.text
+    assert phone.json()["data"]["demo_stub"] is True
+    assert phone.json()["data"]["channel"] == "phone"
+    assert "000000" not in phone.json()["data"]["notice"]
+    assert _users() == before + 1

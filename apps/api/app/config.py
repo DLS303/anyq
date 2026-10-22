@@ -15,7 +15,6 @@ def registration_enabled() -> bool:
 
 DEMO_EMAIL_SUFFIX = "@demo.superapp"
 DEMO_EMAIL_REJECTION = "В демо-версии регистрация только для адресов @demo.superapp"
-DEMO_PHONE_REJECTION = "В демо-версии телефон не сохраняется. Укажите почту @demo.superapp"
 
 
 def refuse_stub_code_in_production() -> None:

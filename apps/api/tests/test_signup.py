@@ -327,14 +327,16 @@ def test_supplier_inbox_is_limited_to_recipient_rows(open_signup):
     assert denied.status_code == 403
 
 
-def test_demo_mode_accepts_only_demo_email(monkeypatch):
+def test_demo_mode_accepts_demo_email_and_a_phone_stub(monkeypatch, caplog):
+    import logging
+
+    from app.signup import DEMO_PHONE_STUB_CODE
+
     monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    monkeypatch.setenv("ANYQ_ENV", "development")
     monkeypatch.setenv("SIGNUP_STUB_CODE", STUB)
     before = _count(AccountRow)
-    phone = _start("customer", _phone())
     foreign = _start("customer", _email())
-    assert phone.status_code == 422
-    assert "телефон" in phone.json()["detail"].lower()
     assert foreign.status_code == 422
     assert "@demo.superapp" in foreign.json()["detail"]
     assert _count(AccountRow) == before
@@ -344,6 +346,37 @@ def test_demo_mode_accepts_only_demo_email(monkeypatch):
     with store._sql.factory() as session:
         account = session.get(AccountRow, created.json()["data"]["user_id"])
     assert account is not None and account.phone is None and account.email == contact
+
+    phone = "+77015550123"
+    with caplog.at_level(logging.DEBUG):
+        started = _start("customer", phone)
+    assert started.status_code == 200, started.text
+    body = started.json()["data"]
+    assert body["channel"] == "phone"
+    assert body["demo_stub"] is True
+    assert body["access"] == "none"
+    assert DEMO_PHONE_STUB_CODE not in body["notice"]
+    assert "code" not in body
+    assert DEMO_PHONE_STUB_CODE not in caplog.text
+    with store._sql.factory() as session:
+        account = session.get(AccountRow, body["user_id"])
+        saved = session.scalar(select(SignupCodeRow).where(SignupCodeRow.user_id == body["user_id"]))
+    assert account is not None and account.phone == phone and account.email is None
+    assert account.phone_verified_at is None and account.status == "pending"
+    assert saved is not None and saved.code_hash == hash_code(body["user_id"], DEMO_PHONE_STUB_CODE)
+    assert saved.code_hash != DEMO_PHONE_STUB_CODE
+    wrong = _confirm(phone, "111111")
+    assert wrong.status_code == 400
+    confirmed = _confirm(phone, DEMO_PHONE_STUB_CODE)
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["data"]["status"] == "active"
+    assert confirmed.json()["data"]["user"]["phone"] == phone
+    me = client.get("/v1/auth/me", headers=_auth(confirmed.json()["data"]["token"]))
+    assert me.status_code == 200, me.text
+    with store._sql.factory() as session:
+        account = session.get(AccountRow, body["user_id"])
+        assert account is not None and account.status == "active" and account.phone_verified_at
+        assert session.scalar(select(SignupCodeRow).where(SignupCodeRow.user_id == body["user_id"])) is None
 
 
 def test_profile_keeps_vat_unset(open_signup):
@@ -376,9 +409,57 @@ def test_demo_guard_lowercases_email_before_the_suffix_check(monkeypatch):
     from app.signup import SignupError, _demo_guard
 
     _demo_guard("email", "Person@DEMO.SUPERAPP")
+    _demo_guard("phone", "+77010000000")
     with pytest.raises(SignupError) as caught:
         _demo_guard("email", "Person@Example.COM")
     assert caught.value.status == 422
+
+
+def test_phone_stub_stays_off_outside_demo(open_signup):
+    from app.signup import DEMO_PHONE_STUB_CODE
+
+    phone = _phone()
+    started = _start("supplier", phone)
+    assert started.status_code == 200, started.text
+    assert started.json()["data"]["demo_stub"] is False
+    assert started.json()["data"]["notice"] == "Подтверждение по SMS появится позже"
+    assert DEMO_PHONE_STUB_CODE not in started.json()["data"]["notice"]
+    denied = _confirm(phone, DEMO_PHONE_STUB_CODE)
+    assert denied.status_code == 400
+    assert "SMS" in denied.json()["detail"]
+    with store._sql.factory() as session:
+        account = session.get(AccountRow, started.json()["data"]["user_id"])
+        assert account is not None and account.phone == phone and account.phone_verified_at is None
+        assert session.scalar(select(SignupCodeRow).where(SignupCodeRow.user_id == account.user_id)) is None
+
+
+def test_production_demo_does_not_keep_a_phone_or_a_stub(monkeypatch):
+    from app.signup import DEMO_PHONE_STUB_CODE
+
+    monkeypatch.setenv("ANYQ_ENV", "production")
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    monkeypatch.setenv("REGISTRATION_ENABLED", "1")
+    before = _count(AccountRow)
+    started = _start("customer", _phone())
+    assert started.status_code == 400
+    assert started.json()["detail"] == "Подтверждение по SMS появится позже"
+    assert DEMO_PHONE_STUB_CODE not in started.text
+    assert _count(AccountRow) == before
+
+
+def test_sms_adapter_is_disabled_and_does_not_log_a_code(caplog):
+    import logging
+
+    from app.sms import DisabledSmsAdapter, live_sms_enabled, sms_adapter
+
+    assert live_sms_enabled() is False
+    adapter = sms_adapter()
+    assert isinstance(adapter, DisabledSmsAdapter)
+    secret = "246813"
+    with caplog.at_level(logging.DEBUG), pytest.raises(RuntimeError) as caught:
+        adapter.send_code("+77010000000", secret)
+    assert secret not in str(caught.value)
+    assert secret not in caplog.text
 
 
 def test_signup_code_is_not_logged(monkeypatch, caplog):

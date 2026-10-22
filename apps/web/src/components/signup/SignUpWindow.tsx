@@ -6,7 +6,7 @@ import { DemoBanner } from "@/components/signup/DemoBanner";
 import { signupConfirm, signupStart } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { DEMO_MODE } from "@/lib/features";
-import { SMS_LATER, demoContactError, detectContact } from "@/lib/signupContact";
+import { DEMO_PHONE_STUB_TEXT, SMS_LATER, demoContactError, detectContact } from "@/lib/signupContact";
 import type { Locale } from "@/lib/types";
 
 const ROLES = [
@@ -35,6 +35,7 @@ export function SignUpWindow({ locale, demo = DEMO_MODE }: { locale: Locale; dem
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [demoStub, setDemoStub] = useState(false);
   const [step, setStep] = useState<"role" | "contact" | "code" | "phone">("role");
 
   async function submitContact(event: React.FormEvent) {
@@ -64,11 +65,18 @@ export function SignUpWindow({ locale, demo = DEMO_MODE }: { locale: Locale; dem
         account_kind: accountKind,
         consent_offer_pd: true,
       });
+      if (data.channel === "phone" && data.demo_stub) {
+        setDemoStub(true);
+        setStep("code");
+        return;
+      }
       if (data.channel === "phone") {
+        setDemoStub(false);
         setNotice(data.notice || SMS_LATER);
         setStep("phone");
         return;
       }
+      setDemoStub(false);
       setStep("code");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать аккаунт");
@@ -84,7 +92,7 @@ export function SignUpWindow({ locale, demo = DEMO_MODE }: { locale: Locale; dem
     setBusy(true);
     try {
       const parsed = detectContact(contact);
-      if (parsed.channel !== "email") {
+      if (parsed.channel === "invalid" || (parsed.channel === "phone" && !demoStub)) {
         setError(SMS_LATER);
         return;
       }
@@ -178,15 +186,16 @@ export function SignUpWindow({ locale, demo = DEMO_MODE }: { locale: Locale; dem
         {step === "code" ? (
           <form className="grid gap-3" onSubmit={submitCode}>
             <DemoBanner show={demo} />
+            {demoStub ? <p className="text-sm text-slate-800">{DEMO_PHONE_STUB_TEXT}</p> : null}
             <label className="grid gap-1 text-sm text-slate-700">
-              Код из письма
+              {demoStub ? "Код подтверждения" : "Код из письма"}
               <input
                 className="rounded-xl border border-slate-300 px-3 py-3 text-base tracking-widest"
                 value={code}
                 onChange={(event) => setCode(event.target.value)}
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                aria-label="Код из письма"
+                aria-label={demoStub ? "Код подтверждения" : "Код из письма"}
               />
             </label>
             {error ? <p className="text-sm text-rose-700">{error}</p> : null}

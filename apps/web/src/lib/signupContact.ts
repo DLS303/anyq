@@ -2,7 +2,8 @@ export const DEMO_BANNER_TEXT =
   "Демо-версия: данные могут быть сброшены, не вводите настоящие персональные данные";
 export const SMS_LATER = "Подтверждение по SMS появится позже";
 export const DEMO_EMAIL_ERROR = "В демо-версии регистрация только для адресов @demo.superapp";
-export const DEMO_PHONE_ERROR = "В демо-версии телефон не сохраняется. Укажите почту @demo.superapp";
+export const DEMO_PHONE_STUB_CODE = "000000";
+export const DEMO_PHONE_STUB_TEXT = `Демо: SMS не отправляется. Код подтверждения ${DEMO_PHONE_STUB_CODE}`;
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -33,8 +34,7 @@ export function detectContact(raw: string): Contact {
 }
 
 export function demoContactError(contact: Contact, demo: boolean): string | null {
-  if (!demo || contact.channel === "invalid") return null;
-  if (contact.channel === "phone") return DEMO_PHONE_ERROR;
+  if (!demo || contact.channel === "invalid" || contact.channel === "phone") return null;
   if (!contact.value.endsWith("@demo.superapp")) return DEMO_EMAIL_ERROR;
   return null;
 }

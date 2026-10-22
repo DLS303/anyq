@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEMO_BANNER_TEXT, SMS_LATER } from "@/lib/signupContact";
+import { DEMO_BANNER_TEXT, DEMO_PHONE_STUB_CODE, DEMO_PHONE_STUB_TEXT, SMS_LATER } from "@/lib/signupContact";
 import { SignUpWindow } from "./SignUpWindow";
 
 const signupStart = vi.fn();
@@ -25,7 +25,15 @@ function typeContact(value: string) {
 }
 
 describe("sign-up window", () => {
-  it("shows the demo banner on each step and refuses a phone", () => {
+  it("shows the demo banner and confirms a phone with the stub code", async () => {
+    signupStart.mockResolvedValue({
+      channel: "phone",
+      demo_stub: true,
+      notice: "Демо: SMS не отправляется. Введите код с экрана",
+      access: "none",
+      status: "pending",
+    });
+    signupConfirm.mockResolvedValue({ user: { id: "u-demo" }, token: "t", status: "active" });
     render(createElement(SignUpWindow, { locale: "ru", demo: true }));
     expect(screen.getByText(DEMO_BANNER_TEXT)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Исполнитель услуг" }));
@@ -33,9 +41,14 @@ describe("sign-up window", () => {
     typeContact("+77011112233");
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "Продолжить" }));
-    expect(signupStart).not.toHaveBeenCalled();
-    expect(screen.getByText(/телефон не сохраняется/)).toBeTruthy();
+    expect(await screen.findByText(DEMO_PHONE_STUB_TEXT)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /SMS/ })).toBeNull();
+    fireEvent.change(screen.getByLabelText("Код подтверждения"), { target: { value: DEMO_PHONE_STUB_CODE } });
+    fireEvent.click(screen.getByRole("button", { name: "Подтвердить" }));
+    expect(signupConfirm).toHaveBeenCalledWith("+77011112233", DEMO_PHONE_STUB_CODE);
+    expect(signupStart).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "contractor", contact: "+77011112233", consent_offer_pd: true }),
+    );
   });
 
   it("refuses a non-demo email before calling the server", () => {
