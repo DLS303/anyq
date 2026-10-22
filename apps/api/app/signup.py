@@ -29,6 +29,7 @@ from app.config import (
     DEMO_EMAIL_SUFFIX,
     demo_mode,
     refuse_stub_code_in_production,
+    registration_enabled,
 )
 from app.legal import PD_VERSION, pd_sha256, privacy_document
 from app.permissions import PHONE_PENDING_ACCESS, SIGNUP_ROLES
@@ -52,6 +53,7 @@ from app.store import store
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _CODE_TTL = timedelta(minutes=10)
 _MAX_ATTEMPTS = 5
+REGISTRATION_CLOSED = "Регистрация недоступна"
 _SMS_LATER = "Подтверждение по SMS появится позже"
 _DEMO_PHONE_NOTICE = "Демо: SMS не отправляется. Введите код с экрана"
 _VAT_UNSET = "НДС не указан"
@@ -66,6 +68,12 @@ class SignupError(Exception):
 
 def signup_now() -> datetime:
     return datetime.now(UTC)
+
+
+def ensure_signup_open() -> None:
+    """Closed registration answers before contact, role, or code checks."""
+    if not registration_enabled():
+        raise SignupError(REGISTRATION_CLOSED, 403)
 
 
 def normalize_phone(raw: str) -> str | None:
@@ -195,6 +203,7 @@ def start_signup(
     ip: str = "",
     user_agent: str = "",
 ) -> dict:
+    ensure_signup_open()
     chosen = _role(role)
     kind = _kind(account_kind)
     channel, value = parse_contact(contact)
@@ -373,6 +382,7 @@ def _parse_expiry(value: str) -> datetime:
 
 
 def confirm_signup(*, contact: str, code: str, ip: str = "") -> dict:
+    ensure_signup_open()
     channel, value = parse_contact(contact)
     if channel == "phone" and not demo_phone_verification():
         raise SignupError(_SMS_LATER)

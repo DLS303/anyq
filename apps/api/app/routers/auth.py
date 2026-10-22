@@ -9,6 +9,7 @@ from app.legal import consent_documents
 from app.ratelimit import RateLimited, login_limiter
 from app.schemas import CrossBorderConsentBody, LoginBody, RegisterBody, User
 from app.signup import (
+    REGISTRATION_CLOSED,
     SignupError,
     confirm_signup,
     login_by_phone,
@@ -18,12 +19,10 @@ from app.signup import (
 )
 from app.store import ConsentRequired, DemoRegistrationError, store
 
-_REGISTRATION_CLOSED = "Регистрация недоступна"
-
 
 def _require_registration() -> None:
     if not registration_enabled():
-        raise HTTPException(status_code=403, detail=_REGISTRATION_CLOSED)
+        raise HTTPException(status_code=403, detail=REGISTRATION_CLOSED)
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -90,6 +89,7 @@ def signup(body: SignupIn, request: Request):
 
 @router.post("/signup/confirm")
 def signup_confirm(body: SignupConfirmIn, request: Request):
+    _require_registration()
     ip, _ua = _client_meta(request)
     try:
         data = confirm_signup(contact=body.contact, code=body.code, ip=ip)

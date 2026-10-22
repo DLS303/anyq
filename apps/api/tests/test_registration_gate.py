@@ -82,6 +82,42 @@ def test_registration_disabled_blocks_register_and_code_send(monkeypatch):
         assert int(session.scalar(select(func.count()).select_from(AccountRow)) or 0) == before_accounts
 
 
+def test_closed_production_signup_rejects_an_external_email_before_validation(monkeypatch):
+    monkeypatch.setenv("ANYQ_ENV", "production")
+    monkeypatch.setenv("REGISTRATION_ENABLED", "")
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "")
+    before = _users()
+    with store._sql.factory() as session:
+        before_accounts = int(session.scalar(select(func.count()).select_from(AccountRow)) or 0)
+    sent = _signup("person@example.com")
+    confirmed = client.post(
+        "/v1/auth/signup/confirm",
+        json={"contact": "person@example.com", "code": "123456"},
+    )
+    assert sent.status_code == 403
+    assert confirmed.status_code == 403
+    assert sent.json()["detail"] == _CLOSED
+    assert confirmed.json()["detail"] == _CLOSED
+    assert "@demo.superapp" not in sent.text
+    assert "@demo.superapp" not in confirmed.text
+    assert _users() == before
+    with store._sql.factory() as session:
+        assert int(session.scalar(select(func.count()).select_from(AccountRow)) or 0) == before_accounts
+
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    demo_sent = _signup("person@example.com")
+    demo_confirmed = client.post(
+        "/v1/auth/signup/confirm",
+        json={"contact": "person@example.com", "code": "123456"},
+    )
+    assert demo_sent.status_code == 403
+    assert demo_confirmed.status_code == 403
+    assert demo_sent.json()["detail"] == _CLOSED
+    assert demo_confirmed.json()["detail"] == _CLOSED
+    assert "@demo.superapp" not in demo_confirmed.text
+    assert _users() == before
+
+
 def test_demo_register_accepts_only_demo_email_and_drops_the_phone(monkeypatch):
     monkeypatch.setenv("REGISTRATION_ENABLED", "1")
     monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
