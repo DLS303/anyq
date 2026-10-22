@@ -102,7 +102,7 @@ def _cities_with_a_market(as_of: date) -> set[tuple[str, str]]:
         if row.get("vat_included"):
             incl = int(row["price_tiyn"])
         else:
-            incl = int(round(row["price_tiyn"] * (100 + (rate or 16)) / 100))
+            incl = round(row["price_tiyn"] * (100 + (rate or 16)) / 100)
         grouped.setdefault((row["item_id"], row.get("city") or ""), []).append((row["company_id"], incl))
     ready: set[tuple[str, str]] = set()
     for key, points in grouped.items():
@@ -465,14 +465,134 @@ def test_ranking_source_has_no_paid_term():
     assert "CREATE TRIGGER" not in (root / "marketplace_service.py").read_text(encoding="utf-8")
 
 
+def test_ranking_cannot_be_bought():
+    """A paid query or a paid field on an item does not change catalog order."""
+
+    from sqlalchemy import select
+
+    from app.marketplace_models import CatalogItem, SupplierRating
+
+    session = store._sql.factory()
+    try:
+        ratings = {row.company_id: float(row.rating) for row in session.scalars(select(SupplierRating))}
+        prices = {row.id: int(row.price_tiyn) for row in session.scalars(select(CatalogItem))}
+    finally:
+        session.close()
+
+    params = {"category": "Металлопрокат", "limit": 100}
+    plain = client.get("/v1/market/catalog", params=params)
+    paid = client.get("/v1/market/catalog", params={**params, "boost": "1", "sponsored": "1", "paid": "1"})
+    assert plain.status_code == 200, plain.text
+    assert paid.status_code == 200, paid.text
+    rows = plain.json()["data"]
+    assert len(rows) >= 2
+    assert [row["id"] for row in rows] == [row["id"] for row in paid.json()["data"]]
+
+    def sort_key(card: dict) -> tuple:
+        rating = ratings.get(card["supplier_id"], NEUTRAL_RATING)
+        price = prices[card["id"]]
+        blend = 0.55 * (rating / 5.0) + 0.45 * (1.0 / (1.0 + price / 1_000_000.0))
+        return (-blend, price, card["id"])
+
+    assert [row["id"] for row in rows] == [row["id"] for row in sorted(rows, key=sort_key)]
+    for card in rows:
+        assert "boost" not in card
+        assert "sponsored" not in card
+
+    created = client.post(
+        "/v1/market/my/items",
+        headers=_token("u-msup-8"),
+        json={
+            "name": "Позиция без оплаты места",
+            "category": "Металлопрокат",
+            "unit": "м",
+            "price_tiyn": 999_999_999,
+            "source": "fixtures/demo_price.pdf",
+            "city": "Алматы",
+            "boost": 1_000_000,
+            "sponsored": True,
+        },
+    )
+    assert created.status_code == 200, created.text
+    item_id = created.json()["data"]["id"]
+    prices[item_id] = 999_999_999
+    again = client.get("/v1/market/catalog", params=params)
+    ordered = again.json()["data"]
+    assert ordered[0]["id"] != item_id
+    assert [row["id"] for row in ordered] == [row["id"] for row in sorted(ordered, key=sort_key)]
+    session = store._sql.factory()
+    try:
+        row = session.get(CatalogItem, item_id)
+        if row is not None:
+            session.delete(row)
+            session.commit()
+    finally:
+        session.close()
+
+
+def test_demo_seed_is_idempotent():
+    from sqlalchemy import func, select
+
+    from app.marketplace_models import (
+        CatalogItem,
+        Deal,
+        PriceIndexDaily,
+        PriceObservation,
+        SupplierProfile,
+        SupplierReview,
+    )
+    from app.marketplace_seed import seed_marketplace
+    from app.sql_backend import RequestRecipient
+
+    def counts() -> dict[str, int]:
+        session = store._sql.factory()
+        try:
+            tables = {
+                "suppliers": SupplierProfile,
+                "catalog": CatalogItem,
+                "observations": PriceObservation,
+                "deals": Deal,
+                "reviews": SupplierReview,
+                "recipients": RequestRecipient,
+                "index": PriceIndexDaily,
+            }
+            return {
+                name: int(session.scalar(select(func.count()).select_from(model)) or 0)
+                for name, model in tables.items()
+            }
+        finally:
+            session.close()
+
+    before = counts()
+    users = len(store.users_by_id)
+    seed_marketplace(store._sql.factory, store)
+    seed_marketplace(store._sql.factory, store)
+    assert counts() == before
+    assert len(store.users_by_id) == users
+    expected = (
+        (SupplierProfile.company_id, [row["id"] for row in FIXTURE["suppliers"]]),
+        (CatalogItem.id, [row["id"] for row in FIXTURE["catalog"]]),
+        (PriceObservation.id, [row["id"] for row in FIXTURE["price_observations"]]),
+        (Deal.id, [row["id"] for row in FIXTURE["deals"]]),
+    )
+    session = store._sql.factory()
+    try:
+        for column, ids in expected:
+            found = set(session.scalars(select(column).where(column.in_(ids))))
+            assert found == set(ids)
+    finally:
+        session.close()
+
+
 def test_observations_are_append_only(tmp_path):
     import os
 
     import pytest
-    from alembic import command
     from alembic.config import Config
     from sqlalchemy import create_engine, text
     from sqlalchemy.exc import DatabaseError
+
+    from alembic import command
 
     previous = os.environ.get("DATABASE_URL")
     url = "sqlite:///" + (tmp_path / "obs.sqlite").as_posix()
@@ -503,9 +623,8 @@ def test_observations_are_append_only(tmp_path):
             "UPDATE price_observations SET price_tiyn = 1 WHERE id = 'obs-t'",
             "DELETE FROM price_observations WHERE id = 'obs-t'",
         ):
-            with pytest.raises(DatabaseError, match="append-only"):
-                with engine.begin() as conn:
-                    conn.execute(text(statement))
+            with pytest.raises(DatabaseError, match="append-only"), engine.begin() as conn:
+                conn.execute(text(statement))
         with engine.begin() as conn:
             price = conn.execute(text("SELECT price_tiyn FROM price_observations WHERE id = 'obs-t'")).scalar_one()
         assert price == 100

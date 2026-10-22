@@ -35,7 +35,7 @@ def incl_tiyn(price_tiyn: int, vat_included: bool, vat_rate: int) -> int:
     if vat_included:
         return int(price_tiyn)
     rate = vat_rate if vat_rate > 0 else VAT_COMPARE
-    return int(round(price_tiyn * (100 + rate) / 100))
+    return round(price_tiyn * (100 + rate) / 100)
 
 
 def excl_tiyn(price_tiyn: int, vat_included: bool, vat_rate: int) -> int:
@@ -44,13 +44,13 @@ def excl_tiyn(price_tiyn: int, vat_included: bool, vat_rate: int) -> int:
     if not vat_included:
         return int(price_tiyn)
     rate = vat_rate if vat_rate > 0 else VAT_COMPARE
-    return int(round(price_tiyn * 100 / (100 + rate)))
+    return round(price_tiyn * 100 / (100 + rate))
 
 
 def median_tiyn(values: list[int]) -> int | None:
     if len(values) < MIN_POINTS:
         return None
-    return int(round(statistics.median(values)))
+    return round(statistics.median(values))
 
 
 def in_window(observed_on: str, as_of: date) -> bool:
@@ -131,7 +131,7 @@ def _percentile(values: list[int], pct: float) -> int:
     if low == high:
         return ordered[low]
     weight = rank - low
-    return int(round(ordered[low] * (1 - weight) + ordered[high] * weight))
+    return round(ordered[low] * (1 - weight) + ordered[high] * weight)
 
 
 def _point_incl(point: PricePoint) -> int:
@@ -144,7 +144,7 @@ def without_suspicious(points: list[PricePoint]) -> list[PricePoint]:
     if len(points) < MIN_POINTS:
         return list(points)
     values = [_point_incl(point) for point in points]
-    median = int(round(statistics.median(values)))
+    median = round(statistics.median(values))
     return [point for point, value in zip(points, values) if value >= median * SUSPICIOUS_RATIO]
 
 
@@ -160,7 +160,7 @@ def summarize(points: list[PricePoint]) -> IndexSnapshot:
     if len(suppliers) < MIN_SUPPLIERS:
         return IndexSnapshot(None, None, None, len(kept), len(suppliers))
     values = [_point_incl(point) for point in kept]
-    median = int(round(statistics.median(values)))
+    median = round(statistics.median(values))
     low = min(_percentile(values, 0.25), median)
     high = max(_percentile(values, 0.75), median)
     return IndexSnapshot(median, low, high, len(kept), len(suppliers))
@@ -169,7 +169,7 @@ def summarize(points: list[PricePoint]) -> IndexSnapshot:
 def overpay_parts(price_incl: int, market_incl: int | None) -> tuple[int | None, str]:
     if market_incl is None or market_incl <= 0:
         return None, ""
-    pct = int(round((price_incl - market_incl) * 100 / market_incl))
+    pct = round((price_incl - market_incl) * 100 / market_incl)
     if pct > 0:
         return pct, f"дороже рынка на {pct}%"
     if pct < 0:
