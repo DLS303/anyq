@@ -1,0 +1,19 @@
+vulnerabilities:
+  - id: CVE-2026-45623
+    statement: Next.js 15.5.28 bundles postcss 8.4.31. The fixed postcss 8.5 line is not the copy this Next release installs.
+    expired_at: 2026-11-20
+  - id: CVE-2026-73646
+    statement: Next.js 15.5.28 bundles postcss 8.4.31. The fixed postcss 8.5 line is not the copy this Next release installs.
+    expired_at: 2026-11-20
+  - id: GHSA-6v7p-g79w-8964
+    statement: The venv pip lists msgpack 1.1.2 in pip/_vendor/vendor.txt and bom.cdx.json. The installed msgpack is 1.2.3. Those lines are pip's own manifest, not a package this image can upgrade.
+    expired_at: 2026-11-20
+  - id: CVE-2025-47273
+    statement: The venv pip lists setuptools 70.3.0 in pip/_vendor/vendor.txt and bom.cdx.json. The installed setuptools is 84.2.1. Those lines are pip's own manifest, not a package this image can upgrade.
+    expired_at: 2026-11-20
+  - id: CVE-2026-97687
+    statement: The venv pip lists urllib3 2.7.0 in pip/_vendor/vendor.txt and bom.cdx.json. The installed urllib3 is 2.8.0. Those lines are pip's own manifest, not a package this image can upgrade.
+    expired_at: 2026-11-20
+  - id: CVE-2026-97689
+    statement: The venv pip lists urllib3 2.7.0 in pip/_vendor/vendor.txt and bom.cdx.json. The installed urllib3 is 2.8.0. Those lines are pip's own manifest, not a package this image can upgrade.
+    expired_at: 2026-11-20

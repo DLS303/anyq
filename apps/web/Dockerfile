@@ -2,7 +2,8 @@
 #   docker build -f apps/web/Dockerfile .
 
 FROM node:20-alpine AS base
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat \
+    && apk upgrade --no-cache libssl3 libcrypto3
 ENV NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 
@@ -30,7 +31,10 @@ RUN npm run build \
 
 FROM base AS runner
 ENV NODE_ENV=production
-RUN addgroup -g 1001 -S nodejs \
+# The server is `node`. The npm CLI is not used at runtime, and its bundled
+# tar package is the image finding CVE-2026-59873.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+    && addgroup -g 1001 -S nodejs \
     && adduser -S -u 1001 -G nodejs nextjs
 WORKDIR /app
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./

@@ -1,0 +1,3 @@
+# ICU locale for a new PostgreSQL 16 cluster. CI and production initdb use this token.
+# The locale is fixed when the data directory is created. Changing it later is a dump and restore.
+ru-KZ

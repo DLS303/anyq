@@ -1,0 +1,8 @@
+# Extends the stock gitleaks rules. Example files are allowlisted by path.
+title = "anyq"
+
+[extend]
+useDefault = true
+
+[allowlist]
+paths = ['''\.example$''']

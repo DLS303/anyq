@@ -14,6 +14,7 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt "gunicorn==23.0.0" \
+        "setuptools>=84.2.1" "urllib3>=2.8.0" "msgpack>=1.2.1" \
     && python -c "import cv2; from pathlib import Path; root = Path(cv2.data.haarcascades); assert (root / 'haarcascade_frontalface_default.xml').is_file(); assert (root / 'haarcascade_russian_plate_number.xml').is_file()"
 
 FROM python:3.11-slim-bookworm AS runtime
@@ -32,6 +33,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # libglib and libgomp are runtime libraries for opencv.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libglib2.0-0 libgomp1 gosu \
+    && pip install --upgrade "setuptools>=84.2.1" \
+    && rm -rf /root/.cache/pip \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 anyq \
     && useradd --uid 10001 --gid anyq --create-home --shell /usr/sbin/nologin anyq \

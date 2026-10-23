@@ -40,6 +40,8 @@ apt-get install -y \
   unattended-upgrades \
   apt-listchanges
 
+bash "$(cd "$(dirname "$0")/.." && pwd)/scripts/ci/install_backup_tools.sh"
+
 if ! command -v docker >/dev/null 2>&1; then
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -100,3 +102,4 @@ echo "  4. Follow docs/DEPLOY.md from the environment file onward"
 echo
 echo "Password login for SSH is unchanged. Disable it only after the deploy key works."
 echo "The deploy user is in the docker group and can run the production stack."
+echo "age and rclone are installed. Backup settings belong in deploy/.env, not in git."
