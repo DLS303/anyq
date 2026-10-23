@@ -53,7 +53,10 @@ def _phone_saved(phone: str) -> int:
     with store._sql.factory() as session:
         return int(
             session.scalar(
-                text("SELECT count(*) FROM records WHERE collection = 'users' AND payload LIKE :phone"),
+                text(
+                    "SELECT count(*) FROM records WHERE collection = 'users' "
+                    "AND CAST(payload AS TEXT) LIKE :phone"
+                ),
                 {"phone": f"%{phone}%"},
             )
             or 0

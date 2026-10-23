@@ -1,11 +1,11 @@
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { displayPriceTiyn, formatTiyn, type MarketCardItem } from "@/lib/market";
 import { MarketCard } from "./MarketCard";
 
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: unknown }) => createElement("a", { href }, children),
+  default: ({ href, children }: { href: string; children: ReactNode }) => createElement("a", { href }, children),
 }));
 
 function card(over: Partial<MarketCardItem> = {}): MarketCardItem {

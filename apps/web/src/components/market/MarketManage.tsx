@@ -11,7 +11,7 @@ const UNITS = ["м", "м²", "т", "шт", "уп"];
 
 const empty = {
   name: "",
-  category: CATEGORY_TITLES[0],
+  category: CATEGORY_TITLES[0] as string,
   unit: "шт",
   price_tiyn: "",
   source: "",
