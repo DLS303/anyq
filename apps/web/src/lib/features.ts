@@ -62,6 +62,9 @@ export function buildFeatures(flags: CompanyFlags | null | undefined, demo = DEM
 
 export const features = buildFeatures(null);
 
+/** Public sign-up. Off until NEXT_PUBLIC_REGISTRATION_ENABLED=1. */
+export const REGISTRATION_ENABLED = process.env.NEXT_PUBLIC_REGISTRATION_ENABLED === "1";
+
 export const DEMO_ONLY_TABS = ["sub", "draw", "ks"] as const;
 
 export const PILOT_MAIN_TABS = ["today", "punch", "procurement", "money", "qa"] as const;
