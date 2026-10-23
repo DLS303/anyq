@@ -23,6 +23,7 @@ import { MAT_ORDER, ORDER_ST, money } from "@/lib/format";
 import type { Locale, Material, MaterialOrder, ServiceOrder } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { PILOT_MODE } from "@/lib/pilot";
+import { registerLink } from "@/lib/registration";
 import {
   Building2,
   CheckCircle2,
@@ -131,8 +132,9 @@ export function CabinetView({ locale }: { locale: Locale }) {
     });
   }
 
+  const signupHref = registerLink(locale);
   if (!user) {
-    if (PILOT_MODE) {
+    if (!signupHref) {
       return (
         <div className="max-w-2xl mx-auto py-12 text-center">
           <div className="glass-strong rounded-3xl p-8 sm:p-10 shadow-luxury border border-slate-200">
@@ -160,7 +162,7 @@ export function CabinetView({ locale }: { locale: Locale }) {
           </p>
 
           <div className="mt-6 flex flex-col items-center gap-3">
-            <Link href={`/${locale}/login?mode=register`} className="btn-ice font-semibold">
+            <Link href={signupHref} className="btn-ice font-semibold">
               Регистрация компании
             </Link>
             <Link href={`/${locale}/login?mode=login`} className="text-xs text-slate-500 hover:underline">

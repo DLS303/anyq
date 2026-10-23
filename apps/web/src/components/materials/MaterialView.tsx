@@ -9,6 +9,7 @@ import { MATERIAL_CAT, money } from "@/lib/format";
 import type { Locale, Material } from "@/lib/types";
 import { PhotoView } from "@/components/media/PhotoView";
 import { t } from "@/i18n/messages";
+import { registerLink } from "@/lib/registration";
 import { CheckCircle2, Minus, Plus, ShieldCheck, Truck, ArrowRight, User } from "lucide-react";
 
 export function MaterialView({ locale, item }: { locale: Locale; item: Material }) {
@@ -37,7 +38,7 @@ export function MaterialView({ locale, item }: { locale: Locale; item: Material 
             detail: { message: "Сначала зарегистрируйте компанию для пилота Engicon" },
           }),
         );
-        router.push(`/${locale}/login?mode=register`);
+        router.push(registerLink(locale) ?? `/${locale}/login`);
         return;
       }
 

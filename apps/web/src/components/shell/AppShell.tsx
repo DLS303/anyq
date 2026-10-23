@@ -10,6 +10,7 @@ import type { Locale, Role } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { DEMO_MODE } from "@/lib/features";
 import { PILOT_MODE } from "@/lib/pilot";
+import { registerLink } from "@/lib/registration";
 import { LuxuryNavTabs } from "./LuxuryNavTabs";
 import { LuxuryProgressBar } from "./LuxuryProgressBar";
 import { PageTransition } from "./PageTransition";
@@ -78,6 +79,7 @@ function Header({ locale }: { locale: Locale }) {
   const link = (path: string) => `/${locale}${path}`;
   const nav = navItems(locale, m, user?.role);
   const showCrm = DEMO_MODE ? !PILOT_MODE || user?.role === "owner" || user?.role === "admin" : user?.role === "owner" || user?.role === "admin";
+  const signupHref = registerLink(locale);
   const [open, setOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -215,8 +217,8 @@ function Header({ locale }: { locale: Locale }) {
               )}
             </div>
           ) : (
-            <Link href={link(PILOT_MODE ? "/login" : "/login?mode=register")} className="btn-ice text-xs !py-1.5 !px-4 !min-h-9 font-semibold">
-              {PILOT_MODE ? m.navLogin : m.register}
+            <Link href={signupHref ?? link("/login")} className="btn-ice text-xs !py-1.5 !px-4 !min-h-9 font-semibold">
+              {signupHref ? m.register : m.navLogin}
             </Link>
           )}
         </div>
@@ -281,8 +283,8 @@ function Header({ locale }: { locale: Locale }) {
                   {m.navLogout} · {user.full_name}
                 </button>
               ) : (
-                <Link href={link(PILOT_MODE ? "/login" : "/login?mode=register")} className="btn-ice w-full text-center font-semibold" onClick={() => setOpen(false)}>
-                  {PILOT_MODE ? m.navLogin : m.register}
+                <Link href={signupHref ?? link("/login")} className="btn-ice w-full text-center font-semibold" onClick={() => setOpen(false)}>
+                  {signupHref ? m.register : m.navLogin}
                 </Link>
               )}
             </div>

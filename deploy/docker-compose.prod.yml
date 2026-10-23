@@ -68,6 +68,7 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         NEXT_PUBLIC_PILOT_MODE: ${NEXT_PUBLIC_PILOT_MODE:-1}
+        NEXT_PUBLIC_REGISTRATION_ENABLED: ${NEXT_PUBLIC_REGISTRATION_ENABLED:-0}
         INTERNAL_API_URL: http://api:8010
     image: anyq-web:current
     container_name: anyq-web
