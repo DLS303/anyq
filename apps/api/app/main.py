@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
+from app.access_gate import PublicSurfaceMiddleware
 from app.authutil import load_secret
-from app.config import settings
+from app.config import api_docs_closed, settings
 from app.routers import (
     acts,
     auth,
@@ -30,11 +31,19 @@ from app.sql_backend import ChangedByOther
 
 load_secret()
 
-app = FastAPI(title=settings.app_name, version=settings.version)
+_docs_closed = api_docs_closed()
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.version,
+    docs_url=None if _docs_closed else "/docs",
+    redoc_url=None if _docs_closed else "/redoc",
+    openapi_url=None if _docs_closed else "/openapi.json",
+)
 
 app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(PublicRobotsMiddleware)
+app.add_middleware(PublicSurfaceMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -70,9 +79,11 @@ def changed_by_other(_request: Request, exc: ChangedByOther):
 
 @app.get("/")
 def root():
-    return {
+    body = {
         "ok": True,
         "product": "SuperAPP",
         "phase": 2,
-        "docs": "/docs",
     }
+    if not api_docs_closed():
+        body["docs"] = "/docs"
+    return body

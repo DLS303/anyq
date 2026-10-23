@@ -20,6 +20,7 @@ import { MAT_ORDER, ORDER_ST, money } from "@/lib/format";
 import type { Locale, Material, MaterialOrder, ServiceOrder } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { PILOT_MODE } from "@/lib/pilot";
+import { REGISTRATION_ENABLED } from "@/lib/registration";
 import {
   Building2,
   CheckCircle2,
@@ -124,7 +125,7 @@ export function CabinetView({ locale }: { locale: Locale }) {
   }
 
   if (!user) {
-    if (PILOT_MODE) {
+    if (PILOT_MODE || !REGISTRATION_ENABLED) {
       return (
         <div className="max-w-2xl mx-auto py-12 text-center">
           <div className="glass-strong rounded-3xl p-8 sm:p-10 shadow-luxury border border-slate-200">

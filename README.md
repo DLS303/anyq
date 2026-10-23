@@ -48,3 +48,5 @@ docker compose up -d
 ## Что сознательно не сделано
 
 Эскроу, Kaspi Pay, eGov QR, Flutter, KENML, Pin-on-Plan, e-Qurylys, Elasticsearch, Kafka, S3.
+
+`REGISTRATION_ENABLED` и `NEXT_PUBLIC_REGISTRATION_ENABLED` включают публичную регистрацию только значением `1`. См. `docs/README.md`.

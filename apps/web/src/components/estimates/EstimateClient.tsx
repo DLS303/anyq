@@ -7,6 +7,7 @@ import { Calculator, Download, FileSpreadsheet, RefreshCw, Briefcase, CheckCircl
 import { calculateEstimate, createDeal } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { features } from "@/lib/features";
+import { registerHref } from "@/lib/registration";
 import { money } from "@/lib/format";
 import type { EstimateInput, EstimateResult, Locale } from "@/lib/types";
 
@@ -135,7 +136,7 @@ export function EstimateClient({ locale, embedded = false }: { locale: Locale; e
             detail: { message: L.needLogin },
           }),
         );
-        router.push(`/${locale}/login?mode=register`);
+        router.push(registerHref(locale));
         return;
       }
       const title = `Строительство: ${form.area_m2} м² (${form.house_type})`;

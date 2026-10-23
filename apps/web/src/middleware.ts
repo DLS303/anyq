@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { DEMO_MODE } from "./lib/features";
+import { REGISTRATION_ENABLED } from "./lib/registration";
 
 const LOCALES = ["ru", "kk"];
 /** Finished areas kept out of the release navigation. */
@@ -16,6 +17,22 @@ export function middleware(request: NextRequest) {
     pathname.includes(".")
   ) {
     return NextResponse.next();
+  }
+  if (!REGISTRATION_ENABLED) {
+    const bare = pathname.replace(/^\/(ru|kk)(?=\/|$)/, "") || "/";
+    const locale = pathname === "/kk" || pathname.startsWith("/kk/") ? "kk" : "ru";
+    if (bare === "/register" || bare.startsWith("/register/")) {
+      const url = request.nextUrl.clone();
+      url.pathname = `/${locale}/login`;
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+    if (bare === "/login" && request.nextUrl.searchParams.get("mode") === "register") {
+      const url = request.nextUrl.clone();
+      url.pathname = `/${locale}/login`;
+      url.searchParams.delete("mode");
+      return NextResponse.redirect(url);
+    }
   }
   const matched = LOCALES.some((l) => pathname === `/${l}` || pathname.startsWith(`/${l}/`));
   if (!matched) {

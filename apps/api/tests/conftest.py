@@ -53,6 +53,8 @@ os.environ["ANYQ_UPLOADS_DIR"] = str(_root / "uploads")
 os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 os.environ["ANYQ_DEMO_PASSWORD"] = ""
 os.environ["ANYQ_DEMO_MODE"] = "1"
+# Existing cases sign users up. The product default is off; the gate tests turn it off.
+os.environ["REGISTRATION_ENABLED"] = "1"
 
 
 @pytest.fixture(autouse=True)
