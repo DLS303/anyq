@@ -102,7 +102,7 @@ def _cities_with_a_market(as_of: date) -> set[tuple[str, str]]:
         if row.get("vat_included"):
             incl = int(row["price_tiyn"])
         else:
-            incl = int(round(row["price_tiyn"] * (100 + (rate or 16)) / 100))
+            incl = round(row["price_tiyn"] * (100 + (rate or 16)) / 100)
         grouped.setdefault((row["item_id"], row.get("city") or ""), []).append((row["company_id"], incl))
     ready: set[tuple[str, str]] = set()
     for key, points in grouped.items():
@@ -469,10 +469,11 @@ def test_observations_are_append_only(tmp_path):
     import os
 
     import pytest
-    from alembic import command
     from alembic.config import Config
     from sqlalchemy import create_engine, text
     from sqlalchemy.exc import DatabaseError
+
+    from alembic import command
 
     previous = os.environ.get("DATABASE_URL")
     url = "sqlite:///" + (tmp_path / "obs.sqlite").as_posix()
@@ -503,9 +504,8 @@ def test_observations_are_append_only(tmp_path):
             "UPDATE price_observations SET price_tiyn = 1 WHERE id = 'obs-t'",
             "DELETE FROM price_observations WHERE id = 'obs-t'",
         ):
-            with pytest.raises(DatabaseError, match="append-only"):
-                with engine.begin() as conn:
-                    conn.execute(text(statement))
+            with pytest.raises(DatabaseError, match="append-only"), engine.begin() as conn:
+                conn.execute(text(statement))
         with engine.begin() as conn:
             price = conn.execute(text("SELECT price_tiyn FROM price_observations WHERE id = 'obs-t'")).scalar_one()
         assert price == 100

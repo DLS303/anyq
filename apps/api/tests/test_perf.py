@@ -6,7 +6,6 @@ from starlette.responses import PlainTextResponse
 from app.authutil import hash_password
 from app.compress import CompressMiddleware
 from app.main import app
-from app.schemas import User
 from app.store import store
 from app.timeout import RequestTimeoutMiddleware
 
@@ -18,21 +17,10 @@ def _auth(token: str) -> dict[str, str]:
 
 
 def _owner() -> str:
-    user = User(
-        id="u-perf-page",
-        email="perf-page@example.com",
-        full_name="Perf Page",
-        role="owner",
-        phone="+77001110001",
-        company="Perf Page LLP",
-        company_bin="123456789013",
-    )
-    if user.email not in store.users:
-        store._index_user(user)
-        store.credentials[user.id] = hash_password("secret12")
+    store.credentials["u-owner"] = hash_password("owner-pass-perf")
     login = client.post(
         "/v1/auth/login",
-        json={"email": user.email, "password": "secret12", "consent_offer_pd": True},
+        json={"email": "owner@demo.superapp", "password": "owner-pass-perf", "consent_offer_pd": True},
         headers={"User-Agent": "anyq-test"},
     )
     assert login.status_code == 200, login.text

@@ -47,7 +47,7 @@ def main() -> None:
     from app.authutil import hash_password
     from app.main import app
     from app.schemas import User
-    from app.site_models import BudgetLine, PunchItem, RFI
+    from app.site_models import RFI, BudgetLine, PunchItem
     from app.store import store
 
     owner = User(

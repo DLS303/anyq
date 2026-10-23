@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 from openpyxl import load_workbook
@@ -38,8 +38,8 @@ from app.marketplace_price import (
     PricePoint,
     excl_tiyn,
     has_source,
-    incl_tiyn,
     in_window,
+    incl_tiyn,
     judge_price,
     market_label,
     market_today,
@@ -74,7 +74,7 @@ class MarketError(Exception):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def _today() -> date:
@@ -1024,7 +1024,7 @@ def _offer_card(session: Session, offer: Offer) -> dict:
             manual = True
         if line.analog:
             analog = True
-        amount = int(round(incl * line.qty))
+        amount = round(incl * line.qty)
         if not expired:
             total += amount
         rendered.append(
@@ -1229,7 +1229,7 @@ def _append_observation(
     city = (catalog.city if catalog is not None and catalog.city else "") or (profile.city if profile is not None else "")
     item_id = _position_id(session, catalog_id, name, unit)
     position = session.get(PriceItem, item_id)
-    stored_rate = vat_rate if vat_rate > 0 else 0
+    stored_rate = max(0, vat_rate)
     session.add(
         PriceObservation(
             id=uuid4().hex[:16],
@@ -1425,7 +1425,7 @@ def update_review(session: Session, user, review_id: str, body: dict) -> dict:
     if review.author_user_id != user.id and user.role != "admin":
         raise MarketError("Недостаточно прав", 403)
     created = datetime.fromisoformat(review.created_at)
-    if datetime.now(timezone.utc) - created > timedelta(days=EDIT_DAYS):
+    if datetime.now(UTC) - created > timedelta(days=EDIT_DAYS):
         raise MarketError("Правка доступна 14 дней", 403)
     scores = _scores({**_review_dict(review), **body})
     review.quality = scores["quality"]

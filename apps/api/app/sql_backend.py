@@ -971,8 +971,8 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-# One alembic head. 20261019_0003_pf1a revises 20261021_0003_price_index.
-SCHEMA_HEAD = "20261019_0003_pf1a"
+# One alembic head. 20261023_0004_list_indexes revises 20261019_0003_pf1a.
+SCHEMA_HEAD = "20261023_0004_list_indexes"
 MIGRATION_LOCK = 21419007
 
 

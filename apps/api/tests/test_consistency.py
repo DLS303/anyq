@@ -786,6 +786,11 @@ def test_upgrade_dedupes_emails_and_restores_consents(tmp_path, capsys):
         assert failures == 0
         names = set(inspect(engine).get_table_names())
         assert {"files", "drawing_sets", "drawings", "drawing_revisions"} <= names
+        indexes = {row["name"] for row in inspect(engine).get_indexes("records")}
+        assert "ix_records_coll_category_seq" in indexes
+        command.downgrade(cfg, "20261019_0003_pf1a")
+        indexes = {row["name"] for row in inspect(engine).get_indexes("records")}
+        assert "ix_records_coll_category_seq" not in indexes
         command.downgrade(cfg, "-1")
         names = set(inspect(engine).get_table_names())
         assert "drawings" not in names

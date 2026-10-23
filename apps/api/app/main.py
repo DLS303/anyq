@@ -2,10 +2,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.compress import CompressMiddleware
-from app.timeout import RequestTimeoutMiddleware
-
 from app.authutil import load_secret
+from app.compress import CompressMiddleware
 from app.config import refuse_stub_code_in_production, settings
 from app.ratelimit import require_login_hash_secret
 from app.routers import (
@@ -20,12 +18,12 @@ from app.routers import (
     files,
     health,
     invitations,
+    marketplace,
     materials,
     moderation,
     modules,
     org_features,
     plots,
-    marketplace,
     procurement,
     public,
     site,
@@ -33,6 +31,7 @@ from app.routers import (
 )
 from app.security import PublicRobotsMiddleware, SecurityHeadersMiddleware
 from app.sql_backend import ChangedByOther
+from app.timeout import RequestTimeoutMiddleware
 
 refuse_stub_code_in_production()
 load_secret()

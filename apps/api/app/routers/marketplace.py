@@ -23,7 +23,6 @@ from app.marketplace_service import (
     my_rating,
     repeat_request,
     reply_review,
-    request_view,
     save_item,
     search_catalog,
     select_offer,

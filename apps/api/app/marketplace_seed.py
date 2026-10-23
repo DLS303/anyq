@@ -22,7 +22,12 @@ from app.marketplace_models import (
     SupplierReview,
 )
 from app.marketplace_score import FIXTURE_AS_OF
-from app.marketplace_service import e164, recompute_all, recompute_price_index, search_text_of
+from app.marketplace_service import (
+    e164,
+    recompute_all,
+    recompute_price_index,
+    search_text_of,
+)
 from app.sql_backend import RequestRecipient
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "anyq_marketplace_demo_fake.json"
@@ -39,7 +44,7 @@ def _communication(row: dict) -> int:
     if row.get("communication"):
         return int(row["communication"])
     values = [int(row["quality"]), int(row["timing"]), int(row["price"])]
-    return max(1, min(5, int(round(sum(values) / len(values)))))
+    return max(1, min(5, round(sum(values) / len(values))))
 
 
 def _put(session: Session, model, key: str, row) -> None:

@@ -2,10 +2,9 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool, text
 
+import app.marketplace_models  # noqa: F401
 from alembic import context
 from app.sql_backend import MIGRATION_LOCK, Base, resolve_database_url
-
-import app.marketplace_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
