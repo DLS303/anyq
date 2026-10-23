@@ -73,6 +73,25 @@ def _empty_database(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ANYQ_DB_PATH", str(tmp_path / "db.json"))
 
 
+def test_phase2_demo_seed_loads_without_plots():
+    from app.seed_phase2 import DEALS, ORDERS, SPECIALISTS, THREADS
+
+    assert store.plots == {}
+    assert {item.id for item in SPECIALISTS} <= set(store.specialists)
+    for spec in SPECIALISTS:
+        assert "/plots/" not in spec.cover
+        assert all(item.plot_id is None and "/plots/" not in item.photo for item in spec.portfolio)
+        loaded = store.specialists[spec.id]
+        assert "/plots/" not in loaded.cover
+        assert all(item.plot_id is None and "/plots/" not in item.photo for item in loaded.portfolio)
+    for row in (*ORDERS, *DEALS, *THREADS):
+        assert row.plot_id is None
+    assert store.orders["ord-topo"].plot_id is None
+    assert store.deals["deal-land-1"].plot_id is None
+    assert store.deals["deal-design-1"].order_id == "ord-topo"
+    assert store.threads["th-arch"].plot_id is None
+
+
 def test_demo_mode_off_starts_empty_and_first_user_is_owner(monkeypatch, tmp_path):
     _empty_database(monkeypatch, tmp_path)
     fresh = MemoryStore()
