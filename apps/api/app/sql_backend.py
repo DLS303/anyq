@@ -52,6 +52,16 @@ class Base(DeclarativeBase):
     pass
 
 
+def technical_string(length: int):
+    """SKU, codes, email, and E.164 phone.
+
+    PostgreSQL stores these with the C collation so uniqueness does not follow
+    the database locale. SQLite compares them with its BINARY collation.
+    """
+
+    return String(length).with_variant(String(length, collation="C"), "postgresql")
+
+
 class Record(Base):
     __tablename__ = "records"
 
@@ -63,7 +73,7 @@ class Record(Base):
     user_id: Mapped[str | None] = mapped_column(String(80))
     status: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[str | None] = mapped_column(String(40))
-    email: Mapped[str | None] = mapped_column(String(200))
+    email: Mapped[str | None] = mapped_column(technical_string(200))
     category: Mapped[str | None] = mapped_column(String(40))
     district: Mapped[str | None] = mapped_column(String(160))
     gas: Mapped[str | None] = mapped_column(String(40))
@@ -956,7 +966,8 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-SCHEMA_HEAD = "20261021_0003_recipient_status"
+# One alembic head. 20261021_0002_marketplace revises 20261021_0003_recipient_status.
+SCHEMA_HEAD = "20261021_0003_price_index"
 MIGRATION_LOCK = 21419007
 
 
@@ -1319,6 +1330,8 @@ class SqlRuntime:
         last: Exception | None = None
         for attempt in range(8):
             try:
+                import app.marketplace_models  # noqa: F401
+
                 Base.metadata.create_all(self.engine)
                 install_consent_triggers(self.engine)
                 self._ensure_meta()

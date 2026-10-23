@@ -342,6 +342,10 @@ class MemoryStore:
                 self._ensure_materials()
                 self._ensure_site()
                 self._ensure_crm()
+                from app.marketplace_seed import seed_marketplace
+
+                seed_marketplace(self._sql.factory, self)
+                self._ensure_demo_passwords()
         finally:
             self._sql.bootstrap_unlock(boot)
         self._stamp_revs(self._sql.revisions())

@@ -24,7 +24,7 @@ MODULES = [
         title="CRM & PM Service",
         phase=2,
         status="live",
-        notes="Канбан + площадка Procore-style: RFI, punch, инспекции, ТБ.",
+        notes="Канбан и площадка: RFI, punch, инспекции, ТБ.",
     ),
     ModuleInfo(
         id="estimate-docs",
