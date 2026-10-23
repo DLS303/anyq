@@ -104,14 +104,18 @@ def test_revision_follows_app_role_without_truncate():
     assert "TRUNCATE TABLE" not in source
     assert 'sa.Column("bin"' not in source
     assert 'sa.Column("iin"' not in source
+    assert '("bin"' not in source
+    assert '("iin"' not in source
 
 
 def test_accounts_do_not_store_national_ids():
     from sqlalchemy import inspect
 
-    columns = {column["name"] for column in inspect(store._sql.engine).get_columns("accounts")}
-    assert "bin" not in columns
-    assert "iin" not in columns
+    inspector = inspect(store._sql.engine)
+    for table in ("accounts", "companies"):
+        columns = {column["name"] for column in inspector.get_columns(table)}
+        assert "bin" not in columns
+        assert "iin" not in columns
 
 
 def test_roles_create_company_and_do_not_take_the_site_owner_slot(open_signup):
@@ -134,7 +138,7 @@ def test_roles_create_company_and_do_not_take_the_site_owner_slot(open_signup):
                 {"id": body["user_id"]},
             ).scalar()
         assert account is not None and account.email == contact
-        assert company is not None and company.role == role and company.bin is None and company.iin is None
+        assert company is not None and company.role == role
         assert membership is not None and membership.role == member
         assert status != "owner"
         confirmed = _confirm(contact)
@@ -401,7 +405,7 @@ def test_profile_keeps_vat_unset(open_signup):
     assert body["vat_included"] is None
     with store._sql.factory() as session:
         company = session.get(CompanyRow, confirmed.json()["data"]["user"]["company_id"])
-    assert company is not None and company.bin is None and company.iin is None
+    assert company is not None and company.city == "Астана"
 
 
 def test_demo_guard_lowercases_email_before_the_suffix_check(monkeypatch):

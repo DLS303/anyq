@@ -31,8 +31,6 @@ _COMPANY_COLUMNS = (
     ("role", 40),
     ("account_kind", 20),
     ("name", 200),
-    ("bin", 12),
-    ("iin", 12),
     ("city", 120),
     ("categories", 400),
     ("e_invoice", 120),

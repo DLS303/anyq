@@ -259,8 +259,6 @@ class CompanyRow(Base):
     role: Mapped[str | None] = mapped_column(String(40))
     account_kind: Mapped[str | None] = mapped_column(String(20))
     name: Mapped[str | None] = mapped_column(String(200))
-    bin: Mapped[str | None] = mapped_column(String(12))
-    iin: Mapped[str | None] = mapped_column(String(12))
     city: Mapped[str | None] = mapped_column(String(120))
     categories: Mapped[str | None] = mapped_column(String(400))
     vat_included: Mapped[bool | None] = mapped_column(Boolean)

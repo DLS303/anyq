@@ -294,8 +294,6 @@ def start_signup(
                 role=chosen,
                 account_kind=kind,
                 name=name or None,
-                bin=None,
-                iin=None,
                 city=None,
                 categories=None,
                 vat_included=None,
