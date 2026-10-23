@@ -57,7 +57,7 @@ def _owner() -> str:
 
 
 def _outsider() -> str:
-    res = _register("share-outsider@example.com", bin_no="123456789099")
+    res = _register("share-outsider@demo.superapp", bin_no="123456789099")
     assert res.status_code == 200, res.text
     return res.json()["data"]["token"]
 

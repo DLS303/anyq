@@ -87,7 +87,12 @@ function applyAuth(headers: Headers) {
 
 function isCredentialPost(path: string) {
   const bare = path.split("?")[0];
-  return bare === "/v1/auth/login" || bare === "/v1/auth/register";
+  return (
+    bare === "/v1/auth/login" ||
+    bare === "/v1/auth/register" ||
+    bare === "/v1/auth/signup" ||
+    bare === "/v1/auth/signup/confirm"
+  );
 }
 
 function sessionExpired(path: string, res: Response, headers: Headers) {
@@ -684,6 +689,77 @@ export async function fetchMessages(email: string, tid: string, signal?: AbortSi
 
 export function fetchMe(signal?: AbortSignal) {
   return request<User>("/v1/auth/me", { signal });
+}
+
+export type SignupResult = {
+  status: string;
+  channel: string;
+  access: string;
+  user_id: string;
+  company_id: string;
+  role: string;
+  account_kind: string;
+  notice: string;
+  demo_stub?: boolean;
+};
+
+export type SupplierProfileData = {
+  full_name: string;
+  city: string;
+  categories: string;
+  e_invoice: string;
+  vat_included: boolean | null;
+  vat_label: string;
+};
+
+export type ProcInboxItem = {
+  id: string;
+  title: string;
+  project_title?: string;
+  number?: number;
+};
+
+export function signupStart(body: {
+  role: string;
+  contact: string;
+  full_name?: string;
+  account_kind?: string;
+  consent_offer_pd: boolean;
+}) {
+  return request<SignupResult>("/v1/auth/signup", {
+    method: "POST",
+    auth: false,
+    body: JSON.stringify(body),
+  });
+}
+
+export function signupConfirm(contact: string, code: string) {
+  return request<{ user: User; token: string; status: string }>("/v1/auth/signup/confirm", {
+    method: "POST",
+    auth: false,
+    body: JSON.stringify({ contact, code }),
+  });
+}
+
+export function fetchProfile(signal?: AbortSignal) {
+  return request<SupplierProfileData>("/v1/auth/profile", { signal });
+}
+
+export function patchProfile(body: {
+  full_name?: string;
+  city?: string;
+  categories?: string;
+  e_invoice?: string;
+  vat?: string;
+}) {
+  return request<SupplierProfileData>("/v1/auth/profile", {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchProcInbox(signal?: AbortSignal) {
+  return request<ProcInboxItem[]>("/v1/procurement/inbox", { signal });
 }
 
 export function loginRequest(email: string, password: string, consentOfferPd: boolean, consentAi = false) {

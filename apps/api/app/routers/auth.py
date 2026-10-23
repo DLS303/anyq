@@ -1,14 +1,28 @@
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.config import demo_mode
+from app.config import demo_mode, registration_enabled
 from app.deps import require_roles, require_user
 from app.legal import consent_documents
 from app.ratelimit import RateLimited, login_limiter
 from app.schemas import CrossBorderConsentBody, LoginBody, RegisterBody, User
-from app.store import ConsentRequired, store
+from app.signup import (
+    REGISTRATION_CLOSED,
+    SignupError,
+    confirm_signup,
+    login_by_phone,
+    profile_of,
+    start_signup,
+    update_profile,
+)
+from app.store import ConsentRequired, DemoRegistrationError, store
+
+
+def _require_registration() -> None:
+    if not registration_enabled():
+        raise HTTPException(status_code=403, detail=REGISTRATION_CLOSED)
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -24,11 +38,104 @@ def _client_meta(request: Request) -> tuple[str, str]:
     return ip, request.headers.get("user-agent", "")
 
 
+class SignupIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    role: str = ""
+    contact: str = ""
+    full_name: str = ""
+    account_kind: str = "individual"
+    consent_offer_pd: bool = False
+
+
+class SignupConfirmIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    contact: str = ""
+    code: str = ""
+
+
+class PhoneLoginIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    phone: str = ""
+    password: str = ""
+
+
+class ProfileIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    full_name: str | None = None
+    city: str | None = None
+    categories: str | None = None
+    e_invoice: str | None = None
+    vat: str | None = Field(default=None)
+
+
+@router.post("/signup")
+def signup(body: SignupIn, request: Request):
+    _require_registration()
+    ip, ua = _client_meta(request)
+    try:
+        data = start_signup(
+            role=body.role,
+            contact=body.contact,
+            full_name=body.full_name,
+            account_kind=body.account_kind,
+            consent=body.consent_offer_pd,
+            ip=ip,
+            user_agent=ua,
+        )
+    except SignupError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {"ok": True, "data": data}
+
+
+@router.post("/signup/confirm")
+def signup_confirm(body: SignupConfirmIn, request: Request):
+    _require_registration()
+    ip, _ua = _client_meta(request)
+    try:
+        data = confirm_signup(contact=body.contact, code=body.code, ip=ip)
+    except SignupError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {"ok": True, "data": data}
+
+
+@router.post("/login/phone")
+def phone_login(body: PhoneLoginIn):
+    try:
+        user, token = login_by_phone(body.phone, body.password)
+    except SignupError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {"ok": True, "data": {"user": user, "token": token}}
+
+
+@router.get("/profile")
+def read_profile(user: User = Depends(require_user)):
+    return {"ok": True, "data": profile_of(user)}
+
+
+@router.patch("/profile")
+def patch_profile(body: ProfileIn, user: User = Depends(require_user)):
+    try:
+        data = update_profile(
+            user,
+            full_name=body.full_name,
+            city=body.city,
+            categories=body.categories,
+            e_invoice=body.e_invoice,
+            vat=body.vat,
+        )
+    except SignupError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {"ok": True, "data": data}
+
+
 @router.post("/register")
 def register(body: RegisterBody, request: Request):
+    _require_registration()
     ip, ua = _client_meta(request)
     try:
         user, token = store.register(body, ip=ip, user_agent=ua)
+    except DemoRegistrationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "data": {"user": user, "token": token}}

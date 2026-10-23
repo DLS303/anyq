@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { ConsentsPanel } from "@/components/cabinet/ConsentsPanel";
+import { SupplierInbox } from "@/components/cabinet/SupplierInbox";
+import { SupplierProfile } from "@/components/cabinet/SupplierProfile";
 import { InvitePanel } from "@/components/invites/InvitePanel";
 import { ProjectList } from "@/components/site/ProjectList";
 import { ErrorRetry, LoadingSkeleton, useAsync, useSubmitLock } from "@/lib/useAsync";
@@ -11,6 +13,7 @@ import {
   createMaterial,
   fetchMaterialOrders,
   fetchOrders,
+  fetchProcInbox,
   fetchSupplierMaterials,
   reviewOrder,
   setMaterialOrderStatus,
@@ -20,6 +23,7 @@ import { MAT_ORDER, ORDER_ST, money } from "@/lib/format";
 import type { Locale, Material, MaterialOrder, ServiceOrder } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { PILOT_MODE } from "@/lib/pilot";
+import { registerLink } from "@/lib/registration";
 import {
   Building2,
   CheckCircle2,
@@ -38,8 +42,9 @@ import {
 
 function roleLabel(role: string) {
   if (role === "supplier") return "Поставщик";
-  if (role === "contractor" || role === "specialist") return "Подрядчик";
-  if (role === "buyer" || role === "owner") return "Заказчик";
+  if (role === "contractor") return "Исполнитель услуг";
+  if (role === "specialist") return "Подрядчик";
+  if (role === "customer" || role === "buyer" || role === "owner") return "Заказчик";
   if (role === "admin") return "Администратор";
   if (role === "moderator") return "Модератор";
   return role;
@@ -59,6 +64,10 @@ export function CabinetView({ locale }: { locale: Locale }) {
     return { orders, matOrders, skus };
   }, [user?.email, user?.role]);
   const actions = useSubmitLock();
+  const inbox = useAsync(async (signal) => {
+    if (!user || user.role !== "supplier") return [];
+    return fetchProcInbox(signal);
+  }, [user?.id, user?.role]);
   const orders = loaded.data?.orders ?? [];
   const matOrders = loaded.data?.matOrders ?? [];
   const skus = loaded.data?.skus ?? [];
@@ -123,8 +132,9 @@ export function CabinetView({ locale }: { locale: Locale }) {
     });
   }
 
+  const signupHref = registerLink(locale);
   if (!user) {
-    if (PILOT_MODE) {
+    if (!signupHref) {
       return (
         <div className="max-w-2xl mx-auto py-12 text-center">
           <div className="glass-strong rounded-3xl p-8 sm:p-10 shadow-luxury border border-slate-200">
@@ -152,7 +162,7 @@ export function CabinetView({ locale }: { locale: Locale }) {
           </p>
 
           <div className="mt-6 flex flex-col items-center gap-3">
-            <Link href={`/${locale}/login?mode=register`} className="btn-ice font-semibold">
+            <Link href={signupHref} className="btn-ice font-semibold">
               Регистрация компании
             </Link>
             <Link href={`/${locale}/login?mode=login`} className="text-xs text-slate-500 hover:underline">
@@ -223,6 +233,16 @@ export function CabinetView({ locale }: { locale: Locale }) {
           {" · "}
           {m.objectFeatures}
         </Link>
+      ) : null}
+
+      {user.role === "supplier" ? (
+        <>
+          <SupplierInbox
+            items={inbox.data ?? []}
+            error={inbox.error instanceof Error ? inbox.error.message : undefined}
+          />
+          <SupplierProfile />
+        </>
       ) : null}
 
       {user.role === "owner" || user.role === "admin" ? <InvitePanel locale={locale} /> : null}

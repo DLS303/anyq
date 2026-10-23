@@ -12,7 +12,7 @@ from typing import get_args
 from uuid import uuid4
 
 from app.authutil import hash_password, make_token, verify_password
-from app.config import demo_mode
+from app.config import DEMO_EMAIL_REJECTION, DEMO_EMAIL_SUFFIX, demo_mode
 from app.geo import centroid, haversine_km
 from app.legal import PD_VERSION, ai_document, pd_sha256, privacy_document
 from app.schemas import (
@@ -280,6 +280,10 @@ class ConsentRequired(Exception):
         super().__init__("Нужно согласие на обработку персональных данных")
 
 
+class DemoRegistrationError(ValueError):
+    """Demo mode refused this registration. The API answers 422."""
+
+
 def db_file() -> Path:
     return json_db_file()
 
@@ -424,7 +428,9 @@ class MemoryStore:
             bag.synced_rev = current
 
     def _index_user(self, user: User) -> None:
-        self.users[user.email.lower()] = user
+        email = (user.email or "").strip().lower()
+        if email:
+            self.users[email] = user
         self.users_by_id[user.id] = user
 
     def _ensure_seed_users(self) -> None:
@@ -751,8 +757,20 @@ class MemoryStore:
 
         return export_features()
 
+    def is_company_owner(self, user: User) -> bool:
+        company_id = (user.company_id or "").strip()
+        if not company_id:
+            return False
+        from app.sql_backend import CompanyMember
+
+        with self._sql.factory() as session:
+            row = session.get(CompanyMember, (company_id, user.id))
+        return row is not None and row.role == "owner"
+
     def get_user_by_email(self, email: str) -> User | None:
         key = email.lower().strip()
+        if not key:
+            return None
         emails = object.__getattribute__(self, "users")
         if key in emails.deleted:
             return None
@@ -2209,7 +2227,7 @@ class MemoryStore:
         return record
 
     def register(self, body: RegisterBody, *, ip: str = "", user_agent: str = "") -> tuple[User, str]:
-        from sqlalchemy import func, select
+        from sqlalchemy import func, select, text
         from sqlalchemy.exc import IntegrityError
 
         email = body.email.lower().strip()
@@ -2227,7 +2245,11 @@ class MemoryStore:
             raise ValueError("Укажите компанию")
         if len(bin_no) != 12:
             raise ValueError("БИН должен быть из 12 цифр")
-        if len(phone) < 6:
+        if demo_mode():
+            if not email.endswith(DEMO_EMAIL_SUFFIX):
+                raise DemoRegistrationError(DEMO_EMAIL_REJECTION)
+            phone = ""
+        elif len(phone) < 6:
             raise ValueError("Укажите телефон")
         if not body.consent_offer_pd:
             raise ValueError("Нужно согласие на обработку персональных данных")
@@ -2268,6 +2290,10 @@ class MemoryStore:
                     raise ValueError("Такой email уже зарегистрирован")
                 uid = f"u-{uuid4().hex[:8]}"
                 key, review = claim_company_key(session, uid, bin_no)
+                company_id = session.execute(
+                    text("SELECT id FROM companies WHERE legacy_key = :key"),
+                    {"key": key},
+                ).scalar_one()
                 user = User(
                     id=uid,
                     email=email,
@@ -2277,6 +2303,7 @@ class MemoryStore:
                     company=company,
                     company_bin=bin_no,
                     company_key=key,
+                    company_id=str(company_id),
                     company_review=review,
                     city=body.city.strip() or "Алматы",
                     pilot=pilot,
@@ -2338,6 +2365,9 @@ class MemoryStore:
                     return seq
 
                 user_seq = put(session, "users", uid, user)
+                from app.sql_backend import CompanyMember
+
+                session.add(CompanyMember(company_id=str(company_id), user_id=uid, role="owner"))
                 cred_seq = put(session, "credentials", uid, password_hash)
                 company_id = company_key(user)
                 consent_seq = alloc_seq(session, "consents")
@@ -2572,7 +2602,7 @@ class MemoryStore:
         deadline: str | None = None,
         budget_kzt: int | None = None,
     ) -> Project:
-        if user.role not in ("admin", "owner"):
+        if user.role not in ("admin", "owner") and not self.is_company_owner(user):
             raise PermissionError("Создавать объект может владелец или администратор")
         name = title.strip()
         if len(name) < 3 or len(name) > 120:

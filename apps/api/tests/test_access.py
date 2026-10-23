@@ -62,7 +62,7 @@ def test_session_required_for_protected_routes():
 def test_user_directory_is_not_public():
     res = client.get("/v1/auth/users")
     assert res.status_code == 401
-    token = _token("buyer-users@example.com")
+    token = _token("buyer-users@demo.superapp")
     res = client.get("/v1/auth/users", headers=_auth(token))
     assert res.status_code == 403
     store.credentials["u-admin"] = hash_password("admin-pass-1")
@@ -83,7 +83,7 @@ def test_user_directory_is_not_public():
 
 
 def test_project_membership():
-    outsider = _token("outsider@example.com")
+    outsider = _token("outsider@demo.superapp")
     denied = client.get("/v1/site/projects/pr-besagash/bundle", headers=_auth(outsider))
     assert denied.status_code == 404
     denied_write = client.post(
@@ -110,8 +110,8 @@ def test_project_membership():
 def test_upload_access_and_metadata():
     raw = _jpeg()
     assert b"pilot-note" in raw
-    owner = _token("photo-owner@example.com")
-    other = _token("photo-other@example.com")
+    owner = _token("photo-owner@demo.superapp")
+    other = _token("photo-other@demo.superapp")
     denied = client.post(
         "/v1/cabinet/photos",
         files={"file": ("shot.jpg", raw, "image/jpeg")},
@@ -136,10 +136,10 @@ def test_upload_access_and_metadata():
 
 
 def test_registration_consent_is_required_and_logged():
-    missing = _register("noconsent@example.com", consent=False)
+    missing = _register("noconsent@demo.superapp", consent=False)
     assert missing.status_code == 400
-    assert store.consents_for(store.get_user_by_email("noconsent@example.com").id if store.get_user_by_email("noconsent@example.com") else "") == []
-    created = _register("withconsent@example.com", consent=True, bin_no="123456789013")
+    assert store.consents_for(store.get_user_by_email("noconsent@demo.superapp").id if store.get_user_by_email("noconsent@demo.superapp") else "") == []
+    created = _register("withconsent@demo.superapp", consent=True, bin_no="123456789013")
     assert created.status_code == 200, created.text
     token = created.json()["data"]["token"]
     user_id = created.json()["data"]["user"]["id"]
@@ -166,7 +166,7 @@ def test_login_without_consent_is_rejected():
 
     user = User(
         id="u-plain",
-        email="plain@example.com",
+        email="plain@demo.superapp",
         full_name="Plain User",
         role="buyer",
         phone="+77001112233",
@@ -190,8 +190,8 @@ def test_login_without_consent_is_rejected():
 
 
 def test_crm_ownership():
-    owner = _token("crm-owner@example.com", "111111111111")
-    other = _token("crm-other@example.com", "222222222222")
+    owner = _token("crm-owner@demo.superapp", "111111111111")
+    other = _token("crm-other@demo.superapp", "222222222222")
     created = client.post(
         "/v1/crm/deals",
         json={"title": "Private deal", "amount_kzt": 1500, "client_name": "Owner"},

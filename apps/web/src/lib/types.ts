@@ -46,6 +46,10 @@ export type User = {
   company_bin?: string;
   city?: string;
   pilot?: string;
+  status?: "active" | "pending";
+  account_kind?: string;
+  company_id?: string;
+  phone_verified_at?: string | null;
 };
 
 export type PlotDocs = {

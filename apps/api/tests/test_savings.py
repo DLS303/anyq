@@ -184,8 +184,8 @@ def _plant(project_id: str, user_id: str) -> str:
 
 def test_savings_endpoint_matches_formula_and_hides_it_from_outsiders():
     owner = _owner()
-    outsider, _outsider_id = _register("savings-outsider@example.com", "Чужая компания")
-    same_company, _same_id = _register("savings-same-co@example.com", "Строй Тест")
+    outsider, _outsider_id = _register("savings-outsider@demo.superapp", "Чужая компания")
+    same_company, _same_id = _register("savings-same-co@demo.superapp", "Строй Тест")
     created = client.post(
         "/v1/site/projects",
         json={"title": "Объект экономии", "address": "Тестовый адрес"},
