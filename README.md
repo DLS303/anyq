@@ -35,7 +35,7 @@ npm run dev
 | `moderator@demo.superapp` | модератор |
 | `admin@demo.superapp` | админ |
 
-Вымышленные записи создаются только при `ANYQ_DEMO_MODE=1` (и `NEXT_PUBLIC_ANYQ_DEMO_MODE=1` для экранов). Без флага база пустая. Публичная регистрация закрыта, пока `REGISTRATION_ENABLED` и `NEXT_PUBLIC_REGISTRATION_ENABLED` не равны `1`; вход существующих аккаунтов при этом работает. Пароль демо-аккаунтов задаётся через `ANYQ_DEMO_PASSWORD` и не применяется при `ANYQ_ENV=production`. В production интерфейс OpenAPI (`/docs`) отвечает 404. Бейдж проверки появляется только после записи модератора или администратора.
+Вымышленные записи создаются только при `ANYQ_DEMO_MODE=1` (и `NEXT_PUBLIC_ANYQ_DEMO_MODE=1` для экранов). Без флага база пустая, первая регистрация становится владельцем. Пароль демо-аккаунтов задаётся через `ANYQ_DEMO_PASSWORD` и не применяется при `ANYQ_ENV=production`. Бейдж проверки появляется только после записи модератора или администратора.
 
 ## Когда появится Docker
 
@@ -48,3 +48,5 @@ docker compose up -d
 ## Что сознательно не сделано
 
 Эскроу, Kaspi Pay, eGov QR, Flutter, KENML, Pin-on-Plan, e-Qurylys, Elasticsearch, Kafka, S3.
+
+`REGISTRATION_ENABLED` и `NEXT_PUBLIC_REGISTRATION_ENABLED` включают публичную регистрацию только значением `1`. См. `docs/README.md`.

@@ -4,17 +4,15 @@ import os
 
 from fastapi.responses import JSONResponse
 
+from app.config import api_docs_closed
+
 REGISTER_PATHS = {"/v1/auth/register"}
 _DOC_PATHS = {"/docs", "/redoc", "/openapi.json"}
 
 
 def registration_enabled() -> bool:
     """Public sign-up stays closed unless REGISTRATION_ENABLED is exactly 1."""
-    return os.getenv("REGISTRATION_ENABLED", "").strip() == "1"
-
-
-def production_env() -> bool:
-    return os.getenv("ANYQ_ENV", "development").strip().lower() == "production"
+    return os.getenv("REGISTRATION_ENABLED") == "1"
 
 
 def _normalized(path: str) -> str:
@@ -36,7 +34,7 @@ class PublicSurfaceMiddleware:
             response = JSONResponse(status_code=403, content={"detail": "Регистрация недоступна"})
             await response(scope, receive, send)
             return
-        hidden_docs = production_env() and (
+        hidden_docs = api_docs_closed() and (
             normalized in _DOC_PATHS or path.startswith(("/docs/", "/redoc/"))
         )
         if hidden_docs:

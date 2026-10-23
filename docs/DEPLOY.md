@@ -106,7 +106,7 @@ openssl rand -base64 48
 - `DATABASE_URL` — `postgresql+psycopg://anyq:<тот же пароль>@postgres:5432/anyq`. Compose подставляет пароль из `POSTGRES_PASSWORD` сам, но в файле адрес тоже должен быть адресом PostgreSQL.
 - `WEB_CONCURRENCY` оставьте `2` или поставьте число от 1 до 8.
 - `NEXT_PUBLIC_PILOT_MODE=1` включает пилотный интерфейс. Значение попадает в образ сайта на сборке. Смена потребует нового `deploy.sh`.
-- `REGISTRATION_ENABLED=0` и `NEXT_PUBLIC_REGISTRATION_ENABLED=0` закрывают публичную регистрацию. `POST /v1/auth/register` отвечает 403 до проверки тела. Страница `/register` и ссылки на неё ведут на вход. Существующие аккаунты, включая `@demo.superapp`, входят как раньше. Значение `1` открывает регистрацию. Флаг сайта попадает в образ на сборке.
+- `REGISTRATION_ENABLED` и `NEXT_PUBLIC_REGISTRATION_ENABLED` включают публичную регистрацию только значением `1`. Любое другое значение оставляет её закрытой: `POST /v1/auth/register` отвечает 403 до проверки тела, страница `/register` и ссылки на неё ведут на вход. Существующие аккаунты, включая `@demo.superapp`, входят как раньше. Флаг сайта попадает в образ на сборке.
 - `INTERNAL_API_URL` оставьте `http://api:8010`.
 
 Контейнер API не стартует, если `JWT_SECRET` или `LOGIN_HASH_SECRET` пустой, короче 32 символов или похож на заготовку (`changeme`, `replace-me`, `test-only`, `superapp`, `your-secret` и те же слова в другом регистре). Пустой `CORS_ORIGINS`, символ `*` в нём, непустой демо-пароль и пароль базы по умолчанию тоже останавливают запуск. Тот же набор проверяет `deploy/check_env.sh` до сборки. Процесс Python дополнительно отказывается стартовать без `JWT_SECRET` и `LOGIN_HASH_SECRET` достаточной длины и без `CORS_ORIGINS`.

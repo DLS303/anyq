@@ -8,6 +8,14 @@ def demo_mode() -> bool:
     return os.getenv("ANYQ_DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def api_docs_closed() -> bool:
+    """True when /docs, /redoc, and /openapi.json must stay closed.
+
+    Closed when ANYQ_ENV is demo or production.
+    """
+    return os.getenv("ANYQ_ENV", "development").strip().lower() in {"demo", "production"}
+
+
 def resolve_cors_origins() -> list[str]:
     env = os.getenv("ANYQ_ENV", "development").strip().lower()
     raw = os.getenv("CORS_ORIGINS", "")

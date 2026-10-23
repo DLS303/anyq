@@ -3,9 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
-from app.access_gate import PublicSurfaceMiddleware, production_env
+from app.access_gate import PublicSurfaceMiddleware
 from app.authutil import load_secret
-from app.config import settings
+from app.config import api_docs_closed, settings
 from app.routers import (
     acts,
     auth,
@@ -31,13 +31,13 @@ from app.sql_backend import ChangedByOther
 
 load_secret()
 
-_docs_public = not production_env()
+_docs_closed = api_docs_closed()
 app = FastAPI(
     title=settings.app_name,
     version=settings.version,
-    docs_url="/docs" if _docs_public else None,
-    redoc_url="/redoc" if _docs_public else None,
-    openapi_url="/openapi.json" if _docs_public else None,
+    docs_url=None if _docs_closed else "/docs",
+    redoc_url=None if _docs_closed else "/redoc",
+    openapi_url=None if _docs_closed else "/openapi.json",
 )
 
 app.add_middleware(GZipMiddleware, minimum_size=500)
@@ -79,11 +79,11 @@ def changed_by_other(_request: Request, exc: ChangedByOther):
 
 @app.get("/")
 def root():
-    payload = {
+    body = {
         "ok": True,
         "product": "SuperAPP",
         "phase": 2,
     }
-    if not production_env():
-        payload["docs"] = "/docs"
-    return payload
+    if not api_docs_closed():
+        body["docs"] = "/docs"
+    return body

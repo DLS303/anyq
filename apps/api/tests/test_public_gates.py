@@ -30,7 +30,7 @@ def test_register_is_closed_before_validation(monkeypatch):
     assert malformed.status_code == 403
     assert malformed.json()["detail"] == "Регистрация недоступна"
 
-    for value in ("", "0", "true", "yes"):
+    for value in ("", "0", "true", "yes", "TRUE", " 1"):
         monkeypatch.setenv("REGISTRATION_ENABLED", value)
         res = client.post("/v1/auth/register", json=_VALID, headers={"User-Agent": "anyq-test"})
         assert res.status_code == 403, value
@@ -59,14 +59,21 @@ def test_demo_login_stays_open_when_registration_is_closed(monkeypatch):
     assert closed.status_code == 403
 
 
-def test_openapi_ui_is_hidden_in_production(monkeypatch):
+def test_openapi_ui_is_hidden_in_demo_and_production(monkeypatch):
     monkeypatch.setenv("ANYQ_ENV", "development")
-    assert client.get("/docs").status_code == 200
-    assert client.get("/openapi.json").status_code == 200
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 200, path
     assert client.get("/").json()["docs"] == "/docs"
 
+    monkeypatch.setenv("ANYQ_ENV", "demo")
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        hidden = client.get(path)
+        assert hidden.status_code == 404, path
+        assert hidden.json()["detail"] == "Not Found"
+    assert "docs" not in client.get("/").json()
+
     monkeypatch.setenv("ANYQ_ENV", "production")
-    for path in ("/docs", "/docs/", "/redoc", "/openapi.json"):
+    for path in ("/docs", "/redoc", "/openapi.json"):
         hidden = client.get(path)
         assert hidden.status_code == 404, path
         assert hidden.json()["detail"] == "Not Found"
