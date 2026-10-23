@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { fetchMaterials, fetchSpecialists } from "@/lib/api";
 import { MATERIAL_CAT, CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import { t } from "@/i18n/messages";
@@ -16,29 +17,12 @@ import {
   Truck,
 } from "lucide-react";
 
-export default async function HomePage({ params }: { params: Promise<{ locale: string }> }) {
-  const { locale: raw } = await params;
-  const locale = (raw === "kk" ? "kk" : "ru") as Locale;
+async function HomeCatalogs({ locale }: { locale: Locale }) {
   const m = t(locale);
   const specialists = PILOT_MODE ? [] : await fetchSpecialists().catch(() => []);
   const materials = PILOT_MODE ? [] : await fetchMaterials().catch(() => []);
-
   return (
-    <div className="grid grid-cols-1">
-      <HomeStage locale={locale} />
-      <HomeRise />
-
-      <div className="home-flow relative z-20">
-        <div
-          className="home-veil pointer-events-none ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] w-screen"
-          aria-hidden
-        />
-        <div className="relative">
-          <div
-            className="pointer-events-none absolute inset-0 -z-10 ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] w-screen bg-[#f8fafc]"
-            aria-hidden
-          />
-          <div className="grid gap-12 pt-6 sm:gap-16 sm:pt-10">
+    <>
       {PILOT_MODE ? null : (
       <>
       {/* Materials Showcase with Quick Action Buttons */}
@@ -189,6 +173,33 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         </div>
       </section>
       ) : null}
+    </>
+  );
+}
+
+export default async function HomePage({ params }: { params: Promise<{ locale: string }> }) {
+  const { locale: raw } = await params;
+  const locale = (raw === "kk" ? "kk" : "ru") as Locale;
+
+  return (
+    <div className="grid grid-cols-1">
+      <HomeStage locale={locale} />
+      <HomeRise />
+
+      <div className="home-flow relative z-20">
+        <div
+          className="home-veil pointer-events-none ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] w-screen"
+          aria-hidden
+        />
+        <div className="relative">
+          <div
+            className="pointer-events-none absolute inset-0 -z-10 ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] w-screen bg-[#f8fafc]"
+            aria-hidden
+          />
+          <div className="grid gap-12 pt-6 sm:gap-16 sm:pt-10">
+            <Suspense fallback={<div className="min-h-[100dvh]" aria-hidden />}>
+              <HomeCatalogs locale={locale} />
+            </Suspense>
           </div>
         </div>
       </div>

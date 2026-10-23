@@ -1,6 +1,17 @@
 "use client";
 
-import { t } from "@/i18n/messages";
+const copy = {
+  ru: {
+    errorTitle: "Страница не открылась",
+    errorBody: "Повторите попытку. Если ошибка останется, обновите страницу.",
+    retry: "Повторить",
+  },
+  kk: {
+    errorTitle: "Бет ашылмады",
+    errorBody: "Қайталап көріңіз. Қате қалса, бетті жаңартыңыз.",
+    retry: "Қайталау",
+  },
+} as const;
 
 export default function GlobalError({
   reset,
@@ -9,7 +20,7 @@ export default function GlobalError({
   reset: () => void;
 }) {
   const locale = typeof window !== "undefined" && window.location.pathname.startsWith("/kk") ? "kk" : "ru";
-  const m = t(locale);
+  const m = copy[locale];
   return (
     <html lang={locale}>
       <body style={{ margin: 0, background: "#f8fafc", color: "#0f172a", fontFamily: "system-ui, sans-serif" }}>

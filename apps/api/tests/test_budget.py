@@ -196,8 +196,8 @@ def test_procurement_fact_uses_chosen_price_and_skips_a_covered_invoice():
 
 def test_budget_permissions_expenses_and_colours(monkeypatch):
     owner = _owner()
-    outsider, _outsider_id = _register("budget-outsider@example.com", "Чужая компания")
-    viewer_token, viewer_id = _register("budget-viewer@example.com", "Другая контора")
+    outsider, _outsider_id = _register("budget-outsider@demo.superapp", "Чужая компания")
+    viewer_token, viewer_id = _register("budget-viewer@demo.superapp", "Другая контора")
     created = client.post(
         "/v1/site/projects",
         json={"title": "Объект с бюджетом", "address": "Тестовый адрес"},

@@ -10,15 +10,16 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Float,
     ForeignKeyConstraint,
     Index,
@@ -44,10 +45,21 @@ from sqlalchemy.exc import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.geo import centroid, haversine_km
+from app.tenant import company_key as tenant_company_key
 
 
 class Base(DeclarativeBase):
     pass
+
+
+def technical_string(length: int):
+    """SKU, codes, email, and E.164 phone.
+
+    PostgreSQL stores these with the C collation so uniqueness does not follow
+    the database locale. SQLite compares them with its BINARY collation.
+    """
+
+    return String(length).with_variant(String(length, collation="C"), "postgresql")
 
 
 class Record(Base):
@@ -61,7 +73,7 @@ class Record(Base):
     user_id: Mapped[str | None] = mapped_column(String(80))
     status: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[str | None] = mapped_column(String(40))
-    email: Mapped[str | None] = mapped_column(String(200))
+    email: Mapped[str | None] = mapped_column(technical_string(200))
     category: Mapped[str | None] = mapped_column(String(40))
     district: Mapped[str | None] = mapped_column(String(160))
     gas: Mapped[str | None] = mapped_column(String(40))
@@ -84,12 +96,20 @@ class Record(Base):
         Index("ix_records_coll_owner_seq", "collection", "owner_id", "seq"),
         Index("ix_records_coll_status_seq", "collection", "status", "seq"),
         Index("ix_records_coll_created", "collection", "created_at"),
+        Index("ix_records_coll_category_seq", "collection", "category", "seq"),
         Index(
             "ux_records_user_email",
-            "email",
+            text("lower(email)"),
             unique=True,
             sqlite_where=text("collection = 'users'"),
             postgresql_where=text("collection = 'users'"),
+        ),
+        Index(
+            "ux_records_single_owner",
+            "status",
+            unique=True,
+            sqlite_where=text("collection = 'users' AND status = 'owner'"),
+            postgresql_where=text("collection = 'users' AND status = 'owner'"),
         ),
     )
 
@@ -234,6 +254,138 @@ class PhotoJob(Base):
     taken_at: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[str] = mapped_column(String(40), index=True)
     finished_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class CompanyRow(Base):
+    """Sign-up profile columns on the company row introduced in 20261019_0002_pf0.
+
+    `legacy_key` stays the tenant id (`bin:` or `user:`). New columns are
+    nullable so rows reserved before sign-up remain valid.
+    """
+
+    __tablename__ = "companies"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    legacy_key: Mapped[str] = mapped_column(String(180), nullable=False)
+    role: Mapped[str | None] = mapped_column(String(40))
+    account_kind: Mapped[str | None] = mapped_column(String(20))
+    name: Mapped[str | None] = mapped_column(String(200))
+    bin: Mapped[str | None] = mapped_column(String(12))
+    iin: Mapped[str | None] = mapped_column(String(12))
+    city: Mapped[str | None] = mapped_column(String(120))
+    categories: Mapped[str | None] = mapped_column(String(400))
+    vat_included: Mapped[bool | None] = mapped_column(Boolean)
+    e_invoice: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[str | None] = mapped_column(String(40))
+
+    __table_args__ = (
+        UniqueConstraint("legacy_key", name="uq_companies_legacy_key"),
+        CheckConstraint(
+            "role IS NULL OR role IN ('supplier', 'contractor', 'customer')",
+            name="ck_companies_role",
+        ),
+        CheckConstraint(
+            "account_kind IS NULL OR account_kind IN ('individual', 'company')",
+            name="ck_companies_kind",
+        ),
+    )
+
+
+class AccountRow(Base):
+    """Sign-up account. Phone is unique only after phone_verified_at is set."""
+
+    __tablename__ = "accounts"
+
+    user_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    company_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    role: Mapped[str] = mapped_column(String(40), nullable=False)
+    account_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(20))
+    phone_verified_at: Mapped[str | None] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    bin: Mapped[str | None] = mapped_column(String(12))
+    iin: Mapped[str | None] = mapped_column(String(12))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["company_id"], ["companies.id"], name="fk_accounts_company_id"),
+        CheckConstraint("phone IS NOT NULL OR email IS NOT NULL", name="ck_accounts_contact"),
+        CheckConstraint("role IN ('supplier', 'contractor', 'customer')", name="ck_accounts_role"),
+        CheckConstraint("account_kind IN ('individual', 'company')", name="ck_accounts_kind"),
+        CheckConstraint("status IN ('pending', 'active')", name="ck_accounts_status"),
+        Index(
+            "ux_accounts_email",
+            text("lower(email)"),
+            unique=True,
+            sqlite_where=text("email IS NOT NULL"),
+            postgresql_where=text("email IS NOT NULL"),
+        ),
+        Index(
+            "ux_accounts_phone_verified",
+            "phone",
+            unique=True,
+            sqlite_where=text("phone_verified_at IS NOT NULL"),
+            postgresql_where=text("phone_verified_at IS NOT NULL"),
+        ),
+    )
+
+
+class CompanyMember(Base):
+    """Membership inside a company. `owner` is not the site role `foreman`."""
+
+    __tablename__ = "company_members"
+
+    company_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    role: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["company_id"], ["companies.id"], name="fk_company_members_company_id"),
+        CheckConstraint("role IN ('owner', 'supplier')", name="ck_company_members_role"),
+        Index("ix_company_members_user", "user_id"),
+        Index("ix_company_members_company_role", "company_id", "role"),
+    )
+
+
+class SignupCodeRow(Base):
+    __tablename__ = "signup_codes"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id"],
+            ["accounts.user_id"],
+            name="fk_signup_codes_user_id",
+            ondelete="CASCADE",
+        ),
+        Index("ix_signup_codes_user", "user_id"),
+    )
+
+
+class RequestRecipient(Base):
+    """A procurement request sent to one supplier company."""
+
+    __tablename__ = "request_recipients"
+
+    request_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    supplier_company_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="sent")
+    sent_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False, server_default="")
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False, server_default="")
+
+    __table_args__ = (
+        CheckConstraint("status IN ('sent', 'closed')", name="ck_request_recipients_status"),
+        Index("ix_request_recipients_request", "request_id"),
+        Index("ix_request_recipients_company", "supplier_company_id"),
+    )
 
 
 # Attribute on MemoryStore -> collection name in `records`.
@@ -591,16 +743,6 @@ def sqlite_path_from_url(url: str) -> str | None:
     return None
 
 
-def _company_key(company: str, company_bin: str, user_id: str) -> str:
-    digits = re.sub(r"\D", "", company_bin or "")
-    if len(digits) == 12:
-        return f"bin:{digits}"
-    name = re.sub(r"\s+", " ", (company or "").strip().casefold())
-    if name:
-        return f"name:{name}"
-    return f"user:{user_id}"
-
-
 def _dump(value) -> dict:
     if isinstance(value, str):
         return {"password_hash": value}
@@ -641,11 +783,11 @@ def index_values(store, collection: str, doc_id: str, payload: dict) -> dict:
     email = _blank((payload.get("email") or "").lower()) if collection == "users" else _blank(payload.get("email"))
     company_key = None
     if collection == "users":
-        company_key = _company_key(str(payload.get("company") or ""), str(payload.get("company_bin") or ""), doc_id)
+        company_key = tenant_company_key(SimpleNamespace(id=doc_id, company_key=payload.get("company_key") or ""))
     elif collection == "projects" and owner_id or collection == "crm_contacts" and owner_id:
         owner = store.users_by_id.get(owner_id)
         if owner is not None:
-            company_key = _company_key(owner.company, owner.company_bin, owner.id)
+            company_key = tenant_company_key(owner)
     category = _blank(payload.get("category") or payload.get("purpose") or payload.get("funnel") or payload.get("contact_type"))
     district = _blank(payload.get("district"))
     gas = _blank(payload.get("gas"))
@@ -691,6 +833,8 @@ def index_values(store, collection: str, doc_id: str, payload: dict) -> dict:
         payload.get("email"),
     ]
     search_text = " ".join(str(bit) for bit in search_bits if bit).lower()[:4000]
+    if collection == "users" and str(payload.get("role") or "").strip() == "owner":
+        status = "owner"
     return {
         "project_id": project_id,
         "company_key": company_key,
@@ -827,12 +971,65 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-SCHEMA_HEAD = "20261019_0001b_store_fixes"
+# One alembic head. 20261023_0004_list_indexes revises 20261019_0003_pf1a.
+SCHEMA_HEAD = "20261023_0004_list_indexes"
 MIGRATION_LOCK = 21419007
 
 
 def _production() -> bool:
     return os.getenv("ANYQ_ENV", "development").strip().lower() == "production"
+
+
+def database_revision_ready(version: str, expected: str | None = None) -> bool:
+    """True when the database is at the image revision or a later one in its chain.
+
+    A newer schema still serves the previous image (expand). An older schema does not.
+    """
+    target = expected or SCHEMA_HEAD
+    current = (version or "").strip()
+    if not current:
+        return False
+    if current == target:
+        return True
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        from alembic.util import CommandError
+
+        cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+        script = ScriptDirectory.from_config(cfg)
+    except (OSError, ValueError, CommandError):
+        return False
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        try:
+            rev = script.get_revision(current)
+        except CommandError:
+            return False
+        down = rev.down_revision
+        if down is None:
+            return False
+        if isinstance(down, tuple):
+            return target in down
+        if down == target:
+            return True
+        current = str(down)
+    return False
+
+
+def users_by_address(users, addresses: dict[str, str | None], quarantined: set[str]) -> dict:
+    """Email index. Quarantined rows and rows without an address are left out."""
+    indexed = {}
+    for user in users:
+        doc_id = getattr(user, "id", None)
+        if not doc_id or doc_id in quarantined:
+            continue
+        email = addresses.get(doc_id)
+        if email is None or not str(email).strip():
+            continue
+        indexed[str(email).strip().lower()] = user
+    return indexed
 
 
 def _record_pk_conflict(exc: IntegrityError) -> bool:
@@ -1059,6 +1256,12 @@ def _trigger_sql(dialect: str) -> list[str]:
             BEFORE DELETE ON consent_events
             FOR EACH ROW EXECUTE FUNCTION consent_events_append_only()
             """,
+            "DROP TRIGGER IF EXISTS consent_events_no_truncate ON consent_events",
+            """
+            CREATE TRIGGER consent_events_no_truncate
+            BEFORE TRUNCATE ON consent_events
+            FOR EACH STATEMENT EXECUTE FUNCTION consent_events_append_only()
+            """,
         ]
     return []
 
@@ -1125,12 +1328,15 @@ class SqlRuntime:
     def _create_schema(self) -> None:
         if _production():
             return
-        # PostgreSQL schema, triggers, and consent copy belong to Alembic.
+        # PostgreSQL schema and consent triggers belong to Alembic. Startup DDL
+        # races when several workers import the app together.
         if not self.url.startswith("sqlite"):
             return
         last: Exception | None = None
         for attempt in range(8):
             try:
+                import app.marketplace_models  # noqa: F401
+
                 Base.metadata.create_all(self.engine)
                 install_consent_triggers(self.engine)
                 self._ensure_meta()
@@ -1182,7 +1388,7 @@ class SqlRuntime:
                 if not found:
                     return False
                 version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-                return str(version or "") == SCHEMA_HEAD
+                return database_revision_ready(str(version or ""))
         except SQLAlchemyError:
             return False
 
@@ -1299,12 +1505,23 @@ class SqlRuntime:
             rows = session.scalars(select(Record).order_by(Record.seq, Record.doc_id)).all()
             consent_rows = session.scalars(select(ConsentEvent).order_by(ConsentEvent.seq)).all()
             snapshot = [
-                (row.collection, row.doc_id, dict(row.payload or {}), int(row.row_version or 1), int(row.seq or 0))
+                (
+                    row.collection,
+                    row.doc_id,
+                    dict(row.payload or {}),
+                    int(row.row_version or 1),
+                    int(row.seq or 0),
+                    row.email,
+                )
                 for row in rows
             ]
             consents = [consent_record_from_event(row) for row in consent_rows]
             consent_last = max((int(row.seq or 0) for row in consent_rows), default=0)
-        for collection, doc_id, payload, version, seq in snapshot:
+            quarantined = set(session.scalars(select(EmailQuarantine.doc_id)).all())
+        user_addresses: dict[str, str | None] = {}
+        for collection, doc_id, payload, version, seq, email in snapshot:
+            if collection == "users":
+                user_addresses[doc_id] = email
             last_seq[collection] = max(last_seq.get(collection, 0), seq)
             if collection == "credentials":
                 buckets.setdefault("credentials", {})[doc_id] = str(payload.get("password_hash") or "")
@@ -1326,7 +1543,7 @@ class SqlRuntime:
         users = buckets.get("users", {})
         store.users_by_id.load_clean(users, versions.get("users", {}), last_seq.get("users", 0))
         if not store.users.dirty and not store.users.deleted:
-            store.users.load_clean({user.email.lower(): user for user in users.values()})
+            store.users.load_clean(users_by_address(users.values(), user_addresses, quarantined))
         for attr, collection in PERSISTED:
             if collection in {"users", "favorites", "consents"}:
                 continue
@@ -1360,6 +1577,13 @@ class SqlRuntime:
                 for row in rows
             ]
             tomb_ids = [(row.doc_id, int(row.seq or 0)) for row in tombs]
+            address_rows = []
+            quarantined: set[str] = set()
+            if collection == "users":
+                address_rows = session.execute(
+                    select(Record.doc_id, Record.email).where(Record.collection == "users")
+                ).all()
+                quarantined = set(session.scalars(select(EmailQuarantine.doc_id)).all())
         changed = {doc_id for doc_id, _payload, _version, _seq in packed}
         deleted = {doc_id for doc_id, _seq in tomb_ids if doc_id not in changed}
         last = since_seq
@@ -1386,7 +1610,10 @@ class SqlRuntime:
                 versions[doc_id] = version
             store.users_by_id.merge_changes(items, versions, deleted, last)
             if not store.users.dirty and not store.users.deleted:
-                store.users.load_clean({user.email.lower(): user for user in store.users_by_id.peek_values()})
+                addresses = {str(doc_id): email for doc_id, email in address_rows}
+                store.users.load_clean(
+                    users_by_address(store.users_by_id.peek_values(), addresses, quarantined)
+                )
             return
         model = models.get(collection)
         if model is None:
@@ -1433,10 +1660,12 @@ class SqlRuntime:
             raise last
         return set()
 
-    def _flush_once(self, store) -> set[str]:
+    def _flush_once(self, store, session: Session | None = None) -> set[str]:
+        own_session = session is None
         local = store._local
         local.suspend = True
-        session = self.factory()
+        if session is None:
+            session = self.factory()
         touched: set[str] = set()
         snapshots = []
         for attr, _collection in PERSISTED:
@@ -1462,6 +1691,10 @@ class SqlRuntime:
             for attr, collection in PERSISTED:
                 bag = getattr(store, attr)
                 if bag.dirty or bag.deleted:
+                    if collection == "drawings" and getattr(store, "_ready", False):
+                        from app.drawings import assert_legacy_mutable
+
+                        assert_legacy_mutable(session, bag)
                     self._flush_dict(session, store, collection, bag)
                     touched.add(collection)
                     allocated.add(collection)
@@ -1499,7 +1732,8 @@ class SqlRuntime:
                 bag.pending_del.clear()
             return touched
         finally:
-            session.close()
+            if own_session:
+                session.close()
             local.suspend = False
 
     def _flush_dict(self, session: Session, store, collection: str, bag: TrackedDict) -> None:
@@ -1621,13 +1855,7 @@ class SqlRuntime:
             if legacy in known:
                 continue
             user = store.users_by_id.peek(getattr(item, "user_id", ""))
-            company_id = None
-            if user is not None:
-                company_id = _company_key(
-                    getattr(user, "company", ""),
-                    getattr(user, "company_bin", ""),
-                    getattr(user, "id", ""),
-                )
+            company_id = tenant_company_key(user) if user is not None else None
             event = consent_event_from_record(item, company_id)
             event.seq = alloc_seq(session, "consents")
             session.add(event)

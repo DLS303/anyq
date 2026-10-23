@@ -1,6 +1,6 @@
 "use client";
 
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { budgetArticles, budgetCategoryLabel } from "@/lib/budgetView";
 import { money } from "@/lib/format";
 import type { BudgetCategory, Locale, ObjectBudgetView } from "@/lib/types";
@@ -19,7 +19,7 @@ export function BudgetArticles({
   plan: ObjectBudgetView["plan"];
   factBy: Partial<Record<BudgetCategory, number>>;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   const rows = budgetArticles(plan, factBy);
   return (
     <details className="rounded-xl bg-white/70 px-3" data-budget-articles>

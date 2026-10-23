@@ -90,7 +90,7 @@ def test_object_creation_stores_only_given_fields():
 
 def test_participant_add_and_remove_changes_access():
     owner = _login("u-owner", "owner@demo.superapp", "owner-pass-members")
-    member = _person("u-crew-day", "foreman-new@example.com")
+    member = _person("u-crew-day", "foreman-new@demo.superapp")
     created = client.post(
         "/v1/site/projects",
         json={"title": "Объект бригады", "address": "Талгар"},
@@ -110,21 +110,21 @@ def test_participant_add_and_remove_changes_access():
 
     missing = client.post(
         f"/v1/site/projects/{pid}/members",
-        json={"email": "nobody@example.com", "role": "customer"},
+        json={"email": "nobody@demo.superapp", "role": "customer"},
         headers=_auth(owner),
     )
     assert missing.status_code == 404
 
     added = client.post(
         f"/v1/site/projects/{pid}/members",
-        json={"email": "Foreman-New@example.com", "role": "foreman"},
+        json={"email": "Foreman-New@demo.superapp", "role": "foreman"},
         headers=_auth(owner),
     )
     assert added.status_code == 200, added.text
     card = added.json()["data"]
     assert set(card) == {"user_id", "name", "role", "email"}
     assert card["role"] == "foreman"
-    assert card["email"] == "f***@example.com"
+    assert card["email"] == "f***@demo.superapp"
     assert "phone" not in added.text
     assert "+7700" not in added.text
 
@@ -152,8 +152,8 @@ def test_participant_add_and_remove_changes_access():
 
 def test_voice_upload_access_and_limits():
     owner = _login("u-owner", "owner@demo.superapp", "owner-pass-voice")
-    member = _person("u-crew-voice", "voice-member@example.com")
-    outsider = _person("u-crew-out", "voice-outsider@example.com", role="buyer")
+    member = _person("u-crew-voice", "voice-member@demo.superapp")
+    outsider = _person("u-crew-out", "voice-outsider@demo.superapp", role="buyer")
     created = client.post(
         "/v1/site/projects",
         json={"title": "Объект с голосом", "address": "Есик"},
@@ -162,7 +162,7 @@ def test_voice_upload_access_and_limits():
     pid = created.json()["data"]["id"]
     client.post(
         f"/v1/site/projects/{pid}/members",
-        json={"email": "voice-member@example.com", "role": "supervisor"},
+        json={"email": "voice-member@demo.superapp", "role": "supervisor"},
         headers=_auth(owner),
     )
     log = client.post(
@@ -217,7 +217,7 @@ def test_ai_consent_revoke_appends_a_row():
     created = client.post(
         "/v1/auth/register",
         json={
-            "email": "consent-ai@example.com",
+            "email": "consent-ai@demo.superapp",
             "password": "secret12",
             "full_name": "Алия Тест",
             "phone": "+77001110022",

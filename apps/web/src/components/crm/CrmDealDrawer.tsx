@@ -14,7 +14,7 @@ import {
 } from "@/lib/api";
 import { ACTIVITY_TYPE, FUNNEL, INVOICE_STATUS, STAGE, money } from "@/lib/format";
 import type { CrmActivity, CrmInvoice, Deal, Locale } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 
 export function CrmDealDrawer({
   deal,
@@ -29,7 +29,7 @@ export function CrmDealDrawer({
   onClose: () => void;
   onDealUpdated: () => void;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
   const [currentDeal, setCurrentDeal] = useState<Deal>(deal);
   const [activities, setActivities] = useState<CrmActivity[]>([]);

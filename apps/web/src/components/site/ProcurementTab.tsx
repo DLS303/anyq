@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+import { ChunkFallback } from "@/components/ui/ChunkFallback";
 import {
   createProcOffer,
   createProcRequest,
@@ -11,7 +13,6 @@ import {
   fetchProcSavings,
   fetchProcSheet,
   fetchProjects,
-  importProcLines,
   importProcOffers,
   openProcFile,
   patchProcLine,
@@ -25,10 +26,15 @@ import {
 import { useAuth } from "@/lib/auth";
 import { ErrorRetry, LoadingSkeleton, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { toast } from "@/lib/toast";
-import { t } from "@/i18n/messages";
-import type { Locale, Overprice, ProcImportResult } from "@/lib/types";
+import { useMessages } from "@/lib/i18n";
+import type { Locale, Overprice } from "@/lib/types";
 import { PriceCompare } from "./PriceCompare";
 import { SavingsBanner } from "./SavingsBanner";
+
+const StatementImport = dynamic(() => import("./StatementImport").then((m) => m.StatementImport), {
+  ssr: false,
+  loading: () => <ChunkFallback />,
+});
 
 const field = "w-full min-h-12 border border-ink/15 bg-white px-3 text-sm";
 const primary =
@@ -36,7 +42,7 @@ const primary =
 const ghost =
   "inline-flex min-h-12 w-full items-center justify-center rounded-full border border-ink/15 bg-white px-4 text-sm disabled:opacity-50";
 
-type Copy = ReturnType<typeof t>;
+type Copy = ReturnType<typeof useMessages>;
 type Picked = { title: string; unit: string };
 type DraftLine = { id: string; title: string; unit: string; qty: string };
 type Screen =
@@ -90,98 +96,6 @@ function requestStatus(status: string, m: Copy) {
   return m.procStatusDraft;
 }
 
-function StatementImport({
-  m,
-  resolveId,
-  onSaved,
-}: {
-  m: Copy;
-  resolveId: () => Promise<string>;
-  onSaved: () => void;
-}) {
-  const [preview, setPreview] = useState<ProcImportResult | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
-  const idRef = useRef<string | null>(null);
-
-  async function ensure() {
-    if (idRef.current) return idRef.current;
-    const id = await resolveId();
-    idRef.current = id;
-    return id;
-  }
-
-  async function run(task: () => Promise<void>) {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await task();
-    } catch (err) {
-      toast(err instanceof Error ? err.message : m.hubSaveError);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="grid gap-3">
-      <label className="grid gap-1 text-sm">
-        {m.procUploadStatement}
-        <input
-          type="file"
-          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          className="block w-full text-sm"
-          onChange={(event) => {
-            const next = event.target.files?.[0];
-            event.target.value = "";
-            if (!next) return;
-            void run(async () => {
-              const id = await ensure();
-              const result = await importProcLines(id, next, true, crypto.randomUUID());
-              setPreview(result);
-              setFile(next);
-            });
-          }}
-        />
-      </label>
-      {preview ? (
-        <div className="grid gap-2">
-          <p className="text-sm text-ink/60">{m.procPreviewHint}</p>
-          {preview.contact_ignored ? <p className="text-sm text-ink/60">{m.procContactIgnored}</p> : null}
-          {preview.rows.map((row) => (
-            <p key={row.row} className={`break-words text-sm ${row.errors.length ? "text-red-800" : "text-ink/80"}`}>
-              {row.title || "—"} · {row.qty ?? "—"} {row.unit || ""}
-              {row.errors.length ? ` — ${row.errors.map((code) => issueText(code, m)).join(". ")}` : ""}
-            </p>
-          ))}
-          <button
-            type="button"
-            className={ghost}
-            disabled={busy || !file || !preview.rows.some((row) => row.errors.length === 0)}
-            onClick={() =>
-              void run(async () => {
-                if (!file) return;
-                const id = await ensure();
-                const saved = await importProcLines(id, file, false, crypto.randomUUID());
-                toast(m.procImportSaved);
-                if (saved.created + saved.updated > 0) {
-                  setPreview(null);
-                  setFile(null);
-                  onSaved();
-                } else {
-                  setPreview(saved);
-                }
-              })
-            }
-          >
-            {m.procSaveStatement}
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 export function ProcurementTab({
   locale,
   projectId,
@@ -191,7 +105,7 @@ export function ProcurementTab({
   projectId: string;
   projectTitle: string;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
   const [screen, setScreen] = useState<Screen>({ kind: "ask", step: 1 });
   const [query, setQuery] = useState("");
@@ -201,7 +115,7 @@ export function ProcurementTab({
   const [lineId, setLineId] = useState("");
   const [supplier, setSupplier] = useState("");
   const [price, setPrice] = useState("");
-  const [vat, setVat] = useState<"yes" | "no" | "unknown">("yes");
+  const [vat, setVat] = useState<"yes" | "no" | "unknown">("unknown");
   const [delivery, setDelivery] = useState("");
   const [comment, setComment] = useState("");
   const [confirmed, setConfirmed] = useState(true);
@@ -217,15 +131,23 @@ export function ProcurementTab({
   const priceId = screen.kind === "prices" ? screen.requestId : null;
   const sheetQuery = useAsync(() => (priceId ? fetchProcSheet(priceId) : Promise.resolve(null)), [priceId]);
   const savingsQuery = useAsync(() => (priceId ? fetchProcSavings(priceId) : Promise.resolve(null)), [priceId]);
-  const pickerQuery = useAsync(() => fetchProcPicker(projectId, needle), [projectId, needle]);
+  const needsPicker = screen.kind === "ask" && screen.step === 1;
+  const needsObjects = screen.kind === "ask" && screen.step === 3;
+  const [askExcel, setAskExcel] = useState(false);
+  const [priceExcel, setPriceExcel] = useState(false);
+  const pickerQuery = useAsync(
+    () => (needsPicker ? fetchProcPicker(projectId, needle) : Promise.resolve(null)),
+    [projectId, needle, needsPicker],
+  );
   const projectsQuery = useAsync(async () => {
+    if (!needsObjects) return [] as { id: string; title: string }[];
     const rows = await fetchProjects();
     return rows.flatMap((row) => {
       const project = (row as { project?: { id?: string; title?: string } }).project;
       if (!project?.id) return [];
       return [{ id: project.id, title: project.title || project.id }];
     });
-  }, []);
+  }, [needsObjects]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setNeedle(query.trim()), 200);
@@ -445,18 +367,22 @@ export function ProcurementTab({
             </div>
           ) : null}
           {screen.step === 1 ? (
-            <details className="rounded-2xl border border-ink/10 bg-white/70 px-4 py-1">
+            <details
+              className="rounded-2xl border border-ink/10 bg-white/70 px-4 py-1"
+              onToggle={(event) => setAskExcel((event.currentTarget as HTMLDetailsElement).open)}
+            >
               <summary className="cursor-pointer py-3 text-sm">{m.procMore}</summary>
-              <div className="pb-4">
-                <StatementImport
-                  m={m}
-                  resolveId={async () => {
-                    const created = await createProcRequest(projectId, m.procStatement, crypto.randomUUID());
-                    return created.id;
-                  }}
-                  onSaved={reload}
-                />
-              </div>
+              {askExcel ? (
+                <div className="pb-4">
+                  <StatementImport
+                    resolveId={async () => {
+                      const created = await createProcRequest(projectId, m.procStatement, crypto.randomUUID());
+                      return created.id;
+                    }}
+                    onSaved={reload}
+                  />
+                </div>
+              ) : null}
             </details>
           ) : null}
         </section>
@@ -569,11 +495,15 @@ export function ProcurementTab({
                   })
                 }
               />
-              <details className="rounded-2xl border border-ink/10 bg-white/70 px-4 py-1">
+              <details
+                className="rounded-2xl border border-ink/10 bg-white/70 px-4 py-1"
+                onToggle={(event) => setPriceExcel((event.currentTarget as HTMLDetailsElement).open)}
+              >
                 <summary className="cursor-pointer py-3 text-sm">{m.procMore}</summary>
+                {priceExcel ? (
                 <div className="grid gap-4 pb-4">
                   {access.can_request ? (
-                    <StatementImport m={m} resolveId={async () => sheet.request.id} onSaved={reload} />
+                    <StatementImport resolveId={async () => sheet.request.id} onSaved={reload} />
                   ) : null}
                   <button
                     type="button"
@@ -810,6 +740,7 @@ export function ProcurementTab({
                     </div>
                   ) : null}
                 </div>
+                ) : null}
               </details>
             </>
           )}

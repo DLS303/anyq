@@ -5,7 +5,7 @@ import { useState } from "react";
 import { ChevronDown, Scale, ShieldCheck } from "lucide-react";
 import { fetchSpecialists } from "@/lib/api";
 import { ErrorRetry, useAsync } from "@/lib/useAsync";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import type { Locale } from "@/lib/types";
 
 const QUESTIONS: { q: string; a: string }[] = [
@@ -32,7 +32,7 @@ const QUESTIONS: { q: string; a: string }[] = [
 ];
 
 export function LegalPanel({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const [open, setOpen] = useState(0);
   const query = useAsync((signal) => fetchSpecialists({ category: "legal" }, signal), []);
   const people = query.data ?? [];

@@ -5,11 +5,11 @@ import { fetchPlot } from "@/lib/api";
 import { PURPOSE, RELIEF, UTILITY, money, titleOf } from "@/lib/format";
 import { ErrorRetry, LoadingSkeleton, useAsync } from "@/lib/useAsync";
 import type { Locale, Plot } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { AuthImage } from "@/components/media/AuthImage";
 
 export function CompareTable({ locale, ids }: { locale: Locale; ids: string[] }) {
-  const m = t(locale);
+  const m = useMessages();
   const query = useAsync(
     (signal) => Promise.all(ids.map((id) => fetchPlot(id, undefined, signal).then((row) => row.plot))),
     [ids.join(",")],

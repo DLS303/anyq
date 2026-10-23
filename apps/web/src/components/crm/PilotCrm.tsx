@@ -1,25 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { ChunkFallback } from "@/components/ui/ChunkFallback";
 import { useAuth } from "@/lib/auth";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import type { Locale } from "@/lib/types";
 import { CrmBoard } from "./CrmBoard";
 
 export function PilotCrm({ locale }: { locale: Locale }) {
-  const m = t(locale);
-  const { user } = useAuth();
-  const [checked, setChecked] = useState(false);
-  const [hasToken, setHasToken] = useState(false);
+  const m = useMessages();
+  const { user, token, ready } = useAuth();
 
-  useEffect(() => {
-    setHasToken(Boolean(localStorage.getItem("superapp_token")));
-    setChecked(true);
-  }, []);
-
-  if (!checked || (hasToken && !user)) {
-    return <p className="text-sm text-ink/60">{m.hubLoading}</p>;
+  if (!ready || (Boolean(token) && !user)) {
+    return (
+      <div className="min-h-[100dvh]">
+        <ChunkFallback />
+      </div>
+    );
   }
 
   if (user?.role === "owner" || user?.role === "admin") {

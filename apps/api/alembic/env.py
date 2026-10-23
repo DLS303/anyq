@@ -2,6 +2,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool, text
 
+import app.marketplace_models  # noqa: F401
 from alembic import context
 from app.sql_backend import MIGRATION_LOCK, Base, resolve_database_url
 
@@ -15,6 +16,8 @@ target_metadata = Base.metadata
 
 _SKIP_INDEXES = {
     "ix_records_search_trgm",
+    "ix_catalog_items_name_trgm",
+    "ix_supplier_ratings_rating_desc",
 }
 
 
@@ -27,6 +30,9 @@ def include_object(object_, name, type_, reflected, compare_to):
         return name in target_metadata.tables
     if type_ == "index":
         if name in _SKIP_INDEXES:
+            return False
+        # PostgreSQL rebuilds this index on lower(email COLLATE "C").
+        if name == "ux_records_user_email" and context.get_impl().dialect.name == "postgresql":
             return False
         return _ours(getattr(object_, "table", None))
     table = getattr(object_, "table", None)

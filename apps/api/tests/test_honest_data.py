@@ -74,7 +74,7 @@ def test_vat_rate_follows_act_date_and_no_vat_mode():
 
 
 def test_review_requires_stars_text_and_completed_order():
-    buyer, buyer_id = _register("review-buyer@example.com")
+    buyer, buyer_id = _register("review-buyer@demo.superapp")
     created = client.post(
         "/v1/specialists/sp-surv/orders",
         json={"specialist_id": "sp-surv", "message": "Нужна топосъёмка"},
@@ -127,7 +127,7 @@ def test_review_requires_stars_text_and_completed_order():
     )
     assert blank.status_code == 400
 
-    stranger, _ = _register("review-stranger@example.com")
+    stranger, _ = _register("review-stranger@demo.superapp")
     forbidden = client.post(
         f"/v1/orders/{order_id}/review",
         json={"stars": 2, "text": "Чужой отзыв"},
@@ -153,7 +153,7 @@ def test_review_requires_stars_text_and_completed_order():
 
 
 def test_quote_amount_must_be_positive_and_keeps_term():
-    buyer, _ = _register("quote-buyer@example.com")
+    buyer, _ = _register("quote-buyer@demo.superapp")
     created = client.post(
         "/v1/specialists/sp-surv/orders",
         json={"specialist_id": "sp-surv", "message": "Нужно КП"},
@@ -240,7 +240,7 @@ def test_invoice_is_marked_manually_by_recipient_only():
 
 
 def test_deal_to_project_does_not_invent_fields_and_is_idempotent():
-    token, _ = _register("project-maker@example.com")
+    token, _ = _register("project-maker@demo.superapp")
     created = client.post(
         "/v1/crm/deals",
         json={"title": "Коробка без сметы", "amount_kzt": 0, "funnel": "construction"},
@@ -291,7 +291,7 @@ def test_deal_to_project_does_not_invent_fields_and_is_idempotent():
 
 
 def test_crm_conversion_is_computed():
-    token, _ = _register("analytics-user@example.com")
+    token, _ = _register("analytics-user@demo.superapp")
     res = client.get("/v1/crm/analytics", headers=_auth(token))
     assert res.status_code == 200, res.text
     data = res.json()["data"]

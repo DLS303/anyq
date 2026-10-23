@@ -4,7 +4,7 @@ import { useState } from "react";
 import { openProcFile } from "@/lib/api";
 import { money } from "@/lib/format";
 import { toast } from "@/lib/toast";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import type { Locale, ProcSavings } from "@/lib/types";
 
 function fill(template: string, values: Record<string, string | number>) {
@@ -27,7 +27,7 @@ function thousands(total: number, locale: Locale) {
 }
 
 export function SavingsBanner({ locale, savings }: { locale: Locale; savings: ProcSavings }) {
-  const m = t(locale);
+  const m = useMessages();
   const [open, setOpen] = useState(false);
   const pct = share(savings.savings_pct);
   const overTotal = savings.overprice.reduce((sum, item) => sum + (item.total_kzt || item.total || 0), 0);

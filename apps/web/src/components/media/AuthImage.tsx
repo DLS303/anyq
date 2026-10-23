@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
 import { PhotoView } from "@/components/media/PhotoView";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { fetchAuthorizedBlob, isAbortError } from "@/lib/api";
 
 function needsSession(src: string) {
@@ -11,8 +10,7 @@ function needsSession(src: string) {
 }
 
 export function AuthImage({ src, alt = "", className }: { src: string; alt?: string; className?: string }) {
-  const pathname = usePathname();
-  const m = t(pathname?.startsWith("/kk") ? "kk" : "ru");
+  const m = useMessages();
   const [attempt, setAttempt] = useState(0);
   const [url, setUrl] = useState(needsSession(src) ? "" : src);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">(needsSession(src) ? "loading" : "ready");

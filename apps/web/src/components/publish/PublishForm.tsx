@@ -7,7 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { createPlot, fetchPlot, submitPlot, updatePlot, uploadPhoto } from "@/lib/api";
 import { PURPOSE, RELIEF, UTILITY } from "@/lib/format";
 import { DISTRICTS, type Locale, type Purpose, type Relief, type Utility } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { AuthImage } from "@/components/media/AuthImage";
 import { ChunkFallback } from "@/components/ui/ChunkFallback";
 import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
@@ -80,7 +80,7 @@ const empty: Draft = {
 };
 
 export function PublishForm({ locale, editId }: { locale: Locale; editId?: string }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<Draft>(empty);

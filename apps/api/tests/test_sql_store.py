@@ -1,7 +1,10 @@
 import json
+from pathlib import Path
 
+from alembic.config import Config
 from fastapi.testclient import TestClient
 
+from alembic import command
 from app.import_json import import_file
 from app.main import app
 from app.schemas import RegisterBody
@@ -28,6 +31,7 @@ def test_two_connections_see_each_others_writes(tmp_path, monkeypatch):
     monkeypatch.setenv("ANYQ_DEMO_MODE", "")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("ANYQ_DB_PATH", str(tmp_path / "db.json"))
+    command.upgrade(Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head")
     first = MemoryStore()
     second = MemoryStore()
     user, _token = first.register(

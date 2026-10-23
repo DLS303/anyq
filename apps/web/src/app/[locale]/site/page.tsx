@@ -3,14 +3,14 @@
 import { useParams } from "next/navigation";
 import { ProjectList } from "@/components/site/ProjectList";
 import { useAuth } from "@/lib/auth";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { PILOT_MODE } from "@/lib/pilot";
 import type { Locale } from "@/lib/types";
 
 export default function SiteListPage() {
   const params = useParams<{ locale: string }>();
   const locale = (params.locale as Locale) || "ru";
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
   const supervisor = user?.role === "supervisor";
 

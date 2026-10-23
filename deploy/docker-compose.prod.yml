@@ -23,7 +23,8 @@ services:
       PORT: "8010"
       DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-      DATABASE_URL: postgresql+psycopg://anyq:${POSTGRES_PASSWORD}@postgres:5432/anyq
+      ANYQ_APP_PASSWORD: ${ANYQ_APP_PASSWORD:?set ANYQ_APP_PASSWORD}
+      DATABASE_URL: postgresql+psycopg://anyq_app:${ANYQ_APP_PASSWORD}@postgres:5432/anyq
     volumes:
       - anyq-data:/data
       - ../apps/web/content/legal:/app/legal:ro
@@ -158,6 +159,7 @@ services:
       LEGAL_DIR: /app/legal
       DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      ANYQ_APP_PASSWORD: ${ANYQ_APP_PASSWORD:?set ANYQ_APP_PASSWORD}
       DATABASE_URL: postgresql+psycopg://anyq:${POSTGRES_PASSWORD}@postgres:5432/anyq
     command: ["python", "-m", "app.migrate"]
     depends_on:

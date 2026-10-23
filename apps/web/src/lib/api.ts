@@ -87,7 +87,12 @@ function applyAuth(headers: Headers) {
 
 function isCredentialPost(path: string) {
   const bare = path.split("?")[0];
-  return bare === "/v1/auth/login" || bare === "/v1/auth/register";
+  return (
+    bare === "/v1/auth/login" ||
+    bare === "/v1/auth/register" ||
+    bare === "/v1/auth/signup" ||
+    bare === "/v1/auth/signup/confirm"
+  );
 }
 
 function sessionExpired(path: string, res: Response, headers: Headers) {
@@ -686,6 +691,78 @@ export function fetchMe(signal?: AbortSignal) {
   return request<User>("/v1/auth/me", { signal });
 }
 
+export type SignupResult = {
+  status: string;
+  channel: string;
+  access: string;
+  user_id: string;
+  company_id: string;
+  role: string;
+  account_kind: string;
+  notice: string;
+};
+
+export type SupplierProfileData = {
+  full_name: string;
+  city: string;
+  categories: string;
+  e_invoice: string;
+  bin: string;
+  vat_included: boolean | null;
+  vat_label: string;
+};
+
+export type ProcInboxItem = {
+  id: string;
+  title: string;
+  project_title?: string;
+  number?: number;
+};
+
+export function signupStart(body: {
+  role: string;
+  contact: string;
+  full_name?: string;
+  account_kind?: string;
+  consent_offer_pd: boolean;
+}) {
+  return request<SignupResult>("/v1/auth/signup", {
+    method: "POST",
+    auth: false,
+    body: JSON.stringify(body),
+  });
+}
+
+export function signupConfirm(contact: string, code: string) {
+  return request<{ user: User; token: string; status: string }>("/v1/auth/signup/confirm", {
+    method: "POST",
+    auth: false,
+    body: JSON.stringify({ contact, code }),
+  });
+}
+
+export function fetchProfile(signal?: AbortSignal) {
+  return request<SupplierProfileData>("/v1/auth/profile", { signal });
+}
+
+export function patchProfile(body: {
+  full_name?: string;
+  city?: string;
+  categories?: string;
+  e_invoice?: string;
+  company_bin?: string;
+  vat?: string;
+}) {
+  return request<SupplierProfileData>("/v1/auth/profile", {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchProcInbox(signal?: AbortSignal) {
+  return request<ProcInboxItem[]>("/v1/procurement/inbox", { signal });
+}
+
 export function loginRequest(email: string, password: string, consentOfferPd: boolean, consentAi = false) {
   return request<{ user: User; token: string }>("/v1/auth/login", {
     method: "POST",
@@ -774,12 +851,60 @@ export function calculateEstimate(body: EstimateInput) {
   });
 }
 
+const readCache = new Map<string, { at: number; data: unknown }>();
+
+export function invalidateReadCache(prefix: string) {
+  for (const key of readCache.keys()) {
+    if (key.startsWith(prefix)) readCache.delete(key);
+  }
+}
+
 export function fetchProjects(signal?: AbortSignal) {
   return request<Record<string, unknown>[]>("/v1/site/projects", { signal });
 }
 
+export async function fetchProjectsPage(limit: number, offset: number, signal?: AbortSignal) {
+  const path = `/v1/site/projects?limit=${limit}&offset=${offset}`;
+  const freshMs = offset === 0 ? 8_000 : 0;
+  const hit = readCache.get(path);
+  if (hit && Date.now() - hit.at < freshMs) return hit.data as PageResult<Record<string, unknown>>;
+  const page = await requestPage<Record<string, unknown>>(path, { signal });
+  if (freshMs > 0) readCache.set(path, { at: Date.now(), data: page });
+  return page;
+}
+
 export function fetchSiteBundle(id: string, signal?: AbortSignal) {
   return request<Record<string, unknown>>(`/v1/site/projects/${id}/bundle`, { signal });
+}
+
+export type CompanyFeatureRecord = {
+  id: string | null;
+  company_id: string;
+  key: string;
+  enabled: boolean;
+  changed_by: string;
+  changed_at: string;
+  row_version: number;
+  updated_at: string;
+  deleted_at: string | null;
+};
+
+export function fetchCompanyFeatures(companyId?: string, signal?: AbortSignal) {
+  const query = companyId ? `?company_id=${encodeURIComponent(companyId)}` : "";
+  return request<CompanyFeatureRecord[]>(`/v1/org/features${query}`, { signal });
+}
+
+export function setCompanyFeature(body: {
+  key: string;
+  enabled: boolean;
+  company_id?: string;
+  id?: string;
+  row_version?: number;
+}) {
+  return request<CompanyFeatureRecord>("/v1/org/features", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export function postSite(
@@ -829,16 +954,18 @@ export type ConsentDocument = {
   sha256: string;
 };
 
-export function createSiteProject(body: {
+export async function createSiteProject(body: {
   title: string;
   address: string;
   deadline?: string;
   budget_kzt?: number;
 }) {
-  return request<{ id: string }>("/v1/site/projects", {
+  const created = await request<{ id: string }>("/v1/site/projects", {
     method: "POST",
     body: JSON.stringify(body),
   });
+  invalidateReadCache("/v1/site/projects");
+  return created;
 }
 
 export function addProjectMember(

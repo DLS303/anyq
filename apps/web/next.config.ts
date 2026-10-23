@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { NextConfig } from "next";
 
-// Leaflet tiles, the ArcGIS imagery layer, and the pdf.js worker on unpkg.
+// Leaflet tiles, the ArcGIS imagery layer, and a same-origin pdf.js worker.
 // Next hydration and that worker need inline/eval scripts; frame-ancestors blocks embedding.
 const WEB_CSP = [
   "default-src 'self'",
@@ -9,7 +9,7 @@ const WEB_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://server.arcgisonline.com",
   "connect-src 'self' https://*.tile.openstreetmap.org https://server.arcgisonline.com https://unpkg.com",
-  "worker-src 'self' blob: https://unpkg.com",
+  "worker-src 'self' blob:",
   "font-src 'self' data:",
   "frame-ancestors 'none'",
   "base-uri 'self'",
@@ -26,9 +26,26 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  webpack: (config, { isServer, webpack }) => {
+    if (!isServer) {
+      config.plugins.push(
+        new webpack.NormalModuleReplacementPlugin(
+          /[\\/]i18n[\\/]messages\.ts$/,
+          path.join(__dirname, "src/i18n/messages.client.ts"),
+        ),
+      );
+    }
+    return config;
+  },
   reactStrictMode: true,
   compress: true,
   poweredByHeader: false,
+  images: {
+    formats: ["image/avif", "image/webp"],
+    deviceSizes: [360, 414, 640, 768, 828, 1080, 1200],
+    imageSizes: [64, 96, 128, 256, 384],
+    minimumCacheTTL: 60 * 60 * 24 * 30,
+  },
   output: "standalone",
   // Workspace packages are installed at the repository root. Standalone
   // tracing has to start there so the production image contains them.

@@ -26,6 +26,13 @@ jobs:
         run: ruff check .
       - name: Migrate SQLite
         run: |
+          count="$(alembic heads | grep -c '(head)' || true)"
+          if [ "$count" -ne 1 ]; then
+            echo "expected one alembic head" >&2
+            alembic heads >&2
+            exit 1
+          fi
+          alembic heads
           rm -f /tmp/anyq-ci.sqlite
           DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic upgrade head
           DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic check
@@ -113,6 +120,13 @@ jobs:
         env:
           DATABASE_URL: postgresql+psycopg://anyq:anyq@127.0.0.1:5432/anyq
         run: |
+          count="$(alembic heads | grep -c '(head)' || true)"
+          if [ "$count" -ne 1 ]; then
+            echo "expected one alembic head" >&2
+            alembic heads >&2
+            exit 1
+          fi
+          alembic heads
           alembic upgrade head
           alembic check
           alembic downgrade -1

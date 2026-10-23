@@ -1,5 +1,3 @@
-import { ChunkFallback } from "@/components/ui/ChunkFallback";
-
 export default function Loading() {
-  return <ChunkFallback />;
+  return <div className="min-h-[100dvh]" aria-busy="true" />;
 }

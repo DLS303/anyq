@@ -8,8 +8,8 @@ import dynamic from "next/dynamic";
 import { ChunkFallback } from "@/components/ui/ChunkFallback";
 import { loadWithin } from "@/lib/loadWithin";
 
-const PdfDrawingViewer = dynamic(
-  () => loadWithin(import("./PdfDrawingViewer").then((m) => m.PdfDrawingViewer)),
+const DrawingSheets = dynamic(
+  () => loadWithin(import("./DrawingSheets").then((m) => m.DrawingSheets)),
   { ssr: false, loading: () => <ChunkFallback /> },
 );
 
@@ -37,8 +37,6 @@ export function Bim3dViewer({ locale, drawings, projectId, projectTitle = "Ко�
   const isKk = locale === "kk";
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("3d");
-  const [selectedDrawing, setSelectedDrawing] = useState<DrawingItem | null>(drawings[0] || null);
-
   // Layer visibility toggles
   const [showArch, setShowArch] = useState(true);
   const [showConcrete, setShowConcrete] = useState(true);
@@ -973,13 +971,7 @@ export function Bim3dViewer({ locale, drawings, projectId, projectTitle = "Ко�
           </div>
         </div>
       ) : (
-        <PdfDrawingViewer
-          locale={locale}
-          drawings={drawings}
-          selectedDrawing={selectedDrawing}
-          onSelectDrawing={setSelectedDrawing}
-          projectTitle={projectTitle}
-        />
+        <DrawingSheets locale={locale} projectId={projectId} />
       )}
     </div>
   );

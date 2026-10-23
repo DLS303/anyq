@@ -7,7 +7,7 @@ import type { LucideIcon } from "lucide-react";
 import type { Locale } from "@/lib/types";
 import { ChunkFallback } from "@/components/ui/ChunkFallback";
 import { WidgetBoundary } from "@/components/ui/WidgetBoundary";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { loadWithin } from "@/lib/loadWithin";
 import { LegalPanel } from "./LegalPanel";
 
@@ -31,7 +31,7 @@ const ITEMS: { id: ControlSection; label: string; icon: LucideIcon }[] = [
 ];
 
 export function ControlPanel({ locale, section }: { locale: Locale; section: ControlSection }) {
-  const m = t(locale);
+  const m = useMessages();
   return (
     <div>
       <div className="mb-4 lg:hidden">

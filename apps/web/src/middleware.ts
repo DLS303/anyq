@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { DEMO_MODE } from "./lib/features";
+import { PILOT_MODE } from "./lib/pilot";
 
 const LOCALES = ["ru", "kk"];
 /** Finished areas kept out of the release navigation. */
@@ -25,6 +26,12 @@ export function middleware(request: NextRequest) {
   }
   const locale = pathname.startsWith("/kk") ? "kk" : "ru";
   const rest = pathname.replace(/^\/(ru|kk)/, "") || "/";
+  if (!PILOT_MODE && (rest === "/crm" || rest.startsWith("/crm/"))) {
+    const url = request.nextUrl.clone();
+    url.pathname = `/${locale}`;
+    if (!url.searchParams.has("section")) url.searchParams.set("section", "crm");
+    return NextResponse.redirect(url);
+  }
   if (!DEMO_MODE && RELEASE_HIDDEN.some((p) => rest === p || rest.startsWith(`${p}/`))) {
     const url = request.nextUrl.clone();
     url.pathname = `/${locale}`;

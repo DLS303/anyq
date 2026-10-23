@@ -8,13 +8,13 @@ import { fetchSpecialistsPage } from "@/lib/api";
 import { ErrorRetry, LoadingSkeleton } from "@/lib/useAsync";
 import { CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import type { Locale, SpecCategory, Specialist } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { CheckCircle2, ShieldCheck, Star } from "lucide-react";
 
 const CATS: SpecCategory[] = ["survey", "legal", "architecture", "smr", "supervision", "equipment"];
 
 export function SpecialistsClient({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const [category, setCategory] = useState("");
   const paged = useServerPaged(category, (page, signal) =>
     fetchSpecialistsPage({ category: category || undefined }, page, 24, signal),
@@ -103,7 +103,7 @@ const SpecialistCard = memo(function SpecialistCard({
   specialist: Specialist;
   locale: Locale;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   return (
           <div
             className="glass-strong flex flex-col justify-between overflow-hidden rounded-3xl border border-slate-200/90 shadow-luxury transition-all duration-300 group hover:shadow-luxury-lg"

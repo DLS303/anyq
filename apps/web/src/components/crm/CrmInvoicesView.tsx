@@ -3,7 +3,7 @@
 import { useAuth } from "@/lib/auth";
 import { fetchInvoices, payInvoice } from "@/lib/api";
 import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { INVOICE_STATUS, money } from "@/lib/format";
 import type { CrmInvoice, Locale } from "@/lib/types";
 
@@ -15,7 +15,7 @@ export function CrmInvoicesView({
   onSelectDealId: (dealId: string) => void;
 }) {
   const { user } = useAuth();
-  const m = t(locale);
+  const m = useMessages();
   const invoicesQuery = useAsync(
     (signal) => (user ? fetchInvoices(user.email, undefined, signal) : Promise.resolve([] as CrmInvoice[])),
     [user?.email],

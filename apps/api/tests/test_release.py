@@ -71,6 +71,7 @@ def _empty_database(monkeypatch, tmp_path) -> None:
         return
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("ANYQ_DB_PATH", str(tmp_path / "db.json"))
+    command.upgrade(Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head")
 
 
 def test_demo_mode_off_starts_empty_and_first_user_is_owner(monkeypatch, tmp_path):
@@ -83,7 +84,7 @@ def test_demo_mode_off_starts_empty_and_first_user_is_owner(monkeypatch, tmp_pat
     assert fresh.materials == {}
     owner, _token = fresh.register(
         RegisterBody(
-            email="first@example.com",
+            email="first@demo.superapp",
             password="secret12",
             full_name="First Owner",
             phone="+77001112233",
@@ -98,7 +99,7 @@ def test_demo_mode_off_starts_empty_and_first_user_is_owner(monkeypatch, tmp_pat
     assert owner.role == "owner"
     buyer, _ = fresh.register(
         RegisterBody(
-            email="second@example.com",
+            email="second@demo.superapp",
             password="secret12",
             full_name="Second",
             phone="+77001112234",
@@ -114,7 +115,7 @@ def test_demo_mode_off_starts_empty_and_first_user_is_owner(monkeypatch, tmp_pat
     with pytest.raises(ValueError):
         fresh.register(
             RegisterBody(
-                email="third@example.com",
+                email="third@demo.superapp",
                 password="secret12",
                 full_name="Third",
                 phone="+77001112235",
@@ -158,9 +159,9 @@ def test_buyer_cannot_see_owner_deals_and_companies_stay_apart():
     buyer_contacts = client.get("/v1/crm/contacts", headers=_auth(buyer))
     assert buyer_contacts.json()["data"] == []
 
-    company_a = _register("scope-a@example.com", bin_no="111111111111")
-    company_b = _register("scope-b@example.com", bin_no="222222222222")
-    mate = _register("scope-a-mate@example.com", bin_no="111111111111")
+    company_a = _register("scope-a@demo.superapp", bin_no="111111111111")
+    company_b = _register("scope-b@demo.superapp", bin_no="222222222222")
+    mate = _register("scope-a-mate@demo.superapp", bin_no="111111111111")
     created = client.post(
         "/v1/crm/deals",
         json={"title": "Private pipeline", "amount_kzt": 10, "funnel": "construction"},
@@ -169,7 +170,13 @@ def test_buyer_cannot_see_owner_deals_and_companies_stay_apart():
     assert created.status_code == 200, created.text
     deal_id = created.json()["data"]["id"]
     assert client.get(f"/v1/crm/deals/{deal_id}", headers=_auth(company_b)).status_code == 403
-    assert client.get(f"/v1/crm/deals/{deal_id}", headers=_auth(mate)).status_code == 200
+    mate_user = store.get_user_by_email("scope-a-mate@demo.superapp")
+    first_user = store.get_user_by_email("scope-a@demo.superapp")
+    assert mate_user is not None and first_user is not None
+    assert mate_user.company_key.startswith("user:")
+    assert mate_user.company_key != first_user.company_key
+    assert mate_user.company_review is True
+    assert client.get(f"/v1/crm/deals/{deal_id}", headers=_auth(mate)).status_code == 403
     listed = client.get("/v1/crm/deals", headers=_auth(company_b))
     assert all(row["id"] != deal_id for row in listed.json()["data"])
 
@@ -197,12 +204,13 @@ def test_buyer_cannot_see_owner_deals_and_companies_stay_apart():
         json={"title": "Company A yard", "address": "Almaty"},
         headers=_auth(company_a),
     )
-    assert project.status_code == 403
+    assert project.status_code == 200, project.text
+    assert project.json()["data"]["title"] == "Company A yard"
 
 
 def test_material_orders_are_not_shared_across_companies():
-    buyer_a = _register("mat-a@example.com", bin_no="333333333333")
-    buyer_b = _register("mat-b@example.com", bin_no="444444444444")
+    buyer_a = _register("mat-a@demo.superapp", bin_no="333333333333")
+    buyer_b = _register("mat-b@demo.superapp", bin_no="444444444444")
     material = next(iter(store.materials.values()))
     created = client.post(
         "/v1/material-orders",
@@ -242,7 +250,7 @@ def test_badges_need_a_stored_verification():
     assert material.status_code == 200
     assert material.json()["data"]["certified_rk"] is False
 
-    buyer = _register("badge-buyer@example.com", bin_no="555555555555")
+    buyer = _register("badge-buyer@demo.superapp", bin_no="555555555555")
     denied = client.post(
         "/v1/moderation/verifications",
         json={"subject_type": "specialist", "subject_id": "sp-arch", "kind": "license"},
@@ -263,7 +271,7 @@ def test_badges_need_a_stored_verification():
 
 def test_owner_project_is_hidden_from_another_company():
     owner = _demo("u-owner", "owner@demo.superapp", "owner-pass-proj")
-    other = _register("proj-other@example.com", bin_no="666666666666")
+    other = _register("proj-other@demo.superapp", bin_no="666666666666")
     created = client.post(
         "/v1/site/projects",
         json={"title": "Owner yard", "address": "Besagash"},

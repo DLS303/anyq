@@ -3,7 +3,7 @@
 import React, { useCallback, useMemo, useState, useRef } from "react";
 import type { Locale, ScheduleTask, TaskStatus } from "@/lib/types";
 import { postSite } from "@/lib/api";
-import { t as msg } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { toast } from "@/lib/toast";
 
 type ViewMode = "day" | "week" | "month";
@@ -68,7 +68,7 @@ export function InteractiveGantt({
   onReload,
 }: Props) {
   const isKk = locale === "kk";
-  const copy = msg(locale);
+  const copy = useMessages();
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);

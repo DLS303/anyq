@@ -3,13 +3,13 @@
 import { useAuth } from "@/lib/auth";
 import { fetchCrmAnalytics } from "@/lib/api";
 import { ErrorRetry, useAsync } from "@/lib/useAsync";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { FUNNEL, money } from "@/lib/format";
 import type { CrmAnalytics, Locale } from "@/lib/types";
 
 export function CrmAnalyticsView({ locale }: { locale: Locale }) {
   const { user } = useAuth();
-  const m = t(locale);
+  const m = useMessages();
   const query = useAsync(
     (signal) => (user ? fetchCrmAnalytics(user.email, signal) : Promise.resolve(null)),
     [user?.email],

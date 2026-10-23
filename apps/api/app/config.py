@@ -8,6 +8,26 @@ def demo_mode() -> bool:
     return os.getenv("ANYQ_DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def registration_enabled() -> bool:
+    """Public registration and confirmation-code delivery. Off unless explicitly enabled."""
+    return os.getenv("REGISTRATION_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+DEMO_EMAIL_SUFFIX = "@demo.superapp"
+DEMO_EMAIL_REJECTION = "В демо-версии регистрация только для адресов @demo.superapp"
+DEMO_PHONE_REJECTION = "В демо-версии телефон не сохраняется. Укажите почту @demo.superapp"
+
+
+def refuse_stub_code_in_production() -> None:
+    """A fixed sign-up code is demo-only. Production must not boot with it set."""
+    raw = os.getenv("SIGNUP_STUB_CODE", "").strip()
+    if not raw:
+        return
+    env = os.getenv("ANYQ_ENV", "development").strip().lower()
+    if env == "production":
+        raise RuntimeError("SIGNUP_STUB_CODE must not be set when ANYQ_ENV=production")
+
+
 def resolve_cors_origins() -> list[str]:
     env = os.getenv("ANYQ_ENV", "development").strip().lower()
     raw = os.getenv("CORS_ORIGINS", "")
@@ -30,6 +50,7 @@ class Settings(BaseModel):
     vat_rate: float = float(os.getenv("ANYQ_VAT_RATE", "0.16"))
     # An offer this far above the website reference is flagged. It is not a saving.
     overprice_threshold: float = float(os.getenv("ANYQ_OVERPRICE_THRESHOLD", "0.15"))
+    request_timeout_s: float = float(os.getenv("ANYQ_REQUEST_TIMEOUT", "45"))
 
 
 settings = Settings()

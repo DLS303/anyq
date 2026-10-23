@@ -131,6 +131,28 @@ validate_env() {
     return 1
   fi
 
+  app_password="${ANYQ_APP_PASSWORD:-}"
+  app_password="${app_password#"${app_password%%[![:space:]]*}"}"
+  app_password="${app_password%"${app_password##*[![:space:]]}"}"
+  if [ -z "$app_password" ]; then
+    echo "anyq: ANYQ_APP_PASSWORD is missing" >&2
+    return 1
+  fi
+  if [ "${#app_password}" -lt 16 ]; then
+    echo "anyq: ANYQ_APP_PASSWORD must be at least 16 characters" >&2
+    return 1
+  fi
+  case "$app_password" in
+    anyq|anyq_app|postgres|superapp|changeme|password|secret)
+      echo "anyq: ANYQ_APP_PASSWORD is a default" >&2
+      return 1
+      ;;
+  esac
+  if [ "$app_password" = "${POSTGRES_PASSWORD}" ]; then
+    echo "anyq: ANYQ_APP_PASSWORD must differ from POSTGRES_PASSWORD" >&2
+    return 1
+  fi
+
   workers="${WEB_CONCURRENCY:-2}"
   case "$workers" in
     ''|*[!0-9]*)

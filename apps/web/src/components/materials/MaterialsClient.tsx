@@ -9,13 +9,13 @@ import { ErrorRetry, LoadingSkeleton } from "@/lib/useAsync";
 import { useDebounced } from "@/lib/useDebounced";
 import { MATERIAL_CAT, money } from "@/lib/format";
 import type { Locale, Material, MaterialCat } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { Layers, Search, Truck, X } from "lucide-react";
 
 const CATS: MaterialCat[] = ["inert", "brick", "mix", "metal", "roofing", "lumber", "concrete"];
 
 export function MaterialsClient({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const [category, setCategory] = useState("");
   const [q, setQ] = useState("");
   const debouncedQ = useDebounced(q, 300);

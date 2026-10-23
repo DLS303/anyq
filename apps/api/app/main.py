@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app.authutil import load_secret
-from app.config import settings
+from app.compress import CompressMiddleware
+from app.config import refuse_stub_code_in_production, settings
+from app.ratelimit import require_login_hash_secret
 from app.routers import (
     acts,
     auth,
@@ -12,13 +13,16 @@ from app.routers import (
     cabinet,
     chat,
     crm,
+    drawings,
     estimates,
     files,
     health,
     invitations,
+    marketplace,
     materials,
     moderation,
     modules,
+    org_features,
     plots,
     procurement,
     public,
@@ -27,12 +31,16 @@ from app.routers import (
 )
 from app.security import PublicRobotsMiddleware, SecurityHeadersMiddleware
 from app.sql_backend import ChangedByOther
+from app.timeout import RequestTimeoutMiddleware
 
+refuse_stub_code_in_production()
 load_secret()
+require_login_hash_secret()
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 
-app.add_middleware(GZipMiddleware, minimum_size=500)
+app.add_middleware(CompressMiddleware, minimum_size=500)
+app.add_middleware(RequestTimeoutMiddleware, seconds=settings.request_timeout_s)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(PublicRobotsMiddleware)
 app.add_middleware(
@@ -56,9 +64,12 @@ app.include_router(materials.router)
 app.include_router(estimates.router)
 app.include_router(acts.router)
 app.include_router(site.router)
+app.include_router(drawings.router)
+app.include_router(org_features.router)
 app.include_router(invitations.router)
 app.include_router(budget.router)
 app.include_router(procurement.router)
+app.include_router(marketplace.router)
 app.include_router(public.router)
 app.include_router(files.router)
 

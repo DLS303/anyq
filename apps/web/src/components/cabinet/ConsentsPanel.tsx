@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { fetchConsentDocuments, fetchConsents, grantAiConsent, grantCrossBorderConsent, revokeConsent, type ConsentRow } from "@/lib/api";
 import { useAsync } from "@/lib/useAsync";
 import type { Locale } from "@/lib/types";
@@ -18,7 +18,7 @@ function when(iso: string | null | undefined, locale: Locale) {
   }).format(date);
 }
 
-function labelOf(type: string, m: ReturnType<typeof t>) {
+function labelOf(type: string, m: ReturnType<typeof useMessages>) {
   if (type === "offer_pd") return m.consentPd;
   if (type === "ai") return m.consentAi;
   if (type === "cross_border") return m.consentCross;
@@ -27,7 +27,7 @@ function labelOf(type: string, m: ReturnType<typeof t>) {
 }
 
 export function ConsentsPanel({ locale }: { locale: Locale }) {
-  const m = t(locale);
+  const m = useMessages();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [provider, setProvider] = useState("");

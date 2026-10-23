@@ -1,7 +1,6 @@
 "use client";
 
-import { usePathname } from "next/navigation";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 
 export default function LocaleError({
   reset,
@@ -9,8 +8,7 @@ export default function LocaleError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const pathname = usePathname();
-  const m = t(pathname.startsWith("/kk") ? "kk" : "ru");
+  const m = useMessages();
   return (
     <main role="alert" className="mx-auto max-w-lg px-3 py-16 text-center">
       <h1 className="text-2xl font-medium">{m.errorTitle}</h1>

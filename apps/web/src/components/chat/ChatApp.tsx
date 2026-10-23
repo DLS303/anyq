@@ -7,12 +7,12 @@ import { fetchChatPeers, fetchMessages, fetchThreadsPage, openChatThread, sendCh
 import { PageNav, useServerPaged } from "@/components/ui/PagedList";
 import { ErrorRetry, useAsync, useSubmitLock } from "@/lib/useAsync";
 import type { ChatMessage, Locale } from "@/lib/types";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 
 const MESSAGE_PAGE = 40;
 
 export function ChatApp({ locale, threadId }: { locale: Locale; threadId?: string }) {
-  const m = t(locale);
+  const m = useMessages();
   const { user } = useAuth();
   const sendLock = useSubmitLock();
   const [text, setText] = useState("");

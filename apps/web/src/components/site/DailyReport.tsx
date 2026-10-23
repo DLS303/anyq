@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AuthAudio } from "@/components/media/AuthAudio";
 import { AuthImage } from "@/components/media/AuthImage";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { deleteSite, postSite, uploadDailyPhotos, uploadDailyVoice } from "@/lib/api";
 import { preparePhoto } from "@/lib/photos";
 import { dailyAuthorLabel, shareText, todayAlmaty, weatherLabel } from "@/lib/report";
@@ -84,7 +84,7 @@ export function DailyReport({
   onLogin: () => void;
   onChange: () => void;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   const [sheet, setSheet] = useState(false);
   const [busy, setBusy] = useState(false);
   const [files, setFiles] = useState<File[]>([]);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { t } from "@/i18n/messages";
+import { useMessages } from "@/lib/i18n";
 import { postSite } from "@/lib/api";
 import { SITE_ROLES, siteRoleLabel, todayAlmaty } from "@/lib/report";
 import { useGuardedSubmit } from "@/lib/useAsync";
@@ -27,7 +27,7 @@ function RoleSelect({
   onChange: (role: string) => void;
   locale: Locale;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   return (
     <select aria-label={label} value={value} className={field} onChange={(event) => onChange(event.target.value)}>
       {SITE_ROLES.map((role) => (
@@ -48,7 +48,7 @@ export function MeetingForm({
   projectId: string;
   onDone: () => void;
 }) {
-  const m = t(locale);
+  const m = useMessages();
   const { submitting, submit } = useGuardedSubmit(m.hubSaved, m.hubSaveError, onDone);
   const [people, setPeople] = useState<Person[]>([{ role: "contractor", name: "" }]);
   const [decisions, setDecisions] = useState<Decision[]>([{ text: "", owner_role: "foreman", due: "" }]);

@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -70,24 +74,24 @@ def test_security_headers_on_api():
 
 
 def test_empty_pilot_is_not_engicon_and_role_is_required():
-    omitted = _register("pilot-off@example.com")
+    omitted = _register("pilot-off@demo.superapp")
     assert omitted.status_code == 200, omitted.text
-    user = store.get_user_by_email("pilot-off@example.com")
+    user = store.get_user_by_email("pilot-off@demo.superapp")
     assert user is not None
     assert user.pilot == ""
 
-    blank = _register("pilot-blank@example.com", pilot="   ", company_bin="123456789013")
+    blank = _register("pilot-blank@demo.superapp", pilot="   ", company_bin="123456789013")
     assert blank.status_code == 200, blank.text
-    assert store.get_user_by_email("pilot-blank@example.com").pilot == ""
+    assert store.get_user_by_email("pilot-blank@demo.superapp").pilot == ""
 
-    opted = _register("pilot-on@example.com", pilot="engicon", company_bin="123456789014")
+    opted = _register("pilot-on@demo.superapp", pilot="engicon", company_bin="123456789014")
     assert opted.status_code == 200, opted.text
-    assert store.get_user_by_email("pilot-on@example.com").pilot == "engicon"
+    assert store.get_user_by_email("pilot-on@demo.superapp").pilot == "engicon"
 
     missing_role = client.post(
         "/v1/auth/register",
         json={
-            "email": "norole@example.com",
+            "email": "norole@demo.superapp",
             "password": "secret12",
             "full_name": "Test User",
             "phone": "+77001112233",
@@ -97,11 +101,11 @@ def test_empty_pilot_is_not_engicon_and_role_is_required():
         },
     )
     assert missing_role.status_code == 422
-    assert store.get_user_by_email("norole@example.com") is None
+    assert store.get_user_by_email("norole@demo.superapp") is None
 
 
 def test_service_order_rejects_illegal_transition():
-    created = _register("order-buyer@example.com")
+    created = _register("order-buyer@demo.superapp")
     assert created.status_code == 200, created.text
     buyer = created.json()["data"]["token"]
     order = client.post(
@@ -134,7 +138,7 @@ def test_service_order_rejects_illegal_transition():
     )
     assert quoted.status_code == 200, quoted.text
 
-    stranger = _register("order-stranger@example.com", company_bin="123456789016")
+    stranger = _register("order-stranger@demo.superapp", company_bin="123456789016")
     assert stranger.status_code == 200, stranger.text
     denied = client.post(
         f"/v1/orders/{order_id}/status",
@@ -171,7 +175,7 @@ def test_service_order_rejects_illegal_transition():
 
 
 def test_material_order_follows_supplier_flow():
-    buyer_res = _register("mat-buyer@example.com", company_bin="123456789017")
+    buyer_res = _register("mat-buyer@demo.superapp", company_bin="123456789017")
     assert buyer_res.status_code == 200, buyer_res.text
     buyer = buyer_res.json()["data"]["token"]
     supplier = _demo("u-supply", "supplier@demo.superapp", "supply-pass-1")
@@ -232,7 +236,7 @@ def test_material_order_follows_supplier_flow():
 
 
 def test_login_rate_limit_is_per_account_and_ip(monkeypatch):
-    email = "limit-user@example.com"
+    email = "limit-user@demo.superapp"
     created = _register(email, company_bin="123456789018")
     assert created.status_code == 200, created.text
     clock = {"now": 1_700_000_000.0}
@@ -255,7 +259,7 @@ def test_login_rate_limit_is_per_account_and_ip(monkeypatch):
     assert same_bucket.status_code == 429
     other_ip = attempt("wrong-pass", ip="198.51.100.10")
     assert other_ip.status_code == 401
-    other_account = attempt("wrong-pass", account="someone-else@example.com")
+    other_account = attempt("wrong-pass", account="someone-else@demo.superapp")
     assert other_account.status_code == 401
 
     shared = False
@@ -280,6 +284,47 @@ def test_login_hash_secret_is_separate_and_required(monkeypatch):
     monkeypatch.delenv("LOGIN_HASH_SECRET", raising=False)
     with pytest.raises(RuntimeError, match="LOGIN_HASH_SECRET"):
         login_hash_secret()
+    monkeypatch.setenv("ANYQ_ENV", "development")
+    monkeypatch.setenv("APP_ENV", "prod")
+    with pytest.raises(RuntimeError, match="LOGIN_HASH_SECRET"):
+        login_hash_secret()
+    monkeypatch.delenv("APP_ENV", raising=False)
+    assert login_hash_secret()
+
+
+def _import_main(tmp_path, **env):
+    child = os.environ.copy()
+    child.pop("LOGIN_HASH_SECRET", None)
+    child.pop("APP_ENV", None)
+    child["ANYQ_ENV"] = "development"
+    child["ANYQ_DEMO_MODE"] = ""
+    child["ANYQ_DEMO_PASSWORD"] = ""
+    child["DATABASE_URL"] = "sqlite:///" + (tmp_path / "startup.sqlite").as_posix()
+    child["ANYQ_DB_PATH"] = str(tmp_path / "startup.json")
+    child["ANYQ_UPLOADS_DIR"] = str(tmp_path / "uploads")
+    child["JWT_SECRET"] = "test-only-secret-value-with-32-characters"
+    child["CORS_ORIGINS"] = "https://example.kz"
+    child.update(env)
+    return subprocess.run(
+        [sys.executable, "-c", "import app.main"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=child,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+
+
+def test_production_refuses_to_start_without_login_hash_secret(tmp_path):
+    missing = _import_main(tmp_path, ANYQ_ENV="production")
+    assert missing.returncode != 0
+    assert "LOGIN_HASH_SECRET" in missing.stderr
+    flagged = _import_main(tmp_path, APP_ENV="prod")
+    assert flagged.returncode != 0
+    assert "LOGIN_HASH_SECRET" in flagged.stderr
+    development = _import_main(tmp_path)
+    assert development.returncode == 0, development.stderr
 
 
 def test_login_failures_store_a_hash_and_expire():
@@ -296,14 +341,14 @@ def test_login_failures_store_a_hash_and_expire():
     with store._sql.factory() as session:
         session.execute(text("UPDATE login_failures SET created_at = :old"), {"old": time.time() - 90_000})
         session.commit()
-    login_limiter.record_failure("other@example.com", "198.51.100.8")
+    login_limiter.record_failure("other@demo.superapp", "198.51.100.8")
     with store._sql.factory() as session:
         left = session.execute(text("SELECT count(*) FROM login_failures")).scalar()
     assert left == 1
 
 
 def test_cross_border_consent_is_appended():
-    created = _register("border@example.com", company_bin="123456789019")
+    created = _register("border@demo.superapp", company_bin="123456789019")
     assert created.status_code == 200, created.text
     token = created.json()["data"]["token"]
     user_id = created.json()["data"]["user"]["id"]

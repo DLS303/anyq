@@ -17,12 +17,21 @@ _RETENTION_S = 86_400
 _dev_secret: str | None = None
 
 
+def production_login_secret_required() -> bool:
+    """Production refuses to start without LOGIN_HASH_SECRET. Demo and development do not."""
+    anyq = os.getenv("ANYQ_ENV", "development").strip().lower()
+    app_env = os.getenv("APP_ENV", "").strip().lower()
+    return anyq == "production" or app_env in {"prod", "production"}
+
+
 def login_hash_secret() -> str:
     """HMAC key for login windows. Production requires LOGIN_HASH_SECRET."""
     secret = (os.getenv("LOGIN_HASH_SECRET") or "").strip()
-    if os.getenv("ANYQ_ENV", "development").strip().lower() == "production":
+    if production_login_secret_required():
         if len(secret) < 32:
-            raise RuntimeError("LOGIN_HASH_SECRET must be set to at least 32 characters when ANYQ_ENV=production")
+            raise RuntimeError(
+                "LOGIN_HASH_SECRET must be set to at least 32 characters when ANYQ_ENV=production or APP_ENV=prod"
+            )
         return secret
     if len(secret) >= 16:
         return secret
@@ -30,6 +39,12 @@ def login_hash_secret() -> str:
     if not _dev_secret:
         _dev_secret = secrets.token_urlsafe(32)
     return _dev_secret
+
+
+def require_login_hash_secret() -> None:
+    """Fail at process start in production. Demo and development keep the previous behaviour."""
+    if production_login_secret_required():
+        login_hash_secret()
 
 
 class RateLimited(Exception):
@@ -58,9 +73,13 @@ def login_key(account: str, ip: str) -> str:
 
 
 class LoginRateLimiter:
-    def __init__(self, limit: int = 5, window_s: int = 600) -> None:
+    def __init__(self, limit: int = 5, window_s: int = 600, prefix: str = "") -> None:
         self.limit = limit
         self.window_s = window_s
+        self.prefix = prefix
+
+    def _account(self, account: str) -> str:
+        return f"{self.prefix}{account}" if self.prefix else account
 
     def _session(self):
         from app.store import store
@@ -76,7 +95,7 @@ class LoginRateLimiter:
             session.commit()
 
     def count(self, account: str, ip: str) -> int:
-        key = login_key(account, ip)
+        key = login_key(self._account(account), ip)
         now = time.time()
         with self._session() as session:
             value = session.scalar(
@@ -98,14 +117,15 @@ class LoginRateLimiter:
         now = time.time()
         with self._session() as session:
             self._purge(session, now)
-            session.add(LoginFailure(key_hash=login_key(account, ip), created_at=now))
+            session.add(LoginFailure(key_hash=login_key(self._account(account), ip), created_at=now))
             session.commit()
 
     def clear(self, account: str, ip: str) -> None:
-        key = login_key(account, ip)
+        key = login_key(self._account(account), ip)
         with self._session() as session:
             session.execute(delete(LoginFailure).where(LoginFailure.key_hash == key))
             session.commit()
 
 
 login_limiter = LoginRateLimiter()
+signup_limiter = LoginRateLimiter(prefix="signup:")
