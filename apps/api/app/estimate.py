@@ -183,8 +183,8 @@ def calculate_estimate(body: EstimateInput) -> EstimateResult:
         line("06.010", "Инженерия", "Электрика, водоснабжение, канализация внутри", "м2", body.area_m2, 29_000, "черновая инженерия", "medium"),
         line("06.020", "Инженерия", "Отопление и газовый/электрический котел", "м2", body.area_m2, 22_500, "котельная + разводка", "medium"),
         line("07.010", "Отделка", f"Отделка: {finish['title']}", "м2", body.area_m2, int(finish["finish_rate"]), "сухие смеси, ГКЛ, плитка/ЛКМ, работа", "medium"),
-        line("08.010", "Участок", "Отмостка, крыльцо, базовое благоустройство", "м2", footprint_m2, 23_000, "наружные работы", "medium"),
-        line("08.020", "Участок", "Забор по периметру", "м", perimeter_m, 22_000, "профлист/лента/столбы", "medium"),
+        line("08.010", "Объект", "Отмостка, крыльцо, базовое благоустройство", "м2", footprint_m2, 23_000, "наружные работы", "medium"),
+        line("08.020", "Объект", "Забор по периметру", "м", perimeter_m, 22_000, "профлист/лента/столбы", "medium"),
     ]
 
     utilities_cost = (
@@ -197,13 +197,13 @@ def calculate_estimate(body: EstimateInput) -> EstimateResult:
     lines.append(
         EstimateLine(
             code="08.030",
-            section="Участок",
+            section="Объект",
             title="Подключение наружных сетей и подъезд",
             unit="компл.",
             qty=1,
             unit_price_kzt=_money(utilities_cost * region_coef),
             total_kzt=_money(utilities_cost * region_coef),
-            basis="по статусам сетей участка",
+            basis="по статусам сетей объекта",
             confidence="low",
         )
     )
@@ -225,7 +225,7 @@ def calculate_estimate(body: EstimateInput) -> EstimateResult:
         "Для договора нужны ведомость объемов, проект АР/КР и коммерческие предложения поставщиков.",
     ]
     if body.relief != "flat":
-        warnings.append("Участок со склонном требует отдельной геологии, подпорных стен и проверки водоотвода.")
+        warnings.append("Объект на склоне требует отдельной геологии, подпорных стен и проверки водоотвода.")
     if body.utilities.sewage == "absent":
         warnings.append("Канализация отсутствует: септик/ЛОС может заметно изменить бюджет и согласования.")
     if body.area_m2 < 80:

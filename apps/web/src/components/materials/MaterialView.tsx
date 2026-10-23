@@ -183,7 +183,7 @@ export function MaterialView({ locale, item }: { locale: Locale; item: Material 
                 type="text"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
-                placeholder="г. Алматы, мкр. Бесагаш, участок 14"
+                placeholder="г. Алматы, мкр. Бесагаш, объект 14"
                 className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl bg-white text-slate-900"
               />
             </div>

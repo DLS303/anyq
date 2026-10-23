@@ -50,7 +50,7 @@ DAILY = [
 
 RFIS = [
     RFI(id="rfi-1", project_id="pr-besagash", number="RFI-001", title="Отметка чистого пола vs. рельеф", question="Нужно ли поднимать цоколь на 300 мм из-за уклона северной грани?", answer="", status="open", assignee_id="u-arch", drawing="АР-01", created_at="2026-09-14T09:00:00+00:00"),
-    RFI(id="rfi-2", project_id="pr-besagash", number="RFI-002", title="Газ: точка врезки", question="Подтвердите расстояние до газопровода по паспорту участка.", answer="12 м до границы, ТУ получены. Врезка с севера.", status="answered", assignee_id="u-surv", drawing="ИОС-Г", created_at="2026-09-10T11:00:00+00:00"),
+    RFI(id="rfi-2", project_id="pr-besagash", number="RFI-002", title="Газ: точка врезки", question="Подтвердите расстояние до газопровода по паспорту объекта.", answer="12 м до границы, ТУ получены. Врезка с севера.", status="answered", assignee_id="u-surv", drawing="ИОС-Г", created_at="2026-09-10T11:00:00+00:00"),
 ]
 
 SUBS = [

@@ -11,6 +11,5 @@ describe("release visibility", () => {
     expect(features.ksActs).toBe(demo);
     expect(features.submittals).toBe(demo);
     expect(features.demoHouse).toBe(demo);
-    expect(features.land).toBe(demo);
   });
 });

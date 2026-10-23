@@ -2,7 +2,7 @@
   "name": "superapp",
   "private": true,
   "version": "0.1.0",
-  "description": "Супер-приложение: земля, стройка, архитектура РК — скелет фазы 1",
+  "description": "Платформа стройки: объекты, снабжение, сметы, поставщики и исполнители",
   "scripts": {
     "dev": "concurrently -k -n api,web -c cyan,magenta \"npm run dev:api\" \"npm run dev:web\"",
     "dev:web": "npm run dev --prefix apps/web",

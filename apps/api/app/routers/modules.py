@@ -10,14 +10,14 @@ MODULES = [
         title="Marketplace Service",
         phase=1,
         status="live",
-        notes="Материалы и услуги. Рынок земли отключён.",
+        notes="Материалы, поставщики и услуги на объекте.",
     ),
     ModuleInfo(
         id="gis-cadastre",
         title="GIS & Cadastre Service",
         phase=1,
         status="stub",
-        notes="Отключён: земля и кадастр не в этом контуре.",
+        notes="Кадастровый контур в этот релиз не входит.",
     ),
     ModuleInfo(
         id="crm-pm",

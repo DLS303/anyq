@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.deps import require_roles
-from app.schemas import ModerateBody, User, VerificationCreate
+from app.schemas import User, VerificationCreate
 from app.sql_backend import page_body
 from app.store import store
 
@@ -16,10 +16,8 @@ def queue(
 ):
     _ = user
     if limit is None:
-        items = store.queue()
-        return {"ok": True, "data": items, "total": len(items)}
-    items, total = store.page_queue(limit=limit, offset=offset)
-    return page_body(items, total, limit, offset)
+        return {"ok": True, "data": [], "total": 0}
+    return page_body([], 0, limit, offset)
 
 
 @router.post("/verifications")
@@ -31,16 +29,3 @@ def grant_verification(body: VerificationCreate, user: User = Depends(require_ro
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return {"ok": True, "data": record}
-
-
-@router.post("/{plot_id}")
-def moderate(
-    plot_id: str,
-    body: ModerateBody,
-    user: User = Depends(require_roles("moderator", "admin")),
-):
-    _ = user
-    plot = store.moderate(plot_id, body.action, body.comment)
-    if not plot:
-        raise HTTPException(status_code=404, detail="Участок не найден")
-    return {"ok": True, "data": plot}

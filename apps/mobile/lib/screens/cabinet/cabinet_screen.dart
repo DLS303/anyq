@@ -115,7 +115,7 @@ class CabinetScreen extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  locale == 'kk' ? 'Таңдаулы жер телімдері' : 'Избранные участки',
+                  locale == 'kk' ? 'Таңдаулы нысандар' : 'Избранные объекты',
                   style: const TextStyle(color: AnyqColors.primary, fontSize: 15, fontWeight: FontWeight.w800),
                 ),
                 Text(
@@ -132,7 +132,7 @@ class CabinetScreen extends StatelessWidget {
                 padding: const EdgeInsets.all(16),
                 child: Center(
                   child: Text(
-                    locale == 'kk' ? 'Әзірге таңдаулылар жоқ' : 'В избранном пока нет участков',
+                    locale == 'kk' ? 'Әзірге таңдаулылар жоқ' : 'В избранном пока нет объектов',
                     style: const TextStyle(fontSize: 13, color: AnyqColors.inkMute),
                   ),
                 ),
@@ -225,7 +225,7 @@ class CabinetScreen extends StatelessWidget {
             // Moderator Queue (If moderator/admin)
             if (role == 'moderator' || role == 'admin') ...[
               Text(
-                locale == 'kk' ? 'Модерация кезегі' : 'Очередь модерации участков',
+                locale == 'kk' ? 'Модерация кезегі' : 'Очередь модерации',
                 style: const TextStyle(color: AnyqColors.primary, fontSize: 15, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 8),
@@ -270,7 +270,7 @@ class CabinetScreen extends StatelessWidget {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
                                   backgroundColor: AnyqColors.clarity,
-                                  content: Text('Участок верифицирован и опубликован!'),
+                                  content: Text('Объект проверен и опубликован!'),
                                 ),
                               );
                             },

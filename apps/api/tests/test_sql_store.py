@@ -10,18 +10,8 @@ from app.store import MemoryStore
 client = TestClient(app)
 
 
-def test_plots_are_paged_in_sql():
-    first = client.get("/v1/plots", params={"limit": 1, "offset": 0})
-    assert first.status_code == 200, first.text
-    body = first.json()
-    assert body["limit"] == 1
-    assert body["offset"] == 0
-    assert body["total"] >= 2
-    assert len(body["data"]) == 1
-    second = client.get("/v1/plots", params={"limit": 1, "offset": 1})
-    assert second.status_code == 200
-    assert second.json()["data"][0]["id"] != body["data"][0]["id"]
-    assert "total" not in second.json()
+def test_plot_listing_page_is_not_served():
+    assert client.get("/v1/plots", params={"limit": 1, "offset": 0}).status_code == 404
 
 
 def test_two_connections_see_each_others_writes(tmp_path, monkeypatch):

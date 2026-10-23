@@ -2,8 +2,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { DEMO_MODE } from "./lib/features";
 
 const LOCALES = ["ru", "kk"];
+/** Old land-listing URLs. Always send them home. */
+const LAND_GONE = ["/catalog", "/plots", "/publish", "/compare"];
 /** Finished areas kept out of the release navigation. */
-const RELEASE_HIDDEN = ["/catalog", "/plots", "/publish", "/compare", "/control"];
+const RELEASE_HIDDEN = ["/control"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -20,11 +22,23 @@ export function middleware(request: NextRequest) {
   const matched = LOCALES.some((l) => pathname === `/${l}` || pathname.startsWith(`/${l}/`));
   if (!matched) {
     const url = request.nextUrl.clone();
+    const bare = pathname === "/" ? "/" : pathname;
+    if (LAND_GONE.some((p) => bare === p || bare.startsWith(`${p}/`))) {
+      url.pathname = "/ru";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
     url.pathname = `/ru${pathname === "/" ? "" : pathname}`;
     return NextResponse.redirect(url);
   }
   const locale = pathname.startsWith("/kk") ? "kk" : "ru";
   const rest = pathname.replace(/^\/(ru|kk)/, "") || "/";
+  if (LAND_GONE.some((p) => rest === p || rest.startsWith(`${p}/`))) {
+    const url = request.nextUrl.clone();
+    url.pathname = `/${locale}`;
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
   if (!DEMO_MODE && RELEASE_HIDDEN.some((p) => rest === p || rest.startsWith(`${p}/`))) {
     const url = request.nextUrl.clone();
     url.pathname = `/${locale}`;

@@ -13,7 +13,7 @@ class AnyqColors {
   static const Color terracotta = Color(0xFFB56A43);
 
   // Status Colors (Clarity system)
-  static const Color clarity = Color(0xFF059669); // Участок ясен
+  static const Color clarity = Color(0xFF059669); // Объект ясен
   static const Color clarityBg = Color(0xFFECFDF5);
   static const Color caution = Color(0xFFB45309); // Нюансы/обременения
   static const Color cautionBg = Color(0xFFFFFBEB);
