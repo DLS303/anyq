@@ -9,6 +9,7 @@ import { MATERIAL_CAT } from "@/lib/format";
 import type { Locale, MaterialCat } from "@/lib/types";
 import { t } from "@/i18n/messages";
 import { PILOT_MODE } from "@/lib/pilot";
+import { REGISTRATION_ENABLED } from "@/lib/registration";
 import { Building2, Lock, Mail, Truck } from "lucide-react";
 
 type RegRole = "buyer" | "contractor" | "supplier";
@@ -25,7 +26,7 @@ export function LoginView({
   const m = t(locale);
   const { login } = useAuth();
   const router = useRouter();
-  const [mode, setMode] = useState<"login" | "register">(initialMode);
+  const [mode, setMode] = useState<"login" | "register">(REGISTRATION_ENABLED ? initialMode : "login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
@@ -50,6 +51,11 @@ export function LoginView({
     let stop = false;
     setPdConsent(false);
     setAiConsent(false);
+    if (!REGISTRATION_ENABLED) {
+      setNeedsOwner(false);
+      setMode("login");
+      return;
+    }
     fetchBootstrap()
       .then((row) => {
         if (stop) return;
@@ -169,7 +175,7 @@ export function LoginView({
     <div className="max-w-4xl mx-auto py-6 sm:py-10">
       <div className="grid md:grid-cols-[1.15fr_0.85fr] gap-8 items-start">
         <div className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
-          {PILOT_MODE || needsOwner ? null : (
+          {!REGISTRATION_ENABLED || PILOT_MODE || needsOwner ? null : (
             <div className="flex items-center gap-2 mb-6 p-1 bg-slate-100 rounded-2xl w-fit border border-slate-200">
               <button
                 type="button"
@@ -199,11 +205,23 @@ export function LoginView({
           )}
 
           <h1 className="text-2xl font-bold text-slate-900 mb-1">
-            {needsOwner ? m.ownerSetupTitle : PILOT_MODE || mode === "login" ? (PILOT_MODE ? m.pilotLoginTitle : m.loginTitle) : m.register}
+            {REGISTRATION_ENABLED && needsOwner
+              ? m.ownerSetupTitle
+              : PILOT_MODE
+                ? m.pilotLoginTitle
+                : REGISTRATION_ENABLED && mode === "register"
+                  ? m.register
+                  : m.loginTitle}
           </h1>
-          <p className="text-xs text-slate-500 mb-6">{needsOwner ? m.ownerSetupLead : PILOT_MODE ? m.pilotLoginLead : m.loginLead}</p>
+          <p className="text-xs text-slate-500 mb-6">
+            {REGISTRATION_ENABLED && needsOwner
+              ? m.ownerSetupLead
+              : PILOT_MODE || !REGISTRATION_ENABLED
+                ? m.pilotLoginLead
+                : m.loginLead}
+          </p>
 
-          {!needsOwner && (PILOT_MODE || mode === "login") ? (
+          {!REGISTRATION_ENABLED || (!needsOwner && (PILOT_MODE || mode === "login")) ? (
             <form onSubmit={onLogin} className="grid gap-3.5">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
@@ -455,16 +473,18 @@ export function LoginView({
         <aside className="glass-strong rounded-3xl p-6 sm:p-8 shadow-luxury border border-slate-200/90">
           <div className="flex items-center gap-2 mb-3">
             <Building2 className="h-5 w-5 text-pine" />
-            <h2 className="text-lg font-bold text-slate-900">{needsOwner ? m.ownerSetupTitle : PILOT_MODE ? m.pilotLoginTitle : m.demoHint}</h2>
+            <h2 className="text-lg font-bold text-slate-900">
+              {REGISTRATION_ENABLED && needsOwner ? m.ownerSetupTitle : PILOT_MODE ? m.pilotLoginTitle : m.demoHint}
+            </h2>
           </div>
           <p className="text-sm text-slate-600 leading-relaxed">
-            {needsOwner
+            {REGISTRATION_ENABLED && needsOwner
               ? m.ownerSetupLead
-              : PILOT_MODE
-              ? m.pilotLoginAside
-              : "Компания входит по своим реквизитам. Поставщик указывает первую позицию, и она сразу появляется в каталоге материалов."}
+              : PILOT_MODE || !REGISTRATION_ENABLED
+                ? m.pilotLoginAside
+                : "Компания входит по своим реквизитам. Поставщик указывает первую позицию, и она сразу появляется в каталоге материалов."}
           </p>
-          {PILOT_MODE || needsOwner ? null : (
+          {!REGISTRATION_ENABLED || PILOT_MODE || needsOwner ? null : (
             <>
               <ul className="mt-5 grid gap-3 text-sm text-slate-700">
                 <li className="flex gap-2">

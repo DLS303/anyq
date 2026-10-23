@@ -9,6 +9,7 @@ import { CATEGORY, money, ratingLabel, reviewsLabel } from "@/lib/format";
 import type { Locale, Review, Specialist } from "@/lib/types";
 import { PhotoView } from "@/components/media/PhotoView";
 import { t } from "@/i18n/messages";
+import { registerHref } from "@/lib/registration";
 import { CheckCircle2, ShieldCheck, Star, MessageSquare, Briefcase, ExternalLink, X, Send } from "lucide-react";
 
 export function SpecialistProfile({
@@ -41,7 +42,7 @@ export function SpecialistProfile({
             detail: { message: "Сначала зарегистрируйте компанию для пилота Engicon" },
           }),
         );
-        router.push(`/${locale}/login?mode=register`);
+        router.push(registerHref(locale));
         return;
       }
 

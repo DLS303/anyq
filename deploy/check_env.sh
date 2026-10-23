@@ -192,6 +192,22 @@ validate_env() {
       ;;
   esac
 
+  case "${REGISTRATION_ENABLED:-0}" in
+    0|1) ;;
+    *)
+      echo "anyq: REGISTRATION_ENABLED must be 0 or 1" >&2
+      return 1
+      ;;
+  esac
+
+  case "${NEXT_PUBLIC_REGISTRATION_ENABLED:-0}" in
+    0|1) ;;
+    *)
+      echo "anyq: NEXT_PUBLIC_REGISTRATION_ENABLED must be 0 or 1" >&2
+      return 1
+      ;;
+  esac
+
   case "${BACKUP_RETENTION_DAYS:-14}" in
     ''|*[!0-9]*)
       echo "anyq: BACKUP_RETENTION_DAYS must be a positive number of days" >&2
