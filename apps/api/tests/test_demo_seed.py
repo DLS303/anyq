@@ -9,6 +9,7 @@ import logging
 import multiprocessing
 import re
 import secrets
+import string
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from PIL import Image
 
 from app.authutil import load_secret, reset_secret_cache
 from app.config import api_docs_closed, resolve_cors_origins, session_cookie_params
+from app.demo_password import assert_demo_password_policy
 from app.demo_seed import DEMO_SEED_VERSION, demo_placeholder_jpeg, run_demo_seed
 from app.import_json import import_file
 from app.main import _lifespan, app, root
@@ -33,6 +35,26 @@ LAND_WORD = re.compile(r"участ(?!ник)|земл", re.IGNORECASE)
 PHONE = re.compile(r"\+\d[\d\s()\-]{6,}\d")
 EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 ALLOWED_EMAIL = re.compile(r"^[^@\s]+@(?:demo\.superapp|example\.com)$", re.IGNORECASE)
+
+
+def _acceptable_demo_password() -> str:
+    """A throwaway password that meets the demo rule. Not a stored secret."""
+    alphabet = string.ascii_letters + string.digits + "!#$%*+-=?"
+    for _ in range(8):
+        chars = [
+            secrets.choice(string.ascii_lowercase),
+            secrets.choice(string.ascii_uppercase),
+            secrets.choice(string.digits),
+            secrets.choice("!#$%*+-=?"),
+        ]
+        chars.extend(secrets.choice(alphabet) for _ in range(12))
+        secrets.SystemRandom().shuffle(chars)
+        password = "".join(chars)
+        folded = password.casefold()
+        if any(token in folded for token in ("password", "demo", "change-me", "changeme", "change_me")):
+            continue
+        return password
+    raise RuntimeError("could not build a demo password for the test")
 
 
 def _sqlite(monkeypatch, tmp_path: Path) -> None:
@@ -83,7 +105,7 @@ def test_lifespan_calls_demo_seed(monkeypatch):
 @pytest.mark.parametrize("env_name", ["demo", "development"])
 def test_demo_seed_creates_once_and_skips_on_restart(monkeypatch, tmp_path, caplog, env_name):
     _sqlite(monkeypatch, tmp_path)
-    password = secrets.token_urlsafe(24)
+    password = _acceptable_demo_password()
     monkeypatch.setenv("ANYQ_ENV", env_name)
     monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
     monkeypatch.setenv("ANYQ_DEMO_PASSWORD", password)
@@ -172,6 +194,55 @@ def test_demo_seed_is_absent_in_production(monkeypatch, tmp_path, caplog):
         assert list(fresh.projects) == []
     finally:
         _close(fresh)
+
+
+@pytest.mark.parametrize(
+    ("password", "detail"),
+    [
+        ("Aa1!short", "at least 16"),
+        ("a" * 20, "3 of 4"),
+        ("Ab1!passwordxxxx", "obvious"),
+        ("Aa1!aaaaDEMOxxxx", "obvious"),
+        ("Aa1!aaaachange-me", "obvious"),
+    ],
+)
+def test_demo_password_rejects_short_and_weak(monkeypatch, caplog, password, detail):
+    monkeypatch.setenv("ANYQ_ENV", "demo")
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    monkeypatch.setenv("ANYQ_DEMO_PASSWORD", password)
+    _enable_logs("app.store", "app.demo_password")
+    with caplog.at_level(logging.DEBUG), pytest.raises(RuntimeError) as caught:
+        MemoryStore()
+    assert "ANYQ_DEMO_PASSWORD" in str(caught.value)
+    assert detail in str(caught.value)
+    assert password not in str(caught.value)
+    assert password not in caplog.text
+
+
+def test_demo_password_accepts_a_strong_value_without_logging_it(monkeypatch, tmp_path, caplog):
+    password = _acceptable_demo_password()
+    _sqlite(monkeypatch, tmp_path)
+    monkeypatch.setenv("ANYQ_ENV", "demo")
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "1")
+    monkeypatch.setenv("ANYQ_DEMO_PASSWORD", password)
+    _enable_logs("app.store", "app.demo_password")
+    with caplog.at_level(logging.DEBUG):
+        fresh = MemoryStore()
+    try:
+        assert password not in caplog.text
+        _user, token = fresh.login("owner@demo.superapp", password, consent=True)
+        assert token
+        assert password not in token
+        assert password not in caplog.text
+    finally:
+        _close(fresh)
+
+
+def test_password_strength_skips_when_demo_seeding_is_off(monkeypatch):
+    monkeypatch.setenv("ANYQ_ENV", "development")
+    monkeypatch.setenv("ANYQ_DEMO_MODE", "")
+    monkeypatch.setenv("ANYQ_DEMO_PASSWORD", "short")
+    assert_demo_password_policy()
 
 
 def test_production_rejects_demo_password_without_echoing_it(monkeypatch):
