@@ -15,10 +15,10 @@ from sqlalchemy import text
 
 from app.audit import write as audit_write
 from app.company_features import project_company_id, resolve_path_company
-from app.tenant import company_key
 from app.main import app
 from app.punch_photos import PUSH_TEXT, migrate_status
 from app.store import store
+from app.tenant import company_key
 
 client = TestClient(app)
 
@@ -888,5 +888,115 @@ def test_alembic_upgrade_downgrade_upgrade(tmp_path):
     assert "REFERENCES files" in photo_sql
     fk_tables = {row[2] for row in connection.execute("PRAGMA foreign_key_list(punch_photos)")}
     assert {"punch_items", "files"} <= fk_tables
+    file_columns = {row[1] for row in connection.execute("PRAGMA table_info(files)")}
+    assert {"storage", "width_px", "height_px"} <= file_columns
+    assert "ix_files_company_sha" in indexes
+    file_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='files'").fetchone()[0]
+    assert "ck_files_storage" in file_sql
+    assert "ck_files_size" in file_sql
+    connection.close()
+
+
+def test_pf2a_extends_the_pf1a_files_table(tmp_path):
+    db = tmp_path / "shared-files.sqlite"
+    env = os.environ.copy()
+    env["DATABASE_URL"] = f"sqlite:///{db}"
+    env["ANYQ_ENV"] = "development"
+    env["JWT_SECRET"] = "test-only-secret-value-with-32-characters"
+    cwd = os.path.join(os.path.dirname(__file__), "..")
+
+    def run(*args: str):
+        subprocess.check_call([sys.executable, "-m", "alembic", *args], cwd=cwd, env=env)
+
+    run("upgrade", "20261019_0002_pf0")
+    connection = sqlite3.connect(db)
+    connection.execute(
+        """
+        CREATE TABLE files (
+            id VARCHAR(36) NOT NULL,
+            company_id VARCHAR(180) NOT NULL,
+            project_id VARCHAR(80),
+            storage_key TEXT NOT NULL,
+            kind VARCHAR(40) NOT NULL,
+            mime VARCHAR(120) NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            sha256 VARCHAR(64) NOT NULL,
+            meta_stripped BOOLEAN NOT NULL,
+            created_by VARCHAR(80) NOT NULL DEFAULT '',
+            updated_by VARCHAR(80) NOT NULL DEFAULT '',
+            created_at VARCHAR(40) NOT NULL,
+            updated_at VARCHAR(40) NOT NULL,
+            row_version INTEGER NOT NULL,
+            deleted_at VARCHAR(40),
+            PRIMARY KEY (id),
+            CONSTRAINT ux_files_key UNIQUE (storage_key)
+        )
+        """
+    )
+    connection.execute("CREATE INDEX ix_files_company_updated ON files (company_id, updated_at)")
+    connection.execute(
+        "INSERT INTO files ("
+        "id, company_id, storage_key, kind, mime, size_bytes, sha256, meta_stripped, "
+        "created_at, updated_at, row_version"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "f-1",
+            "bin:000000000001",
+            "sheet.pdf",
+            "drawing_pdf",
+            "application/pdf",
+            12,
+            "abc",
+            1,
+            "2026-10-19T00:00:00+00:00",
+            "2026-10-19T00:00:00+00:00",
+            1,
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    run("upgrade", "head")
+    connection = sqlite3.connect(db)
+    columns = {row[1]: row for row in connection.execute("PRAGMA table_info(files)")}
+    assert {"storage", "width_px", "height_px"} <= set(columns)
+    stored = connection.execute("SELECT storage, width_px, height_px, mime FROM files WHERE id = 'f-1'").fetchone()
+    assert stored == ("disk", None, None, "application/pdf")
+    indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "ix_files_company_sha" in indexes
+    assert "ix_files_company_updated" in indexes
+    file_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='files'").fetchone()[0]
+    assert "CONSTRAINT ux_files_key" in file_sql
+    assert "ck_files_storage" in file_sql
+    assert "ck_files_size" in file_sql
+    assert "VARCHAR(120)" in file_sql
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO files ("
+            "id, company_id, storage, storage_key, kind, mime, size_bytes, sha256, meta_stripped, "
+            "created_at, updated_at, row_version"
+            ") VALUES ('f-bad', 'bin:000000000001', 'box', 'other.pdf', 'drawing_pdf', "
+            "'application/pdf', 1, 'def', 1, '2026-10-19T00:00:00+00:00', '2026-10-19T00:00:00+00:00', 1)"
+        )
+    connection.rollback()
+    connection.close()
+
+    run("downgrade", "-1")
+    connection = sqlite3.connect(db)
+    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "files" in tables
+    assert "punch_items" not in tables and "punch_photos" not in tables
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(files)")}
+    assert "storage" not in columns and "width_px" not in columns and "height_px" not in columns
+    assert {"id", "storage_key", "mime", "sha256", "created_by"} <= columns
+    indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "ix_files_company_sha" not in indexes
+    assert "ix_files_company_updated" in indexes
+    file_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='files'").fetchone()[0]
+    assert "CONSTRAINT ux_files_key" in file_sql
+    assert "ck_files_storage" not in file_sql
+    assert "ck_files_size" not in file_sql
+    kept = connection.execute("SELECT mime, size_bytes FROM files WHERE id = 'f-1'").fetchone()
+    assert kept == ("application/pdf", 12)
     connection.close()
 
