@@ -1,7 +1,7 @@
 """Company feature flags, audit log, and company-key backfill.
 
 Revision ID: 20261019_0002_pf0
-Revises: 20261019_0001b_store_fixes
+Revises: 20261021_0001c_app_role
 Create Date: 2026-10-19
 
 Existing users receive a stored company_key. A BIN that belongs to exactly one
@@ -26,7 +26,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20261019_0002_pf0"
-down_revision = "20261019_0001b_store_fixes"
+down_revision = "20261021_0001c_app_role"
 branch_labels = None
 depends_on = None
 
@@ -220,28 +220,35 @@ def _digits(payload: dict) -> str:
     return raw if len(raw) == 12 else ""
 
 
-def _identity(old_key: str, digits: str) -> str:
-    old = (old_key or "").strip()
-    if old.startswith(("name:", "user:", "bin:")):
-        return old
-    if digits:
-        return f"bin:{digits}"
-    return old or "blank"
+def _norm_company(value: str) -> str:
+    return " ".join(str(value or "").casefold().split())
 
 
-def _assign(users: list[dict]) -> dict[str, dict]:
-    """BIN of exactly one company becomes bin:X. Every other BIN becomes user:<id> plus review."""
+def _same_company(user: dict, owner: dict, invite_company: dict[str, str]) -> bool:
+    """True when the normalized names agree. A blank profile can inherit the invitation name."""
+    own = _norm_company(user["payload"].get("company"))
+    root = _norm_company(owner["payload"].get("company"))
+    invited = _norm_company(invite_company.get(user["id"], ""))
+    if own and root and own != root:
+        return False
+    if own and root:
+        return True
+    return bool(invited and root and invited == root)
+
+
+def _assign(users: list[dict], invited_by: dict[str, str], invite_company: dict[str, str]) -> dict[str, dict]:
+    """First company of a BIN keeps bin:X. A different name, or a later self-registration, is user:<id> plus review.
+
+    An accepted invitation joins the inviter only when the company name matches.
+    Legacy records.company_key is not an identity: every BIN owner was stored as bin:X.
+    """
     assigned: dict[str, dict] = {}
     pending = []
     for user in users:
         stored = str(user["payload"].get("company_key") or "").strip()
         old = str(user["company_key"] or "")
         if _STORED_KEY.match(stored):
-            assigned[user["id"]] = {
-                "key": stored,
-                "review": bool(user["payload"].get("company_review")),
-                "old": old,
-            }
+            assigned[user["id"]] = {"key": stored, "review": bool(user["payload"].get("company_review")), "old": old}
             continue
         pending.append(user)
     groups: dict[str, list] = defaultdict(list)
@@ -255,13 +262,35 @@ def _assign(users: list[dict]) -> dict[str, dict]:
             }
             continue
         groups[digits].append(user)
+    for user in users:
+        stored = assigned.get(user["id"], {}).get("key", "")
+        if stored.startswith("bin:") and len(stored) == 16:
+            groups[stored[4:]].append(user)
     for digits, members in groups.items():
-        identities = {
-            _identity(str(user["company_key"] or ""), digits) for user in members
-        }
-        one_company = len(identities) == 1
-        for user in members:
-            if one_company:
+        ordered = []
+        seen: set[str] = set()
+        for user in sorted(members, key=lambda item: (int(item.get("seq") or 0), item["id"])):
+            if user["id"] in seen:
+                continue
+            seen.add(user["id"])
+            ordered.append(user)
+        holders = [item for item in ordered if assigned.get(item["id"], {}).get("key") == f"bin:{digits}"]
+        owner = holders[0] if holders else ordered[0]
+        accepted = {owner["id"]}
+        progressed = True
+        while progressed:
+            progressed = False
+            for user in ordered:
+                if user["id"] in accepted:
+                    continue
+                inviter = invited_by.get(user["id"])
+                if inviter in accepted and _same_company(user, owner, invite_company):
+                    accepted.add(user["id"])
+                    progressed = True
+        for user in ordered:
+            if user["id"] in assigned:
+                continue
+            if user["id"] in accepted:
                 key, review = f"bin:{digits}", False
             else:
                 key, review = f"user:{user['id']}", True
@@ -276,7 +305,7 @@ def _assign(users: list[dict]) -> dict[str, dict]:
 def _backfill_company_keys(bind) -> None:
     rows = bind.execute(
         sa.text(
-            "SELECT doc_id, company_key, payload FROM records WHERE collection = 'users'"
+            "SELECT doc_id, company_key, payload, seq FROM records WHERE collection = 'users'"
         )
     ).mappings()
     users = [
@@ -284,10 +313,19 @@ def _backfill_company_keys(bind) -> None:
             "id": row["doc_id"],
             "company_key": row["company_key"],
             "payload": _json_load(row["payload"]),
+            "seq": int(row["seq"] or 0),
         }
         for row in rows
     ]
-    assigned = _assign(users)
+    invited_by: dict[str, str] = {}
+    invite_company: dict[str, str] = {}
+    for row in bind.execute(sa.text("SELECT invited_by, used_by, company FROM invitations")).mappings():
+        used_by = str(row["used_by"] or "").strip()
+        if not used_by:
+            continue
+        invited_by[used_by] = str(row["invited_by"] or "").strip()
+        invite_company[used_by] = str(row["company"] or "")
+    assigned = _assign(users, invited_by, invite_company)
     if bind.dialect.name == "postgresql":
         user_sql = sa.text(
             "UPDATE records SET payload = CAST(:payload AS json), company_key = :key "

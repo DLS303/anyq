@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { PhotoView } from "@/components/media/PhotoView";
 import { t } from "@/i18n/messages";
 import { apiFetch } from "@/lib/api";
-import { roleLabel, weatherLabel } from "@/lib/report";
+import { dailyAuthorLabel, weatherLabel } from "@/lib/report";
 import type { Locale } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -62,7 +62,7 @@ export default async function PublicDailyPage({
       </article>
     );
   }
-  const author = roleLabel(data.author_role, m);
+  const author = dailyAuthorLabel({ author_role: data.author_role }, m, "public");
   return (
     <article className="mx-auto max-w-lg min-w-0">
       <p className="text-xs uppercase tracking-wider text-ink/45">{m.reportPublicTitle}</p>

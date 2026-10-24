@@ -51,9 +51,25 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+@pytest.fixture(autouse=True)
+def _keep_the_demo_owner():
+    yield
+    owner = store.get_user("u-owner")
+    if owner is None or owner.role == "owner":
+        return
+    _promote(owner.email, "owner")
+    store._save()
+
+
 def _promote(email: str, role: str = "owner"):
     user = store.get_user_by_email(email)
     assert user is not None
+    if role == "owner":
+        for existing in list(store.users_by_id.values()):
+            if existing.id != user.id and existing.role == "owner":
+                demoted = existing.model_copy(update={"role": "buyer"})
+                store.users_by_id[existing.id] = demoted
+                store.users[existing.email.lower()] = demoted
     updated = user.model_copy(update={"role": role})
     store.users_by_id[user.id] = updated
     store.users[email.lower()] = updated

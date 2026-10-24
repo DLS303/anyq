@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.authutil import load_secret
 from app.config import settings
+from app.ratelimit import require_login_hash_secret
 from app.routers import (
     acts,
     auth,
@@ -31,6 +32,7 @@ from app.security import PublicRobotsMiddleware, SecurityHeadersMiddleware
 from app.sql_backend import ChangedByOther
 
 load_secret()
+require_login_hash_secret()
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 
@@ -69,7 +71,7 @@ app.include_router(files.router)
 
 @app.exception_handler(ChangedByOther)
 def changed_by_other(_request: Request, exc: ChangedByOther):
-    return JSONResponse(status_code=409, content={"detail": str(exc)})
+    return JSONResponse(status_code=409, content={"code": "conflict", "detail": str(exc)})
 
 
 @app.get("/")

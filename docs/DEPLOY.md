@@ -96,19 +96,20 @@ chmod 600 deploy/.env
 openssl rand -base64 48
 ```
 
-Вставьте вывод `openssl` в `JWT_SECRET`. Дальше в том же файле:
+Вставьте вывод `openssl` в `JWT_SECRET`. Запустите `openssl rand -base64 48` ещё раз и вставьте второй вывод в `LOGIN_HASH_SECRET`: это отдельный секрет для окна неудачных входов, не замена `JWT_SECRET`. Дальше в том же файле:
 
 - `DOMAIN` — голое имя, например `app.example.kz`.
 - `ACME_EMAIL` — почта для уведомлений выпуска сертификата.
 - `CORS_ORIGINS` — `https://` и то же имя, без пробелов. Если имён несколько, перечислите через запятую, и `https://<DOMAIN>` обязан быть в списке.
 - `ANYQ_DEMO_PASSWORD` оставьте пустым.
-- `POSTGRES_PASSWORD` — длинный пароль с сервера (`openssl rand -base64 32`). Не используйте `anyq`, `postgres`, `superapp`, `changeme`.
-- `DATABASE_URL` — `postgresql+psycopg://anyq:<тот же пароль>@postgres:5432/anyq`. Compose подставляет пароль из `POSTGRES_PASSWORD` сам, но в файле адрес тоже должен быть адресом PostgreSQL.
+- `POSTGRES_PASSWORD` — длинный пароль роли-владельца `anyq` (`openssl rand -base64 32`). Эту роль используют только миграции и резервные копии. Не используйте `anyq`, `postgres`, `superapp`, `changeme`.
+- `ANYQ_APP_PASSWORD` — отдельный пароль роли `anyq_app`, под которой работает API. Сгенерируйте его второй командой `openssl rand -base64 32`. Он не должен совпадать с `POSTGRES_PASSWORD`.
+- `DATABASE_URL` в файле — адрес PostgreSQL. Compose подставляет его сам: API получает `postgresql+psycopg://anyq_app:<ANYQ_APP_PASSWORD>@postgres:5432/anyq`, сервис `migrate` — `postgresql+psycopg://anyq:<POSTGRES_PASSWORD>@postgres:5432/anyq`.
 - `WEB_CONCURRENCY` оставьте `2` или поставьте число от 1 до 8.
 - `NEXT_PUBLIC_PILOT_MODE=1` включает пилотный интерфейс. Значение попадает в образ сайта на сборке. Смена потребует нового `deploy.sh`.
 - `INTERNAL_API_URL` оставьте `http://api:8010`.
 
-Контейнер API не стартует, если секрет пустой, короче 32 символов или похож на заготовку (`changeme`, `replace-me`, `test-only`, `superapp`, `your-secret` и те же слова в другом регистре). Пустой `CORS_ORIGINS`, символ `*` в нём, непустой демо-пароль и пароль базы по умолчанию тоже останавливают запуск. Тот же набор проверяет `deploy/check_env.sh` до сборки. Процесс Python дополнительно отказывается стартовать без `JWT_SECRET` достаточной длины и без `CORS_ORIGINS`.
+Контейнер API не стартует, если `JWT_SECRET` или `LOGIN_HASH_SECRET` пустой, короче 32 символов или похож на заготовку (`changeme`, `replace-me`, `test-only`, `superapp`, `your-secret` и те же слова в другом регистре). Пустой `CORS_ORIGINS`, символ `*` в нём, непустой демо-пароль и пароль базы по умолчанию тоже останавливают запуск. Тот же набор проверяет `deploy/check_env.sh` до сборки, вместе с `ANYQ_APP_PASSWORD` (не короче 16 символов и не равен `POSTGRES_PASSWORD`). Процесс Python при запуске, до приёма запросов, отказывается работать без `JWT_SECRET` и `CORS_ORIGINS`. Пустой или короткий `LOGIN_HASH_SECRET` останавливает процесс, когда `ANYQ_ENV=production` или `APP_ENV=prod`. В development и в демо-режиме отсутствие `LOGIN_HASH_SECRET` запуск не блокирует.
 
 ```bash
 ./deploy/check_env.sh
@@ -146,7 +147,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml logs --t
 - `anyq-postgres` — данные PostgreSQL. Удаление тома стирает базу.
 - `anyq-caddy-data` и `anyq-caddy-config` — сертификаты. Удаление этих томов заставит Caddy запросить сертификат заново.
 
-Логи контейнеров пишутся драйвером `json-file`: не больше 10 МБ на файл и 5 файлов на сервис. Лимиты ресурсов в compose-файле рассчитаны на 2 vCPU и 4 ГБ: API до 1 CPU и 1536 МБ, PostgreSQL до 0.5 CPU и 512 МБ, сайт до 0.75 CPU и 768 МБ, Caddy до 0.25 CPU и 128 МБ. Политика перезапуска — `unless-stopped`. При старте контейнер API выполняет `alembic upgrade head`.
+Логи контейнеров пишутся драйвером `json-file`: не больше 10 МБ на файл и 5 файлов на сервис. Лимиты ресурсов в compose-файле рассчитаны на 2 vCPU и 4 ГБ: API до 1 CPU и 1536 МБ, PostgreSQL до 0.5 CPU и 512 МБ, сайт до 0.75 CPU и 768 МБ, Caddy до 0.25 CPU и 128 МБ. Политика перезапуска — `unless-stopped`. Сервис `db-backup` до старта `migrate` пишет `pg_dump -Fc` в том `anyq-backups`. Имя файла содержит время UTC (`pre-migrate-YYYYMMDDTHHMMSSZ.dump`), поэтому новый запуск не затирает предыдущий. `umask 077` задаёт доступ только владельцу. В томе остаются три последних снимка. Если дамп не создался, `migrate` не запускается. Сервис `migrate` один раз выполняет `alembic upgrade head` от роли `anyq` до старта API и затем задаёт пароль роли `anyq_app`. API подключается только как `anyq_app`. Журнал `consent_events` не принимает `TRUNCATE`. API при старте таблицы не создаёт и отвечает 503 на `/ready`, пока версия схемы старше ожидаемой. Более новая схема тот же процесс не останавливает.
 
 ## 5. Проверка HTTPS
 
@@ -175,6 +176,17 @@ ls -lh /var/backups/anyq
 
 Появляются два файла: `anyq-data-<дата>.tar.gz` (каталог `/data`: загрузки и медиа) и `anyq-postgres-<дата>.sql.gz` (`pg_dump` базы `anyq`). Срок хранения задаёт `BACKUP_RETENTION_DAYS` (по умолчанию 14).
 
+Перед каждой миграцией compose дополнительно пишет `/backups/pre-migrate-<время UTC>.dump` в томе `anyq-backups`. Это снимок `pg_dump -Fc` из `postgres:16-alpine` с паролем `POSTGRES_PASSWORD`, с `umask 077`. Файл непустой, иначе сервис `db-backup` завершается с ошибкой и `migrate` не стартует. Восстановление в уже запущенный PostgreSQL:
+
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml run --rm --no-deps \
+  db-backup \
+  pg_restore --clean --if-exists --no-owner -h postgres -U anyq -d anyq \
+  /backups/pre-migrate-YYYYMMDDTHHMMSSZ.dump
+```
+
+Если при обновлении схемы совпали адреса двух учётных записей, в том числе только регистром, миграция оставляет адрес у более ранней строки и очищает колонку `email` у остальных. В лог сервиса `migrate` и в таблицу `email_quarantine` попадают только `doc_id` и причина `duplicate`, без самого адреса. Пока адрес не назначен заново, вход этой записи недоступен. Разбор: открыть строку `records` с `collection = 'users'` и этим `doc_id`, задать отдельный адрес и сохранить.
+
 Ежедневный запуск в 03:15 UTC от пользователя `deploy`:
 
 ```bash
@@ -188,7 +200,7 @@ sudo chmod 644 /etc/cron.d/anyq-backup
 
 ## Перенос db.json
 
-Один раз, после того как контейнер API уже прошёл `alembic upgrade head`. Скрипт идемпотентный: повторный запуск обновляет изменившиеся строки и оставляет совпавшие. В отчёте для каждой коллекции три числа: `insert`, `update`, `same`. Флаг `--dry-run` печатает те же числа и ничего не записывает.
+Один раз, после того как сервис `migrate` завершился успешно. Скрипт идемпотентный: повторный запуск обновляет изменившиеся строки и оставляет совпавшие. В отчёте для каждой коллекции три числа: `insert`, `update`, `same`. Флаг `--dry-run` печатает те же числа и ничего не записывает.
 
 Положите прежний файл в том данных, например `/data/db.json` внутри контейнера API, и выполните из `/opt/anyq`:
 
@@ -256,7 +268,29 @@ docker logs anyq-api --tail 50
 
 Существующий `.github/workflows/ci.yml` этот файл не заменяет. Проверки pull request идут через него.
 
-## 10. Что скрипты не делают
+## 10. Партиции журнала аудита
+
+Миграция `20261019_0002_pf0` создаёт партиции `audit_log` на октябрь и ноябрь 2026 года, партицию `DEFAULT`, триггер `BEFORE TRUNCATE` на каждой из них и `REVOKE UPDATE, DELETE, TRUNCATE` для роли `anyq_app`, если эта роль уже есть. Следующие месяцы сами не появляются. Строки без своей партиции попадают в `DEFAULT`, и на новой партиции не будет ни триггера, ни `REVOKE`.
+
+Раз в месяц, до начала следующего месяца, на сервере под пользователем `deploy`. Скрипт создаёт таблицы, поэтому его запускает сервис `migrate` от роли `anyq`. Роль `anyq_app` не имеет `CREATE` и `TRUNCATE`, и контейнер API этим скриптом пользоваться не может.
+
+```bash
+cd /opt/anyq
+docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml run --rm --no-deps \
+  migrate python scripts/ensure_audit_partition.py
+```
+
+Скрипт создаёт партицию текущего месяца и следующего. Границы в UTC (`YYYY-MM-01 00:00:00+00`). На каждую новую партицию ставится `BEFORE TRUNCATE` и, если роль `anyq_app` существует, `REVOKE UPDATE, DELETE, TRUNCATE`. Повторный запуск ничего не ломает.
+
+Запускайте скрипт после `alembic upgrade head` и после любого `GRANT` на `audit_log` для `anyq_app`. `GRANT ON ALL TABLES` и `ALTER DEFAULT PRIVILEGES`, выполненные позже, снова выдадут `UPDATE`, `DELETE` и `TRUNCATE`; тогда скрипт нужно запустить ещё раз.
+
+Пример cron на 25-е число, 03:00 по времени сервера:
+
+```text
+0 3 25 * * cd /opt/anyq && docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml run --rm --no-deps migrate python scripts/ensure_audit_partition.py
+```
+
+## 11. Что скрипты не делают
 
 - Не покупают сервер и домен и не создают DNS-запись.
 - Не генерируют боевой `JWT_SECRET` за вас: его нужно создать на сервере и оставить только в `deploy/.env`.

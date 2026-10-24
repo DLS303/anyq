@@ -71,6 +71,7 @@ def _empty_database(monkeypatch, tmp_path) -> None:
         return
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("ANYQ_DB_PATH", str(tmp_path / "db.json"))
+    command.upgrade(Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head")
 
 
 def test_demo_mode_off_starts_empty_and_first_user_is_owner(monkeypatch, tmp_path):

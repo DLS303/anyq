@@ -69,6 +69,25 @@ validate_env() {
       ;;
   esac
 
+  hash_secret="${LOGIN_HASH_SECRET:-}"
+  hash_secret="${hash_secret#"${hash_secret%%[![:space:]]*}"}"
+  hash_secret="${hash_secret%"${hash_secret##*[![:space:]]}"}"
+  if [ -z "$hash_secret" ]; then
+    echo "anyq: LOGIN_HASH_SECRET is missing" >&2
+    return 1
+  fi
+  if [ "${#hash_secret}" -lt 32 ]; then
+    echo "anyq: LOGIN_HASH_SECRET must be at least 32 characters" >&2
+    return 1
+  fi
+  hash_folded="$(printf '%s' "$hash_secret" | tr '[:upper:]' '[:lower:]')"
+  case "$hash_folded" in
+    *changeme*|*change-me*|*change_me*|*replace-me*|*replace_me*|*replace-with*|*your-secret*|*test-only*|*not-a-secret*|*placeholder*|*jwt-secret*|*jwt_secret*|*superapp*)
+      echo "anyq: LOGIN_HASH_SECRET is a placeholder" >&2
+      return 1
+      ;;
+  esac
+
   if [ -z "${CORS_ORIGINS:-}" ]; then
     echo "anyq: CORS_ORIGINS must be set" >&2
     return 1
@@ -109,6 +128,28 @@ validate_env() {
 
   if [ -z "${POSTGRES_PASSWORD:-}" ]; then
     echo "anyq: POSTGRES_PASSWORD is missing" >&2
+    return 1
+  fi
+
+  app_password="${ANYQ_APP_PASSWORD:-}"
+  app_password="${app_password#"${app_password%%[![:space:]]*}"}"
+  app_password="${app_password%"${app_password##*[![:space:]]}"}"
+  if [ -z "$app_password" ]; then
+    echo "anyq: ANYQ_APP_PASSWORD is missing" >&2
+    return 1
+  fi
+  if [ "${#app_password}" -lt 16 ]; then
+    echo "anyq: ANYQ_APP_PASSWORD must be at least 16 characters" >&2
+    return 1
+  fi
+  case "$app_password" in
+    anyq|anyq_app|postgres|superapp|changeme|password|secret)
+      echo "anyq: ANYQ_APP_PASSWORD is a default" >&2
+      return 1
+      ;;
+  esac
+  if [ "$app_password" = "${POSTGRES_PASSWORD}" ]; then
+    echo "anyq: ANYQ_APP_PASSWORD must differ from POSTGRES_PASSWORD" >&2
     return 1
   fi
 

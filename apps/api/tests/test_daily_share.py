@@ -72,6 +72,7 @@ def _new_log(token: str) -> dict:
     body = res.json()["data"]
     assert "share_token_sha256" not in body
     assert body["author_role"] == "owner"
+    assert body["author_name"] == "Ерлан Сатыбалды"
     assert "author_id" in body
     return body
 
@@ -201,3 +202,28 @@ def test_share_expiry_revoke_and_public_copy():
     assert "noindex" in gone.headers["x-robots-tag"]
     unknown = client.get("/v1/public/daily/" + "a" * 40)
     assert unknown.status_code == 404
+
+
+def test_staff_payload_names_the_author_and_the_public_link_does_not():
+    from types import SimpleNamespace
+
+    from app.shares import member_daily, public_daily
+    from app.site_models import DailyLog, Project
+
+    log = DailyLog(
+        id="dl-foreman",
+        project_id="pr-yard",
+        day="2026-10-19",
+        author_id="u-foreman",
+        author_role="foreman",
+        notes="Кладка цоколя",
+    )
+    project = Project(id="pr-yard", slug="yard", title="Дом на Наурызбая", owner_id="u-owner")
+    person = SimpleNamespace(full_name="Айгуль Тестова", role="foreman")
+    staff = member_daily(log, lookup=lambda uid: person if uid == "u-foreman" else None)
+    assert staff["author_name"] == "Айгуль Тестова"
+    public = public_daily(log, project, "public-token", lambda uid: person)
+    assert "author_name" not in public
+    assert public["author_role"] == "foreman"
+    assert "Айгуль" not in str(public)
+    assert "Тестова" not in str(public)

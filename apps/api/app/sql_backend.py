@@ -14,6 +14,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
@@ -27,7 +28,6 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     delete,
-    desc,
     event,
     func,
     or_,
@@ -35,7 +35,12 @@ from sqlalchemy import (
     text,
     update,
 )
-from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+from sqlalchemy.exc import (
+    IntegrityError,
+    OperationalError,
+    ProgrammingError,
+    SQLAlchemyError,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.geo import centroid, haversine_km
@@ -79,13 +84,20 @@ class Record(Base):
         Index("ix_records_coll_comp_seq", "collection", "company_key", "seq"),
         Index("ix_records_coll_owner_seq", "collection", "owner_id", "seq"),
         Index("ix_records_coll_status_seq", "collection", "status", "seq"),
-        Index("ix_records_coll_created", "collection", desc("created_at")),
+        Index("ix_records_coll_created", "collection", "created_at"),
         Index(
             "ux_records_user_email",
             "email",
             unique=True,
             sqlite_where=text("collection = 'users'"),
             postgresql_where=text("collection = 'users'"),
+        ),
+        Index(
+            "ux_records_single_owner",
+            "status",
+            unique=True,
+            sqlite_where=text("collection = 'users' AND status = 'owner'"),
+            postgresql_where=text("collection = 'users' AND status = 'owner'"),
         ),
     )
 
@@ -147,17 +159,26 @@ class InvitationRow(Base):
     revoked_at: Mapped[str | None] = mapped_column(String(40))
 
 
+class EmailQuarantine(Base):
+    """Accounts left for a manual email fix. The row stores an id, not the address."""
+
+    __tablename__ = "email_quarantine"
+
+    doc_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(40))
+    reported_at: Mapped[str] = mapped_column(String(40))
+
+
 class LoginFailure(Base):
     """Failed login attempts. Shared by every worker so the window is global."""
 
     __tablename__ = "login_failures"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    account: Mapped[str] = mapped_column(String(200))
-    ip: Mapped[str] = mapped_column(String(80))
+    key_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[float] = mapped_column(Float)
 
-    __table_args__ = (Index("ix_login_failures_account_ip_created", "account", "ip", "created_at"),)
+    __table_args__ = (Index("ix_login_failures_key_created", "key_hash", "created_at"),)
 
 
 class ConsentEvent(Base):
@@ -166,7 +187,9 @@ class ConsentEvent(Base):
     __tablename__ = "consent_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
     legacy_id: Mapped[str] = mapped_column(String(40))
+    event_uuid: Mapped[str] = mapped_column(String(36))
     company_id: Mapped[str | None] = mapped_column(String(180))
     subject_user_id: Mapped[str] = mapped_column(String(80))
     purpose: Mapped[str] = mapped_column(String(40))
@@ -182,11 +205,14 @@ class ConsentEvent(Base):
     country: Mapped[str] = mapped_column(String(80), default="")
     privacy_version: Mapped[str] = mapped_column(String(40), default="")
     privacy_sha256: Mapped[str] = mapped_column(String(64), default="")
+    evidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     __table_args__ = (
         UniqueConstraint("legacy_id", name="uq_consent_events_legacy_id"),
-        Index("ix_consents_subject", "subject_user_id", "purpose", desc("occurred_at")),
-        Index("ix_consents_company", "company_id", desc("occurred_at")),
+        UniqueConstraint("event_uuid", name="uq_consent_events_event_uuid"),
+        Index("ix_consent_events_seq", "seq", unique=True),
+        Index("ix_consents_subject", "subject_user_id", "purpose", "occurred_at"),
+        Index("ix_consents_company", "company_id", "occurred_at"),
     )
 
 
@@ -663,6 +689,8 @@ def index_values(store, collection: str, doc_id: str, payload: dict) -> dict:
         payload.get("email"),
     ]
     search_text = " ".join(str(bit) for bit in search_bits if bit).lower()[:4000]
+    if collection == "users" and str(payload.get("role") or "").strip() == "owner":
+        status = "owner"
     return {
         "project_id": project_id,
         "company_key": company_key,
@@ -799,8 +827,71 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
+SCHEMA_HEAD = "20261019_0004_pf2a"
+MIGRATION_LOCK = 21419007
+
+
 def _production() -> bool:
     return os.getenv("ANYQ_ENV", "development").strip().lower() == "production"
+
+
+def database_revision_ready(version: str, expected: str | None = None) -> bool:
+    """True when the database is at the image revision or a later one in its chain.
+
+    A newer schema still serves the previous image (expand). An older schema does not.
+    """
+    target = expected or SCHEMA_HEAD
+    current = (version or "").strip()
+    if not current:
+        return False
+    if current == target:
+        return True
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        from alembic.util import CommandError
+
+        cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+        script = ScriptDirectory.from_config(cfg)
+    except (OSError, ValueError, CommandError):
+        return False
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        try:
+            rev = script.get_revision(current)
+        except CommandError:
+            return False
+        down = rev.down_revision
+        if down is None:
+            return False
+        if isinstance(down, tuple):
+            return target in down
+        if down == target:
+            return True
+        current = str(down)
+    return False
+
+
+def users_by_address(users, addresses: dict[str, str | None], quarantined: set[str]) -> dict:
+    """Email index. Quarantined rows and rows without an address are left out."""
+    indexed = {}
+    for user in users:
+        doc_id = getattr(user, "id", None)
+        if not doc_id or doc_id in quarantined:
+            continue
+        email = addresses.get(doc_id)
+        if email is None or not str(email).strip():
+            continue
+        indexed[str(email).strip().lower()] = user
+    return indexed
+
+
+def _record_pk_conflict(exc: IntegrityError) -> bool:
+    message = str(getattr(exc, "orig", exc)).lower()
+    if "email" in message:
+        return False
+    return "primary" in message or "records.collection" in message or "records_pkey" in message
 
 
 def _chunks(items: list, size: int):
@@ -808,17 +899,35 @@ def _chunks(items: list, size: int):
         yield items[start : start + size]
 
 
+def _stored_action(action: str | None) -> str:
+    if action == "revoke" or action == "withdraw":
+        return "withdraw"
+    return "grant"
+
+
+def _record_action(action: str | None) -> str:
+    if action == "withdraw" or action == "revoke":
+        return "revoke"
+    return "grant"
+
+
 def consent_event_from_record(record, company_id: str | None) -> ConsentEvent:
     action = record.action or "grant"
     occurred = record.revoked_at if action == "revoke" and record.revoked_at else record.granted_at
+    evidence = {
+        "privacy_version": record.privacy_version or "",
+        "privacy_sha256": record.privacy_sha256 or "",
+        "granted_at": record.granted_at or "",
+    }
     return ConsentEvent(
         legacy_id=record.id,
+        event_uuid=str(uuid4()),
         company_id=company_id,
         subject_user_id=record.user_id,
         purpose=record.type,
         text_version=record.text_version,
         text_sha256=record.text_sha256,
-        action=action,
+        action=_stored_action(action),
         occurred_at=occurred or record.granted_at,
         granted_at=record.granted_at or occurred or "",
         ip=record.ip or "",
@@ -828,13 +937,33 @@ def consent_event_from_record(record, company_id: str | None) -> ConsentEvent:
         country=record.country or "",
         privacy_version=record.privacy_version or "",
         privacy_sha256=record.privacy_sha256 or "",
+        evidence=evidence,
     )
+
+
+def legacy_consent_events(record, company_id: str | None) -> list[ConsentEvent]:
+    """Map one stored consent onto a grant and, when it was revoked, a withdraw."""
+    revoked = (record.action == "revoke") or bool(record.revoked_at)
+    if not revoked:
+        return [consent_event_from_record(record, company_id)]
+    grant = record.model_copy(update={"action": "grant", "revoked_at": None})
+    withdraw = record.model_copy(
+        update={
+            "id": f"{record.id}:withdraw",
+            "action": "revoke",
+            "revoked_at": record.revoked_at or record.granted_at,
+        }
+    )
+    return [
+        consent_event_from_record(grant, company_id),
+        consent_event_from_record(withdraw, company_id),
+    ]
 
 
 def consent_record_from_event(row: ConsentEvent):
     from app.schemas import ConsentRecord
 
-    action = row.action or "grant"
+    action = _record_action(row.action)
     return ConsentRecord(
         id=row.legacy_id,
         user_id=row.subject_user_id,
@@ -867,17 +996,37 @@ def copy_legacy_consents(session: Session) -> None:
         if legacy in known:
             continue
         record = ConsentRecord.model_validate(payload)
-        session.add(consent_event_from_record(record, row.company_key))
-        known.add(legacy)
+        for consent in legacy_consent_events(record, row.company_key):
+            if consent.legacy_id in known:
+                continue
+            consent.seq = alloc_seq(session, "consents")
+            session.add(consent)
+            known.add(consent.legacy_id)
     session.execute(delete(Record).where(Record.collection == "consents"))
 
 
-def bump_revisions(session: Session, collections: set[str]) -> int:
-    names = ["rev", *sorted(collections)]
+def lock_meta(session: Session, ids: set[str]) -> None:
+    """Lock meta rows in id order so two transactions cannot deadlock."""
+    names = sorted(name for name in ids if name)
+    if not names:
+        return
     session.execute(
         text("INSERT INTO meta (id, revision) VALUES (:id, 0) ON CONFLICT (id) DO NOTHING"),
         [{"id": name} for name in names],
     )
+    if session.get_bind().dialect.name == "postgresql":
+        statement = "SELECT id FROM meta WHERE id = :id FOR UPDATE"
+    else:
+        statement = "UPDATE meta SET revision = revision WHERE id = :id"
+    for name in names:
+        session.execute(text(statement), {"id": name})
+
+
+def bump_revisions(session: Session, collections: set[str], *, seq_collections: set[str] | None = None) -> int:
+    """One global flush counter, plus a signal for collections that do not take seq numbers."""
+    skip = seq_collections or set()
+    names = sorted({"rev", *(name for name in collections if name not in skip)})
+    lock_meta(session, set(names))
     current = 0
     for name in names:
         row = session.execute(
@@ -887,6 +1036,37 @@ def bump_revisions(session: Session, collections: set[str]) -> int:
         if name == "rev":
             current = int(row[0])
     return current
+
+
+def alloc_seq(session: Session, collection: str) -> int:
+    """Next sequence for one collection, taken under that collection's meta row lock."""
+    extra = "UNION ALL SELECT seq FROM consent_events" if collection == "consents" else ""
+    floor = int(
+        session.execute(
+            text(
+                f"""
+                SELECT COALESCE(MAX(seq), 0) FROM (
+                    SELECT seq FROM records WHERE collection = :id
+                    UNION ALL
+                    SELECT seq FROM record_tombstones WHERE collection = :id
+                    {extra}
+                ) AS seqs
+                """
+            ),
+            {"id": collection},
+        ).scalar()
+        or 0
+    )
+    session.execute(
+        text("INSERT INTO meta (id, revision) VALUES (:id, 0) ON CONFLICT (id) DO NOTHING"),
+        {"id": collection},
+    )
+    greatest = "GREATEST" if session.get_bind().dialect.name == "postgresql" else "max"
+    row = session.execute(
+        text(f"UPDATE meta SET revision = {greatest}(revision, :floor) + 1 WHERE id = :id RETURNING revision"),
+        {"id": collection, "floor": floor},
+    ).one()
+    return int(row[0])
 
 
 def _trigger_sql(dialect: str) -> list[str]:
@@ -930,6 +1110,12 @@ def _trigger_sql(dialect: str) -> list[str]:
             CREATE TRIGGER consent_events_no_delete
             BEFORE DELETE ON consent_events
             FOR EACH ROW EXECUTE FUNCTION consent_events_append_only()
+            """,
+            "DROP TRIGGER IF EXISTS consent_events_no_truncate ON consent_events",
+            """
+            CREATE TRIGGER consent_events_no_truncate
+            BEFORE TRUNCATE ON consent_events
+            FOR EACH STATEMENT EXECUTE FUNCTION consent_events_append_only()
             """,
         ]
     return []
@@ -976,8 +1162,8 @@ class SqlRuntime:
                 Path(self.path).parent.mkdir(parents=True, exist_ok=True)
             engine_kwargs["connect_args"] = {"check_same_thread": False}
         else:
-            engine_kwargs["pool_size"] = 10
-            engine_kwargs["max_overflow"] = 20
+            engine_kwargs["pool_size"] = 5
+            engine_kwargs["max_overflow"] = 3
             engine_kwargs["pool_recycle"] = 300
         self.engine = create_engine(self.url, **engine_kwargs)
         if self.url.startswith("sqlite"):
@@ -997,15 +1183,9 @@ class SqlRuntime:
     def _create_schema(self) -> None:
         if _production():
             return
+        # PostgreSQL schema and consent triggers belong to Alembic. Startup DDL
+        # races when several workers import the app together.
         if not self.url.startswith("sqlite"):
-            try:
-                self._ensure_meta()
-                install_consent_triggers(self.engine)
-                with self.factory() as session:
-                    copy_legacy_consents(session)
-                    session.commit()
-            except (OperationalError, ProgrammingError):
-                return
             return
         last: Exception | None = None
         for attempt in range(8):
@@ -1048,6 +1228,30 @@ class SqlRuntime:
             if session.get(Meta, "rev") is None:
                 session.add(Meta(id="rev", revision=0))
                 session.commit()
+
+    def schema_at_head(self) -> bool:
+        try:
+            with self.engine.connect() as connection:
+                if connection.dialect.name == "sqlite":
+                    found = connection.execute(
+                        text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'alembic_version'")
+                    ).scalar()
+                else:
+                    found = connection.execute(text("SELECT to_regclass('public.alembic_version')")).scalar()
+                if not found:
+                    return False
+                version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+                return database_revision_ready(str(version or ""))
+        except SQLAlchemyError:
+            return False
+
+    def ping_db(self) -> bool:
+        try:
+            with self.engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            return True
+        except SQLAlchemyError:
+            return False
 
     def session(self) -> Session:
         return self.factory()
@@ -1152,14 +1356,25 @@ class SqlRuntime:
             copy_legacy_consents(session)
             session.commit()
             rows = session.scalars(select(Record).order_by(Record.seq, Record.doc_id)).all()
-            consent_rows = session.scalars(select(ConsentEvent).order_by(ConsentEvent.id)).all()
+            consent_rows = session.scalars(select(ConsentEvent).order_by(ConsentEvent.seq)).all()
             snapshot = [
-                (row.collection, row.doc_id, dict(row.payload or {}), int(row.row_version or 1), int(row.seq or 0))
+                (
+                    row.collection,
+                    row.doc_id,
+                    dict(row.payload or {}),
+                    int(row.row_version or 1),
+                    int(row.seq or 0),
+                    row.email,
+                )
                 for row in rows
             ]
             consents = [consent_record_from_event(row) for row in consent_rows]
-            consent_last = max((int(row.id) for row in consent_rows), default=0)
-        for collection, doc_id, payload, version, seq in snapshot:
+            consent_last = max((int(row.seq or 0) for row in consent_rows), default=0)
+            quarantined = set(session.scalars(select(EmailQuarantine.doc_id)).all())
+        user_addresses: dict[str, str | None] = {}
+        for collection, doc_id, payload, version, seq, email in snapshot:
+            if collection == "users":
+                user_addresses[doc_id] = email
             last_seq[collection] = max(last_seq.get(collection, 0), seq)
             if collection == "credentials":
                 buckets.setdefault("credentials", {})[doc_id] = str(payload.get("password_hash") or "")
@@ -1181,7 +1396,7 @@ class SqlRuntime:
         users = buckets.get("users", {})
         store.users_by_id.load_clean(users, versions.get("users", {}), last_seq.get("users", 0))
         if not store.users.dirty and not store.users.deleted:
-            store.users.load_clean({user.email.lower(): user for user in users.values()})
+            store.users.load_clean(users_by_address(users.values(), user_addresses, quarantined))
         for attr, collection in PERSISTED:
             if collection in {"users", "favorites", "consents"}:
                 continue
@@ -1215,6 +1430,13 @@ class SqlRuntime:
                 for row in rows
             ]
             tomb_ids = [(row.doc_id, int(row.seq or 0)) for row in tombs]
+            address_rows = []
+            quarantined: set[str] = set()
+            if collection == "users":
+                address_rows = session.execute(
+                    select(Record.doc_id, Record.email).where(Record.collection == "users")
+                ).all()
+                quarantined = set(session.scalars(select(EmailQuarantine.doc_id)).all())
         changed = {doc_id for doc_id, _payload, _version, _seq in packed}
         deleted = {doc_id for doc_id, _seq in tomb_ids if doc_id not in changed}
         last = since_seq
@@ -1241,7 +1463,10 @@ class SqlRuntime:
                 versions[doc_id] = version
             store.users_by_id.merge_changes(items, versions, deleted, last)
             if not store.users.dirty and not store.users.deleted:
-                store.users.load_clean({user.email.lower(): user for user in store.users_by_id.peek_values()})
+                addresses = {str(doc_id): email for doc_id, email in address_rows}
+                store.users.load_clean(
+                    users_by_address(store.users_by_id.peek_values(), addresses, quarantined)
+                )
             return
         model = models.get(collection)
         if model is None:
@@ -1258,10 +1483,10 @@ class SqlRuntime:
     def _load_consent_changes(self, store, since_seq: int) -> None:
         with self.factory() as session:
             rows = session.scalars(
-                select(ConsentEvent).where(ConsentEvent.id > since_seq).order_by(ConsentEvent.id)
+                select(ConsentEvent).where(ConsentEvent.seq > since_seq).order_by(ConsentEvent.seq)
             ).all()
             items = [consent_record_from_event(row) for row in rows]
-            last = max([since_seq, *[int(row.id) for row in rows]])
+            last = max([since_seq, *[int(row.seq) for row in rows]])
         store.consents.merge_appends(items, set(), last)
 
     def flush(self, store) -> set[str]:
@@ -1271,20 +1496,29 @@ class SqlRuntime:
                 return self._flush_once(store)
             except ChangedByOther:
                 raise
-            except (OperationalError, IntegrityError) as exc:
+            except IntegrityError as exc:
+                if _record_pk_conflict(exc):
+                    raise ChangedByOther() from exc
                 last = exc
-                locked = isinstance(exc, OperationalError) and "locked" in str(exc).lower()
-                if attempt == 4 or not (locked or isinstance(exc, IntegrityError)):
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+            except OperationalError as exc:
+                last = exc
+                locked = "locked" in str(exc).lower()
+                if attempt == 4 or not locked:
                     raise
                 time.sleep(0.05 * (attempt + 1))
         if last is not None:
             raise last
         return set()
 
-    def _flush_once(self, store) -> set[str]:
+    def _flush_once(self, store, session: Session | None = None) -> set[str]:
+        own_session = session is None
         local = store._local
         local.suspend = True
-        session = self.factory()
+        if session is None:
+            session = self.factory()
         touched: set[str] = set()
         snapshots = []
         for attr, _collection in PERSISTED:
@@ -1294,24 +1528,37 @@ class SqlRuntime:
             bag = getattr(store, attr)
             snapshots.append((bag, None, bag.last_seq))
         try:
-            seq = int(session.scalar(select(func.max(Record.seq))) or 0)
-            tomb_seq = int(session.scalar(select(func.max(RecordTombstone.seq))) or 0)
-            seq = max(seq, tomb_seq)
+            needed: set[str] = set()
             for attr, collection in PERSISTED:
                 bag = getattr(store, attr)
                 if bag.dirty or bag.deleted:
-                    seq = self._flush_dict(session, store, collection, bag, seq)
+                    needed.add(collection)
+            if store.favorites.mutated:
+                needed.add("favorites")
+            if store.consents.mutated:
+                needed.add("consents")
+            if needed:
+                needed.add("rev")
+                lock_meta(session, needed)
+            allocated: set[str] = set()
+            for attr, collection in PERSISTED:
+                bag = getattr(store, attr)
+                if bag.dirty or bag.deleted:
+                    self._flush_dict(session, store, collection, bag)
                     touched.add(collection)
+                    allocated.add(collection)
             favorites = store.favorites
             if favorites.mutated:
-                seq = self._flush_favorites(session, store, favorites, seq)
+                self._flush_favorites(session, store, favorites)
                 touched.add("favorites")
+                allocated.add("favorites")
             consents = store.consents
             if consents.mutated:
                 self._flush_consents(session, store, consents)
                 touched.add("consents")
+                allocated.add("consents")
             if touched:
-                bump_revisions(session, touched)
+                bump_revisions(session, touched, seq_collections=allocated)
             session.commit()
         except Exception:
             session.rollback()
@@ -1334,12 +1581,17 @@ class SqlRuntime:
                 bag.pending_del.clear()
             return touched
         finally:
-            session.close()
+            if own_session:
+                session.close()
             local.suspend = False
 
-    def _flush_dict(self, session: Session, store, collection: str, bag: TrackedDict, seq: int) -> int:
+    def _flush_dict(self, session: Session, store, collection: str, bag: TrackedDict) -> None:
         deleted = [str(key) for key in bag.deleted]
         dirty = [str(key) for key in bag.dirty]
+        if collection == "users":
+            # The single-owner index is checked per statement. Clear the previous
+            # owner before writing the user who takes that role.
+            dirty.sort(key=lambda key: str(getattr(bag.peek(key), "role", "") or "") == "owner")
         ids = list(dict.fromkeys(deleted + dirty))
         existing: dict[str, int] = {}
         for chunk in _chunks(ids, 200):
@@ -1357,7 +1609,7 @@ class SqlRuntime:
             if expected is not None and result.rowcount != 1 and existing.get(key) not in (None, expected):
                 raise ChangedByOther()
             if result.rowcount == 1:
-                seq += 1
+                seq = alloc_seq(session, collection)
                 session.merge(RecordTombstone(collection=collection, doc_id=key, seq=seq))
                 bag.last_seq = max(bag.last_seq, seq)
             session.execute(delete(RecordLink).where(RecordLink.collection == collection, RecordLink.doc_id == key))
@@ -1373,7 +1625,9 @@ class SqlRuntime:
             fields = index_values(store, collection, doc_id, payload)
             expected = bag.versions.get(key)
             if doc_id not in existing:
-                seq += 1
+                if expected is not None:
+                    raise ChangedByOther()
+                seq = alloc_seq(session, collection)
                 session.add(
                     Record(collection=collection, doc_id=doc_id, seq=seq, row_version=1, payload=payload, **fields)
                 )
@@ -1386,11 +1640,9 @@ class SqlRuntime:
                 bag.versions[key] = 1
                 existing[doc_id] = 1
             else:
-                if expected is None:
-                    expected = existing[doc_id]
-                if existing[doc_id] != expected:
+                if expected is None or existing[doc_id] != expected:
                     raise ChangedByOther()
-                seq += 1
+                seq = alloc_seq(session, collection)
                 result = session.execute(
                     update(Record)
                     .where(
@@ -1412,16 +1664,16 @@ class SqlRuntime:
             session.execute(delete(RecordLink).where(RecordLink.collection == collection, RecordLink.doc_id == doc_id))
             for user_id in holders:
                 session.add(RecordLink(collection=collection, doc_id=doc_id, user_id=user_id))
-        return seq
 
-    def _flush_favorites(self, session: Session, store, bag: TrackedList, seq: int) -> int:
+    def _flush_favorites(self, session: Session, store, bag: TrackedList) -> None:
         if self.url.startswith("postgresql"):
             session.execute(text("SELECT pg_advisory_xact_lock(21419002)"))
         for doc_id in list(bag.pending_del):
             result = session.execute(delete(Record).where(Record.collection == "favorites", Record.doc_id == doc_id))
             if result.rowcount:
-                seq += 1
+                seq = alloc_seq(session, "favorites")
                 session.merge(RecordTombstone(collection="favorites", doc_id=doc_id, seq=seq))
+                bag.last_seq = max(bag.last_seq, seq)
         add_ids = [str(bag.identify(item)) for item in bag.pending_add if str(bag.identify(item)) not in bag.pending_del]
         existing: set[str] = set()
         for chunk in _chunks(add_ids, 200):
@@ -1434,13 +1686,14 @@ class SqlRuntime:
             doc_id = str(bag.identify(item))
             if doc_id in bag.pending_del or doc_id in existing:
                 continue
-            seq += 1
+            seq = alloc_seq(session, "favorites")
             payload = _dump(item)
             fields = index_values(store, "favorites", doc_id, payload)
-            session.add(Record(collection="favorites", doc_id=doc_id, seq=seq, row_version=1, payload=payload, **fields))
+            session.add(
+                Record(collection="favorites", doc_id=doc_id, seq=seq, row_version=1, payload=payload, **fields)
+            )
             existing.add(doc_id)
-        bag.last_seq = max(bag.last_seq, seq)
-        return seq
+            bag.last_seq = max(bag.last_seq, seq)
 
     def _flush_consents(self, session: Session, store, bag: TrackedList) -> None:
         pending = [item for item in bag.pending_add if str(bag.identify(item)) not in bag.pending_del]
@@ -1456,13 +1709,12 @@ class SqlRuntime:
                 continue
             user = store.users_by_id.peek(getattr(item, "user_id", ""))
             company_id = tenant_company_key(user) if user is not None else None
-            session.add(consent_event_from_record(item, company_id))
+            event = consent_event_from_record(item, company_id)
+            event.seq = alloc_seq(session, "consents")
+            session.add(event)
             known.add(legacy)
+            bag.last_seq = max(bag.last_seq, event.seq)
         session.flush()
-        if known:
-            last = session.scalar(select(func.max(ConsentEvent.id)).where(ConsentEvent.legacy_id.in_(list(known))))
-            if last:
-                bag.last_seq = max(bag.last_seq, int(last))
 
     def page(self, store, collection: str, *, limit: int, offset: int, **filters) -> tuple[list, int | None]:
         models = _models()

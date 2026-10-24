@@ -11,14 +11,6 @@ from sqlalchemy.exc import IntegrityError
 _BIN_KEY = re.compile(r"^bin:\d{12}$")
 _USER_KEY = re.compile(r"^user:\S+$")
 
-_COMPANIES = """
-CREATE TABLE IF NOT EXISTS companies (
-    id VARCHAR(36) NOT NULL PRIMARY KEY,
-    legacy_key VARCHAR(180) NOT NULL,
-    CONSTRAINT uq_companies_legacy_key UNIQUE (legacy_key)
-)
-"""
-
 
 def company_key(user) -> str:
     """Tenant key already stored on the user. Empty storage falls back to user:<id>."""
@@ -28,26 +20,23 @@ def company_key(user) -> str:
     return f"user:{getattr(user, 'id', '')}"
 
 
-def claim_company_key(engine, user_id: str, company_bin: str) -> tuple[str, bool]:
-    """Reserve a BIN with INSERT into companies. A conflicting BIN becomes user:<id> plus review."""
-    _ensure_companies(engine)
+def claim_company_key(session, user_id: str, company_bin: str) -> tuple[str, bool]:
+    """Reserve a BIN on the caller's open transaction. A conflict becomes user:<id> plus review.
+
+    The caller commits this insert together with the new user. The companies table comes from
+    migration 0002 only. A conflicting BIN rolls back only that insert, so earlier locks stay.
+    """
     digits = re.sub(r"\D", "", company_bin or "")
-    if len(digits) == 12 and _insert_legacy_key(engine, f"bin:{digits}"):
+    if len(digits) == 12 and _insert_legacy_key(session, f"bin:{digits}"):
         return f"bin:{digits}", False
-    user_key = f"user:{user_id}"
-    _insert_legacy_key(engine, user_key)
-    return user_key, len(digits) == 12
+    _insert_legacy_key(session, f"user:{user_id}")
+    return f"user:{user_id}", len(digits) == 12
 
 
-def _ensure_companies(engine) -> None:
-    with engine.begin() as conn:
-        conn.execute(text(_COMPANIES))
-
-
-def _insert_legacy_key(engine, key: str) -> bool:
+def _insert_legacy_key(session, key: str) -> bool:
     try:
-        with engine.begin() as conn:
-            conn.execute(
+        with session.begin_nested():
+            session.execute(
                 text("INSERT INTO companies (id, legacy_key) VALUES (:id, :key)"),
                 {"id": str(uuid4()), "key": key},
             )

@@ -112,16 +112,18 @@ from app.site_models import (
 from app.sql_backend import (
     COLLECTION_OF,
     DICT_ATTRS,
-    ConsentEvent,
     Record,
     SqlRuntime,
     TrackedDict,
     TrackedList,
     _dump,
+    _production,
+    alloc_seq,
     bump_revisions,
     consent_event_from_record,
     index_values,
     json_db_file,
+    lock_meta,
     utc_now,
 )
 from app.store_budget import dump_budget, load_budget
@@ -322,6 +324,11 @@ class MemoryStore:
         object.__setattr__(self, "consents", TrackedList(lambda item: item.id))
         self._sql = SqlRuntime()
         self._bind_reads()
+        if _production() and not self._sql.schema_at_head():
+            object.__setattr__(self, "_schema_ok", False)
+            object.__setattr__(self, "_ready", True)
+            return
+        object.__setattr__(self, "_schema_ok", True)
         boot = self._sql.bootstrap_lock()
         try:
             self._load()
@@ -605,6 +612,9 @@ class MemoryStore:
     def _load(self) -> None:
         if self._sql.count() > 0:
             self._sql.load_into(self)
+            self._seen_rev = self._sql.revision()
+            return
+        if _production():
             self._seen_rev = self._sql.revision()
             return
         self._load_json()
@@ -2199,6 +2209,9 @@ class MemoryStore:
         return record
 
     def register(self, body: RegisterBody, *, ip: str = "", user_agent: str = "") -> tuple[User, str]:
+        from sqlalchemy import func, select
+        from sqlalchemy.exc import IntegrityError
+
         email = body.email.lower().strip()
         company = body.company.strip()
         bin_no = re.sub(r"\D", "", body.company_bin)
@@ -2216,74 +2229,178 @@ class MemoryStore:
             raise ValueError("БИН должен быть из 12 цифр")
         if len(phone) < 6:
             raise ValueError("Укажите телефон")
-        first_owner = self._sql.count_collection("users") == 0
-        if first_owner:
-            role = "owner"
-        elif body.role not in ("buyer", "contractor", "supplier"):
-            raise ValueError("Роль: заказчик, подрядчик или поставщик")
-        else:
-            role = body.role
         if not body.consent_offer_pd:
             raise ValueError("Нужно согласие на обработку персональных данных")
-        if role == "supplier":
-            if len(body.sku_title.strip()) < 2:
-                raise ValueError("Укажите первую позицию для каталога")
-            if body.sku_price <= 0:
-                raise ValueError("Укажите цену позиции")
-        if self.get_user_by_email(email):
-            raise ValueError("Такой email уже зарегистрирован")
         pilot = _pilot_flag(body.pilot)
         password_hash = hash_password(body.password)
-        with self._lock:
-            if self.get_user_by_email(email):
-                raise ValueError("Такой email уже зарегистрирован")
-            uid = f"u-{uuid4().hex[:8]}"
-            from app.tenant import claim_company_key
+        from app.tenant import claim_company_key
 
-            key, review = claim_company_key(self._sql.engine, uid, bin_no)
-            user = User(
-                id=uid,
-                email=email,
-                full_name=contact,
-                role=role,
-                phone=phone,
-                company=company,
-                company_bin=bin_no,
-                company_key=key,
-                company_review=review,
-                city=body.city.strip() or "Алматы",
-                pilot=pilot,
-            )
-            self._index_user(user)
-            self.credentials[uid] = password_hash
-            if role == "supplier":
-                mid = f"mat-{uuid4().hex[:8]}"
-                title = body.sku_title.strip()
-                note = f"{company}, БИН {bin_no}. {user.city}."
-                if pilot:
-                    note += " Пилот Engicon."
-                item = Material(
-                    id=mid,
-                    slug=_slugify(title) + "-" + mid[-4:],
-                    supplier_id=uid,
-                    category=body.sku_category,
-                    title_ru=title,
-                    title_kk=title,
-                    unit=body.sku_unit.strip() or "т",
-                    price_kzt=body.sku_price,
-                    min_qty=1,
-                    stock=body.sku_stock,
-                    city=user.city,
-                    description_ru=note,
-                    description_kk=note,
-                    published=True,
+        forced_member = False
+        saved = None
+        for attempt in (1, 2):
+            session = self._sql.factory()
+            try:
+                needed = {"owner_gate", "rev", "users", "credentials", "consents"}
+                if body.role == "supplier":
+                    needed.add("materials")
+                lock_meta(session, needed)
+                existing = int(
+                    session.scalar(
+                        select(func.count()).select_from(Record).where(Record.collection == "users")
+                    )
+                    or 0
                 )
-                self.materials[mid] = item
-            self._append_consent_unlocked(user, ip, user_agent)
-            if body.consent_ai:
-                self.consents.append(self._new_ai_consent(user, ip, user_agent))
-            self._save_unlocked()
-            return user, make_token(uid)
+                if existing == 0 and not forced_member:
+                    role = "owner"
+                elif body.role not in ("buyer", "contractor", "supplier"):
+                    raise ValueError("Роль: заказчик, подрядчик или поставщик")
+                else:
+                    role = body.role
+                if role == "supplier":
+                    if len(body.sku_title.strip()) < 2:
+                        raise ValueError("Укажите первую позицию для каталога")
+                    if body.sku_price <= 0:
+                        raise ValueError("Укажите цену позиции")
+                taken = session.scalar(
+                    select(Record.doc_id).where(Record.collection == "users", Record.email == email).limit(1)
+                )
+                if taken:
+                    raise ValueError("Такой email уже зарегистрирован")
+                uid = f"u-{uuid4().hex[:8]}"
+                key, review = claim_company_key(session, uid, bin_no)
+                user = User(
+                    id=uid,
+                    email=email,
+                    full_name=contact,
+                    role=role,
+                    phone=phone,
+                    company=company,
+                    company_bin=bin_no,
+                    company_key=key,
+                    company_review=review,
+                    city=body.city.strip() or "Алматы",
+                    pilot=pilot,
+                )
+                privacy = privacy_document()
+                consent = ConsentRecord(
+                    id=f"c-{uuid4().hex[:12]}",
+                    user_id=uid,
+                    type="offer_pd",
+                    text_version=PD_VERSION,
+                    text_sha256=pd_sha256(),
+                    granted_at=_now(),
+                    action="grant",
+                    ip=ip,
+                    user_agent=user_agent,
+                    login=user.email,
+                    privacy_version=privacy.version,
+                    privacy_sha256=privacy.sha256,
+                )
+                ai_record = self._new_ai_consent(user, ip, user_agent) if body.consent_ai else None
+                material = None
+                if role == "supplier":
+                    mid = f"mat-{uuid4().hex[:8]}"
+                    title = body.sku_title.strip()
+                    note = f"{company}, БИН {bin_no}. {user.city}."
+                    if pilot:
+                        note += " Пилот Engicon."
+                    material = Material(
+                        id=mid,
+                        slug=_slugify(title) + "-" + mid[-4:],
+                        supplier_id=uid,
+                        category=body.sku_category,
+                        title_ru=title,
+                        title_kk=title,
+                        unit=body.sku_unit.strip() or "т",
+                        price_kzt=body.sku_price,
+                        min_qty=1,
+                        stock=body.sku_stock,
+                        city=user.city,
+                        description_ru=note,
+                        description_kk=note,
+                        published=True,
+                    )
+
+                def put(bound, collection: str, doc_id: str, value) -> int:
+                    seq = alloc_seq(bound, collection)
+                    payload = _dump(value)
+                    fields = index_values(self, collection, doc_id, payload)
+                    bound.add(
+                        Record(
+                            collection=collection,
+                            doc_id=doc_id,
+                            seq=seq,
+                            row_version=1,
+                            payload=payload,
+                            **fields,
+                        )
+                    )
+                    return seq
+
+                user_seq = put(session, "users", uid, user)
+                cred_seq = put(session, "credentials", uid, password_hash)
+                company_id = company_key(user)
+                consent_seq = alloc_seq(session, "consents")
+                event = consent_event_from_record(consent, company_id)
+                event.seq = consent_seq
+                session.add(event)
+                ai_seq = 0
+                if ai_record is not None:
+                    ai_seq = alloc_seq(session, "consents")
+                    ai_event = consent_event_from_record(ai_record, company_id)
+                    ai_event.seq = ai_seq
+                    session.add(ai_event)
+                mat_seq = 0
+                if material is not None:
+                    mat_seq = put(session, "materials", material.id, material)
+                collections = {"users", "credentials", "consents"}
+                allocated = {"users", "credentials", "consents"}
+                if material is not None:
+                    collections.add("materials")
+                    allocated.add("materials")
+                bump_revisions(session, collections, seq_collections=allocated)
+                session.commit()
+                saved = (user, user_seq, cred_seq, consent, consent_seq, ai_record, ai_seq, material, mat_seq)
+                break
+            except IntegrityError as exc:
+                session.rollback()
+                message = str(getattr(exc, "orig", exc)).lower()
+                owner_conflict = "ux_records_single_owner" in message or (
+                    "unique" in message and "status" in message
+                )
+                if attempt == 1 and owner_conflict and not forced_member:
+                    forced_member = True
+                    continue
+                if "email" in message or "ux_records_user_email" in message:
+                    raise ValueError("Такой email уже зарегистрирован") from exc
+                raise
+            except ValueError:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+        if saved is None:
+            raise ValueError("Роль: заказчик, подрядчик или поставщик")
+        user, user_seq, cred_seq, consent, consent_seq, ai_record, ai_seq, material, mat_seq = saved
+        with self._lock:
+            local = self._local
+            local.suspend = True
+            try:
+                self.users_by_id.adopt(user.id, user, 1, user_seq)
+                self.users.adopt(email, user, 1, user_seq)
+                self.credentials.adopt(user.id, password_hash, 1, cred_seq)
+                self.consents.adopt_item(consent, consent_seq)
+                if ai_record is not None:
+                    self.consents.adopt_item(ai_record, ai_seq)
+                if material is not None:
+                    self.materials.adopt(material.id, material, 1, mat_seq)
+                synced = {"users", "credentials", "consents"}
+                if material is not None:
+                    synced.add("materials")
+                self._mark_synced(synced, self._sql.revisions())
+            finally:
+                local.suspend = False
+        return user, make_token(user.id)
 
     def login(
         self,
@@ -2935,10 +3052,11 @@ class MemoryStore:
         ip: str = "",
         user_agent: str = "",
     ) -> tuple[User, str]:
-        from sqlalchemy import func, select, text
+        from sqlalchemy import select, text
         from sqlalchemy.exc import IntegrityError
 
         from app.invitations import InvitationClosed
+        from app.sql_backend import InvitationRow
 
         normalized = email.lower().strip()
         contact = full_name.strip()
@@ -3009,19 +3127,31 @@ class MemoryStore:
                 {"now": now, "uid": uid, "id": row.id},
             )
             if result.rowcount != 1:
+                current = session.get(InvitationRow, row.id)
+                if current is not None and current.revoked_at:
+                    code = "revoked"
+                    message = "Приглашение отозвано"
+                elif current is not None and current.used_at:
+                    code = "used"
+                    message = "Приглашение уже использовано"
+                else:
+                    code = "expired"
+                    message = "Срок приглашения истёк"
                 session.rollback()
-                raise InvitationClosed("closed", "Ссылка недействительна")
+                raise InvitationClosed(code, message)
             taken = session.scalar(
                 select(Record.doc_id).where(Record.collection == "users", Record.email == normalized).limit(1)
             )
             if taken:
                 session.rollback()
                 raise ValueError("Такой email уже зарегистрирован")
-            seq = int(session.scalar(select(func.max(Record.seq))) or 0)
+            needed = {"rev", "users", "credentials", "consents"}
+            if directory is not None:
+                needed.add("directory")
+            lock_meta(session, needed)
 
             def put(collection: str, doc_id: str, value) -> int:
-                nonlocal seq
-                seq += 1
+                seq = alloc_seq(session, collection)
                 payload = _dump(value)
                 fields = index_values(self, collection, doc_id, payload)
                 session.add(
@@ -3039,17 +3169,19 @@ class MemoryStore:
             user_seq = put("users", uid, user)
             cred_seq = put("credentials", uid, password_hash)
             company_id = company_key(user)
-            session.add(consent_event_from_record(consent, company_id))
+            consent_seq = alloc_seq(session, "consents")
+            event = consent_event_from_record(consent, company_id)
+            event.seq = consent_seq
+            session.add(event)
             if directory is not None:
                 dir_seq = put("directory", directory.id, directory)
             session.flush()
-            consent_seq = int(
-                session.scalar(select(ConsentEvent.id).where(ConsentEvent.legacy_id == consent.id)) or 0
-            )
             collections = {"users", "credentials", "consents"}
+            allocated = {"users", "credentials", "consents"}
             if directory is not None:
                 collections.add("directory")
-            bump_revisions(session, collections)
+                allocated.add("directory")
+            bump_revisions(session, collections, seq_collections=allocated)
             session.commit()
         except (InvitationClosed, ValueError):
             raise

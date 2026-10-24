@@ -23,7 +23,8 @@ services:
       PORT: "8010"
       DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-      DATABASE_URL: postgresql+psycopg://anyq:${POSTGRES_PASSWORD}@postgres:5432/anyq
+      ANYQ_APP_PASSWORD: ${ANYQ_APP_PASSWORD:?set ANYQ_APP_PASSWORD}
+      DATABASE_URL: postgresql+psycopg://anyq_app:${ANYQ_APP_PASSWORD}@postgres:5432/anyq
     volumes:
       - anyq-data:/data
       - ../apps/web/content/legal:/app/legal:ro
@@ -32,13 +33,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
     init: true
     stop_grace_period: 40s
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3).read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/ready', timeout=3).read()"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -140,6 +143,62 @@ services:
     networks:
       - anyq
 
+  migrate:
+    image: anyq-api:current
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      ANYQ_ENV: production
+      ANYQ_DB_PATH: /data/db.json
+      ANYQ_UPLOADS_DIR: /data/uploads
+      ANYQ_DATA_DIR: /data
+      LEGAL_DIR: /app/legal
+      DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      ANYQ_APP_PASSWORD: ${ANYQ_APP_PASSWORD:?set ANYQ_APP_PASSWORD}
+      DATABASE_URL: postgresql+psycopg://anyq:${POSTGRES_PASSWORD}@postgres:5432/anyq
+    command: ["python", "-m", "app.migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-backup:
+        condition: service_completed_successfully
+    restart: "no"
+    init: true
+    networks:
+      - anyq
+
+  db-backup:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGHOST: postgres
+      PGUSER: anyq
+      PGDATABASE: anyq
+    volumes:
+      - anyq-backups:/backups
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        umask 077
+        file="/backups/pre-migrate-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+        pg_dump -Fc --no-owner -f "$$file"
+        test -s "$$file"
+        ls -1t /backups/pre-migrate-*.dump | awk 'NR>3' | while read -r old; do rm -f "$$old"; done
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    init: true
+    networks:
+      - anyq
+
   postgres:
     image: postgres:16-alpine
     container_name: anyq-postgres
@@ -187,3 +246,5 @@ volumes:
     name: anyq-caddy-config
   anyq-postgres:
     name: anyq-postgres
+  anyq-backups:
+    name: anyq-backups

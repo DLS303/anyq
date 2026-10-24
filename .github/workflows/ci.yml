@@ -24,11 +24,20 @@ jobs:
           pip install -r requirements.txt "ruff==0.17.1"
       - name: Ruff
         run: ruff check .
+      - name: Migrate SQLite
+        run: |
+          rm -f /tmp/anyq-ci.sqlite
+          DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic upgrade head
+          DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic check
+          DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic downgrade -1
+          DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic upgrade head
+          DATABASE_URL=sqlite:////tmp/anyq-ci.sqlite alembic check
       - name: Pytest
         run: python -m pytest -q
         env:
           ANYQ_ENV: development
           JWT_SECRET: test-only-secret-value-with-32-characters
+          LOGIN_HASH_SECRET: test-only-login-hash-secret-value-32ch
           ANYQ_DEMO_PASSWORD: ""
           CORS_ORIGINS: http://localhost:3000
 
@@ -115,6 +124,7 @@ jobs:
           ANYQ_TEST_POSTGRES: "1"
           ANYQ_ENV: development
           JWT_SECRET: test-only-secret-value-with-32-characters
+          LOGIN_HASH_SECRET: test-only-login-hash-secret-value-32ch
           ANYQ_DEMO_PASSWORD: ""
           CORS_ORIGINS: http://localhost:3000
         run: python -m pytest -q -n 2

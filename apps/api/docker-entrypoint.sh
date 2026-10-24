@@ -30,6 +30,24 @@ case "$folded" in
     ;;
 esac
 
+hash_secret="${LOGIN_HASH_SECRET:-}"
+hash_secret=$(printf '%s' "$hash_secret" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+if [ -z "$hash_secret" ]; then
+  fail "LOGIN_HASH_SECRET is missing"
+fi
+
+if [ "${#hash_secret}" -lt 32 ]; then
+  fail "LOGIN_HASH_SECRET must be at least 32 characters"
+fi
+
+hash_folded=$(printf '%s' "$hash_secret" | tr '[:upper:]' '[:lower:]')
+case "$hash_folded" in
+  *changeme*|*change-me*|*change_me*|*replace-me*|*replace_me*|*replace-with*|*your-secret*|*test-only*|*not-a-secret*|*placeholder*|*jwt-secret*|*jwt_secret*|*superapp*)
+    fail "LOGIN_HASH_SECRET is a placeholder"
+    ;;
+esac
+
 if [ -z "${CORS_ORIGINS:-}" ]; then
   fail "CORS_ORIGINS must be set"
 fi
@@ -55,6 +73,30 @@ case "${DATABASE_URL:-}" in
   *) fail "DATABASE_URL must be a PostgreSQL URL" ;;
 esac
 
+owner_task=0
+if [ "${1:-}" = "python" ] && [ "${3:-}" = "app.migrate" ]; then
+  owner_task=1
+fi
+if [ "${1:-}" = "python" ] && [ "${2:-}" = "scripts/ensure_audit_partition.py" ]; then
+  owner_task=1
+fi
+if [ "$owner_task" -eq 1 ]; then
+  case "${DATABASE_URL}" in
+    *://anyq:*@*) ;;
+    *) fail "schema changes must use the owner role anyq" ;;
+  esac
+else
+  case "${DATABASE_URL}" in
+    *://anyq_app:*@*) ;;
+    *) fail "the API must use the anyq_app role" ;;
+  esac
+  case "${DATABASE_URL}" in
+    *://anyq_app:anyq@*|*://anyq_app:anyq_app@*|*://anyq_app:postgres@*|*://anyq_app:changeme@*|*://anyq_app:password@*)
+      fail "DATABASE_URL uses a default password"
+      ;;
+  esac
+fi
+
 workers="${WEB_CONCURRENCY:-2}"
 case "$workers" in
   ''|*[!0-9]*) fail "WEB_CONCURRENCY must be a number from 1 to 8" ;;
@@ -74,7 +116,7 @@ fi
 mkdir -p /data/uploads /data/private /data/public
 chown -R anyq:anyq /data
 
-gosu anyq alembic upgrade head
+# Schema changes run once, in the migrate container, before this process starts.
 
 if [ "$#" -eq 0 ] || [ "${1:-}" = "gunicorn" ]; then
   set -- gunicorn app.main:app \

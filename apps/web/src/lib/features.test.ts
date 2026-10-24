@@ -73,8 +73,5 @@ describe("release visibility", () => {
     expect(menuTabVisible("punchPhotos", {}, false)).toBe(false);
     expect(menuTabVisible("punchPhotos", { punch_photos: true }, false)).toBe(true);
     expect(menuTabVisible("punch", { punch_photos: true }, false)).toBe(true);
-    expect(menuTabVisible("punchPhotos", {}, false)).toBe(false);
-    expect(menuTabVisible("punchPhotos", { punch_photos: true }, false)).toBe(true);
-    expect(menuTabVisible("punch", { punch_photos: true }, false)).toBe(true);
   });
 });
