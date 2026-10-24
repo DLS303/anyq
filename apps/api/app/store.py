@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import threading
@@ -12,7 +13,8 @@ from typing import get_args
 from uuid import uuid4
 
 from app.authutil import hash_password, make_token, verify_password
-from app.config import demo_mode
+from app.config import current_env, demo_mode, secure_env
+from app.demo_password import assert_demo_password_policy
 from app.geo import centroid, haversine_km
 from app.legal import PD_VERSION, ai_document, pd_sha256, privacy_document
 from app.schemas import (
@@ -121,6 +123,7 @@ from app.sql_backend import (
     alloc_seq,
     bump_revisions,
     consent_event_from_record,
+    guard_json_store_read,
     index_values,
     json_db_file,
     lock_meta,
@@ -164,6 +167,7 @@ CADASTRE = re.compile(r"^\d{2}-\d{3}-\d{3}-\d{3}$")
 DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SITE_ROLES = set(get_args(SiteRole))
 CHECK_RESULTS = {"pass", "fail", "na"}
+log = logging.getLogger("app.store")
 
 
 def company_key(user: User) -> str:
@@ -315,8 +319,18 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+_DEMO_LAND_ORDERS = frozenset({"ord-topo"})
+_DEMO_LAND_DEALS = frozenset({"deal-land-1", "deal-design-1"})
+_DEMO_LAND_THREADS = frozenset({"th-topo"})
+_DEMO_LAND_MESSAGES = frozenset({"m1", "m2"})
+_DEMO_LAND_LEADS = frozenset({"lead-101"})
+_DEMO_LAND_ACTIVITIES = frozenset({"act-1", "act-2"})
+_DEMO_LAND_INVOICES = frozenset({"inv-1"})
+
+
 class MemoryStore:
     def __init__(self) -> None:
+        assert_demo_password_policy()
         object.__setattr__(self, "_ready", False)
         self._lock = RLock()
         self._local = threading.local()
@@ -335,6 +349,7 @@ class MemoryStore:
         object.__setattr__(self, "_schema_ok", True)
         boot = self._sql.bootstrap_lock()
         try:
+            seed_empty = self._sql.count() == 0
             self._load()
             if demo_mode():
                 self._ensure_seed_users()
@@ -342,6 +357,8 @@ class MemoryStore:
                 self._ensure_materials()
                 self._ensure_site()
                 self._ensure_crm()
+                if seed_empty and current_env() == "demo":
+                    self._drop_fixed_land_seed()
         finally:
             self._sql.bootstrap_unlock(boot)
         self._stamp_revs(self._sql.revisions())
@@ -441,10 +458,11 @@ class MemoryStore:
             self._save()
 
     def _ensure_demo_passwords(self) -> None:
-        if os.getenv("ANYQ_ENV", "development").strip().lower() == "production":
-            return
+        assert_demo_password_policy()
         password = os.getenv("ANYQ_DEMO_PASSWORD", "").strip()
         if not password:
+            if current_env() == "demo":
+                log.warning("ANYQ_DEMO_PASSWORD is unset; demo accounts cannot log in")
             return
         added = False
         for u in list(self.users_by_id.values()):
@@ -613,12 +631,108 @@ class MemoryStore:
         self.threads = {t.id: deepcopy(t) for t in THREADS}
         self.messages = {m.id: deepcopy(m) for m in MESSAGES}
 
+    def _seed_demo_construction(self) -> None:
+        """Specialists, orders, deals, and chats for an empty demo database.
+
+        The plots catalog stays empty. This path does not open db.json.
+        """
+        if not demo_mode():
+            return
+        self.specialists = {s.id: deepcopy(s) for s in SPECIALISTS}
+        self.orders = {o.id: deepcopy(o) for o in ORDERS}
+        self.deals = {d.id: deepcopy(d) for d in DEALS}
+        self.threads = {t.id: deepcopy(t) for t in THREADS}
+        self.messages = {m.id: deepcopy(m) for m in MESSAGES}
+        self._save_unlocked()
+
+    def _drop_fixed_land_seed(self) -> None:
+        """Omit fixed land seed ids. Only for the first fill of an empty demo database."""
+        for name, ids in (
+            ("orders", _DEMO_LAND_ORDERS),
+            ("deals", _DEMO_LAND_DEALS),
+            ("threads", _DEMO_LAND_THREADS),
+            ("messages", _DEMO_LAND_MESSAGES),
+            ("leads", _DEMO_LAND_LEADS),
+            ("crm_activities", _DEMO_LAND_ACTIVITIES),
+            ("crm_invoices", _DEMO_LAND_INVOICES),
+        ):
+            bag = getattr(self, name)
+            for item_id in ids:
+                if item_id in bag:
+                    del bag[item_id]
+        for item in list(self.orders.values()):
+            if item.plot_id is not None:
+                item.plot_id = None
+                self.orders[item.id] = item
+        for item in list(self.deals.values()):
+            if item.plot_id is None and not item.plot_title:
+                continue
+            item.plot_id = None
+            item.plot_title = ""
+            self.deals[item.id] = item
+        for item in list(self.threads.values()):
+            if item.plot_id is not None:
+                item.plot_id = None
+                self.threads[item.id] = item
+        self._rewrite_fixed_seed_copy()
+        self._save_unlocked()
+
+    def _rewrite_fixed_seed_copy(self) -> None:
+        """Replace land wording on known seed ids. Does not scan other rows."""
+        law = self.specialists.get("sp-law")
+        if law is not None:
+            law.company_ru = "Dana Legal"
+            law.company_kk = "Dana Legal"
+            law.bio_ru = "Проверка договора подряда и сметы. Отчёт за 3 дня."
+            law.bio_kk = "Мердігерлік шартты тексеру."
+            if law.prices:
+                law.prices[0].unit = "объект"
+            self.specialists[law.id] = law
+        contact = self.crm_contacts.get("cnt-1")
+        if contact is not None:
+            contact.notes = "Планирует строительство 2-этажного дома 280 м²."
+            self.crm_contacts[contact.id] = contact
+        contact = self.crm_contacts.get("cnt-2")
+        if contact is not None:
+            contact.company_name = "ТОО 'Smagulov Development'"
+            contact.notes = "Заказчик домов в Медеуском и Талгарском районах."
+            self.crm_contacts[contact.id] = contact
+        contact = self.crm_contacts.get("cnt-6")
+        if contact is not None:
+            contact.notes = "Юристы по договорам подряда, АПЗ и ГАСК."
+            self.crm_contacts[contact.id] = contact
+        lead = self.leads.get("lead-104")
+        if lead is not None:
+            lead.plot_id = None
+            lead.notes = "Нужно согласование эскиза в Бостандыкском районе."
+            self.leads[lead.id] = lead
+        task = self.schedule.get("st-1")
+        if task is not None and task.title == "Земляные":
+            task.title = "Котлован"
+            self.schedule[task.id] = task
+        line = self.budget_lines.get("bl-1")
+        if line is not None and line.title == "Земляные":
+            line.title = "Котлован"
+            self.budget_lines[line.id] = line
+        sheet = self.timesheets.get("ts-1")
+        if sheet is not None and sheet.crew == "землек. / 6 чел":
+            sheet.crew = "бригада / 6 чел"
+            self.timesheets[sheet.id] = sheet
+        inquiry = self.rfis.get("rfi-2")
+        if inquiry is not None:
+            inquiry.question = "Подтвердите расстояние до газопровода по проекту."
+            self.rfis[inquiry.id] = inquiry
+
     def _load(self) -> None:
         if self._sql.count() > 0:
             self._sql.load_into(self)
             self._seen_rev = self._sql.revision()
             return
-        if _production():
+        if current_env() == "demo":
+            self._seed_demo_construction()
+            self._seen_rev = self._sql.revision()
+            return
+        if secure_env():
             self._seen_rev = self._sql.revision()
             return
         self._load_json()
@@ -626,6 +740,7 @@ class MemoryStore:
         self._seen_rev = self._sql.revision()
 
     def _load_json(self) -> None:
+        guard_json_store_read()
         path = db_file()
         if not path.exists():
             if demo_mode():

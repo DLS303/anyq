@@ -832,7 +832,31 @@ MIGRATION_LOCK = 21419007
 
 
 def _production() -> bool:
-    return os.getenv("ANYQ_ENV", "development").strip().lower() == "production"
+    """True only for ANYQ_ENV=production.
+
+    Schema creation and readiness stay on this check so ANYQ_ENV=demo can use SQLite.
+    Secrets, CORS, docs, cookies, and db.json use secure_env(), which includes demo.
+    """
+    from app.config import production_env
+
+    return production_env()
+
+
+def guard_json_store_read() -> None:
+    """Refuse to read data/db.json in demo and production. The error names the file, not its contents."""
+    from app.config import secure_env
+
+    if secure_env():
+        raise RuntimeError("reading data/db.json is disabled when ANYQ_ENV is demo or production")
+
+
+def read_json_store(path: Path) -> dict:
+    """Read a JSON store file. Demo and production raise before the file is opened."""
+    guard_json_store_read()
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise TypeError("db.json must be an object")
+    return raw
 
 
 def _record_pk_conflict(exc: IntegrityError) -> bool:

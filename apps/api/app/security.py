@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.config import secure_cookies
+
 # Swagger and ReDoc load from jsDelivr. JSON routes do not execute those scripts.
 API_CSP = (
     "default-src 'none'; "
@@ -53,6 +55,41 @@ class PublicRobotsMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+def stamp_secure_cookie(value: bytes) -> bytes:
+    """Add the Secure flag. The cookie value is not logged."""
+    text = value.decode("latin-1")
+    parts = [part.strip() for part in text.split(";")]
+    if any(part.lower() == "secure" for part in parts):
+        return value
+    if text.endswith(";"):
+        return value + b" Secure"
+    return value + b"; Secure"
+
+
+class SecureCookieMiddleware:
+    """In demo and production, every Set-Cookie response carries Secure."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not secure_cookies():
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_secure(message):
+            if message["type"] == "http.response.start":
+                headers = []
+                for name, value in message.get("headers") or []:
+                    if name.lower() == b"set-cookie":
+                        value = stamp_secure_cookie(value)
+                    headers.append((name, value))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_secure)
 
 
 class SecurityHeadersMiddleware:

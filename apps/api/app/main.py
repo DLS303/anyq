@@ -1,10 +1,12 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app.authutil import load_secret
-from app.config import settings
+from app.config import api_docs_closed, settings
 from app.routers import (
     acts,
     auth,
@@ -25,12 +27,33 @@ from app.routers import (
     site,
     specialists,
 )
-from app.security import PublicRobotsMiddleware, SecurityHeadersMiddleware
+from app.security import (
+    PublicRobotsMiddleware,
+    SecureCookieMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.sql_backend import ChangedByOther
 
 load_secret()
 
-app = FastAPI(title=settings.app_name, version=settings.version)
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    from app.demo_seed import run_demo_seed
+
+    run_demo_seed()
+    yield
+
+
+_docs_closed = api_docs_closed()
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.version,
+    lifespan=_lifespan,
+    docs_url=None if _docs_closed else "/docs",
+    redoc_url=None if _docs_closed else "/redoc",
+    openapi_url=None if _docs_closed else "/openapi.json",
+)
 
 app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(SecurityHeadersMiddleware)
@@ -42,6 +65,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
 )
+app.add_middleware(SecureCookieMiddleware)
 
 app.include_router(health.router)
 app.include_router(modules.router)
@@ -70,9 +94,11 @@ def changed_by_other(_request: Request, exc: ChangedByOther):
 
 @app.get("/")
 def root():
-    return {
+    body = {
         "ok": True,
         "product": "SuperAPP",
         "phase": 2,
-        "docs": "/docs",
     }
+    if not api_docs_closed():
+        body["docs"] = "/docs"
+    return body

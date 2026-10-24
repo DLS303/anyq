@@ -11,6 +11,7 @@ import time
 
 from sqlalchemy import delete, func, select
 
+from app.config import secure_env
 from app.sql_backend import LoginFailure
 
 _RETENTION_S = 86_400
@@ -18,11 +19,13 @@ _dev_secret: str | None = None
 
 
 def login_hash_secret() -> str:
-    """HMAC key for login windows. Production requires LOGIN_HASH_SECRET."""
+    """HMAC key for login windows. Demo and production require LOGIN_HASH_SECRET."""
     secret = (os.getenv("LOGIN_HASH_SECRET") or "").strip()
-    if os.getenv("ANYQ_ENV", "development").strip().lower() == "production":
+    if secure_env():
         if len(secret) < 32:
-            raise RuntimeError("LOGIN_HASH_SECRET must be set to at least 32 characters when ANYQ_ENV=production")
+            raise RuntimeError(
+                "LOGIN_HASH_SECRET must be set to at least 32 characters when ANYQ_ENV is demo or production"
+            )
         return secret
     if len(secret) >= 16:
         return secret

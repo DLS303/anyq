@@ -16,6 +16,7 @@ from app.sql_backend import (
     SqlRuntime,
     bump_revisions,
     index_values,
+    read_json_store,
 )
 
 
@@ -108,10 +109,7 @@ def import_payload(raw: dict, *, dry_run: bool = False, runtime: SqlRuntime | No
 
 
 def import_file(path: Path, *, dry_run: bool = False) -> dict:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise TypeError("db.json must be an object")
-    return import_payload(raw, dry_run=dry_run)
+    return import_payload(read_json_store(path), dry_run=dry_run)
 
 
 def main() -> None:
