@@ -17,6 +17,7 @@ export const ORG_FEATURE_KEYS = [
   "gantt",
   "meetings",
   "offline",
+  "ks_acts",
 ] as const;
 
 export type OrgFeatureKey = (typeof ORG_FEATURE_KEYS)[number];
@@ -29,6 +30,7 @@ const TAB_FEATURE: Partial<Record<string, OrgFeatureKey>> = {
   draw: "drawings",
   gantt: "gantt",
   meet: "meetings",
+  ks: "ks_acts",
 };
 
 export function featureOn(key: OrgFeatureKey, flags: CompanyFlags | null | undefined, demo = DEMO_MODE) {
@@ -41,7 +43,7 @@ export function buildFeatures(flags: CompanyFlags | null | undefined, demo = DEM
     chess: demo,
     drawings: featureOn("drawings", flags, demo),
     bim3d: demo,
-    ksActs: demo,
+    ksActs: featureOn("ks_acts", flags, demo),
     submittals: featureOn("submittals", flags, demo),
     demoHouse: demo,
     estimateBaseDate: demo,
@@ -62,7 +64,7 @@ export function buildFeatures(flags: CompanyFlags | null | undefined, demo = DEM
 
 export const features = buildFeatures(null);
 
-export const DEMO_ONLY_TABS = ["sub", "draw", "ks"] as const;
+export const DEMO_ONLY_TABS = ["sub", "draw"] as const;
 
 export const PILOT_MAIN_TABS = ["today", "punch", "procurement", "money", "qa"] as const;
 export const PILOT_MORE_TABS = ["rfi", "gantt", "crew", "meet", "dir", "sub", "draw", "ks"] as const;
@@ -102,7 +104,6 @@ export function objectMenus(flags: CompanyFlags | null | undefined, options?: { 
 }
 
 export function menuTabVisible(tab: string, flags: CompanyFlags | null | undefined, demo = DEMO_MODE) {
-  if (tab === "ks") return demo;
   const key = TAB_FEATURE[tab];
   if (!key) return true;
   return featureOn(key, flags, demo);

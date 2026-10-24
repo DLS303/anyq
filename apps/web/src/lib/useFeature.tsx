@@ -68,6 +68,7 @@ export function useProjectFeatures(projectFlags?: CompanyFlags | null) {
   const gantt = useFeature("gantt");
   const meetings = useFeature("meetings");
   const offline = useFeature("offline");
+  const ksActs = useFeature("ks_acts");
   return useMemo(() => {
     if (projectFlags) return buildFeatures(projectFlags);
     return buildFeatures({
@@ -82,6 +83,7 @@ export function useProjectFeatures(projectFlags?: CompanyFlags | null) {
       gantt,
       meetings,
       offline,
+      ks_acts: ksActs,
     });
   }, [
     projectFlags,
@@ -96,5 +98,6 @@ export function useProjectFeatures(projectFlags?: CompanyFlags | null) {
     gantt,
     meetings,
     offline,
+    ksActs,
   ]);
 }

@@ -32,6 +32,7 @@ FEATURE_KEYS: tuple[str, ...] = (
     "gantt",
     "meetings",
     "offline",
+    "ks_acts",
 )
 
 _PATH_IDS = (
@@ -323,6 +324,8 @@ def apply_bundle_flags(project, data: dict, flags: dict[str, bool] | None = None
         data["plan_meetings"] = []
         data["action_items"] = []
         data["task_assignees"] = []
+    if not opened("ks_acts"):
+        data["ks_acts"] = []
     if not opened("changes"):
         data["changes"] = []
     if not opened("punch_photos"):

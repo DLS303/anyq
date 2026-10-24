@@ -1742,9 +1742,10 @@ class MemoryStore:
         return data
 
     def prior_signed_acts_kzt(self, project_id: str | None = None) -> int:
-        """Sum of previously signed KS acts for a project. None are stored yet."""
-        del project_id
-        return 0
+        """Signed completed-work acts for this object, in tenge."""
+        from app.ks_acts import signed_works_kzt
+
+        return signed_works_kzt(project_id)
 
     def pay_crm_invoice(self, user: User, invoice_id: str) -> CrmInvoice:
         inv = self.crm_invoices.get(invoice_id)

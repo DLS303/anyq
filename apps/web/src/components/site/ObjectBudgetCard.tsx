@@ -214,6 +214,9 @@ export function ObjectBudgetCard({ locale, projectId }: { locale: Locale; projec
           <>
             <Line label={m.budgetPlan} value={money(data.plan.total_kzt, locale)} />
             <Line label={m.budgetFact} value={money(data.fact_kzt, locale)} />
+            {data.ks_fact_kzt && data.ks_fact_kzt > 0 ? (
+              <Line label={m.budgetKsFact} value={money(data.ks_fact_kzt, locale)} />
+            ) : null}
             <Line label={m.budgetRemain} value={money(data.remaining_kzt ?? 0, locale)} />
             <p className="text-sm font-medium">
               {m.budgetUsed} {used} · {signalText(data.signal, m)}

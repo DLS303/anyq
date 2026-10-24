@@ -16,6 +16,7 @@ import { loadWithin } from "@/lib/loadWithin";
 import { ErrorRetry, LoadingSkeleton, isMissing, useAsync, useGuardedSubmit } from "@/lib/useAsync";
 import { AuthImage } from "@/components/media/AuthImage";
 import { InvitePanel } from "@/components/invites/InvitePanel";
+import { ActsPanel } from "./ActsPanel";
 import { ObjectBudgetCard } from "./ObjectBudgetCard";
 import { DailyReport, type DailyEntry } from "./DailyReport";
 import { InspectionForm } from "./InspectionForm";
@@ -938,13 +939,17 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
 
       {tab === "ks" && org.ksActs ? (
         <WidgetBoundary message={m.widgetError} retryLabel={m.retry}>
-          <KsActGenerator
-            locale={locale}
-            projectId={p.id}
-            projectTitle={p.title}
-            projectAddress={p.address}
-            budget={budget}
-          />
+          {companyFlags?.ks_acts ? (
+            <ActsPanel locale={locale} projectId={p.id} />
+          ) : (
+            <KsActGenerator
+              locale={locale}
+              projectId={p.id}
+              projectTitle={p.title}
+              projectAddress={p.address}
+              budget={budget}
+            />
+          )}
         </WidgetBoundary>
       ) : null}
     </div>

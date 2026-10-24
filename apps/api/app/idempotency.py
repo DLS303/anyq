@@ -10,6 +10,7 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
 
 from sqlalchemy import delete, select
@@ -45,7 +46,15 @@ def _load_row(user_id: str, key: str):
         )
 
 
-def run_idempotent(user_id: str, key: str | None, fingerprint: str, create: Callable[[], T]) -> T:
+def run_idempotent(
+    user_id: str,
+    key: str | None,
+    fingerprint: str,
+    create: Callable[[], T],
+    *,
+    company_id: str | None = None,
+    scope: str | None = None,
+) -> T:
     cleaned = (key or "").strip()
     if not cleaned:
         return create()
@@ -63,6 +72,8 @@ def run_idempotent(user_id: str, key: str | None, fingerprint: str, create: Call
     from app.store import store
 
     session = store._sql.factory()
+    stamp = utc_now()
+    expires = (datetime.now(UTC) + timedelta(hours=24)).isoformat(timespec="seconds")
     try:
         session.add(
             IdempotencyKey(
@@ -70,7 +81,12 @@ def run_idempotent(user_id: str, key: str | None, fingerprint: str, create: Call
                 key=cleaned,
                 fingerprint=fingerprint,
                 response_json=None,
-                created_at=utc_now(),
+                created_at=stamp,
+                company_id=company_id,
+                scope=(scope or "")[:40] or None,
+                status="in_progress" if company_id else None,
+                updated_at=stamp if company_id else None,
+                expires_at=expires if company_id else None,
             )
         )
         session.commit()
@@ -118,6 +134,9 @@ def run_idempotent(user_id: str, key: str | None, fingerprint: str, create: Call
         row = session.scalar(select(IdempotencyKey).where(IdempotencyKey.user_id == user_id, IdempotencyKey.key == cleaned))
         if row is not None:
             row.response_json = encoded
+            if company_id:
+                row.status = "done"
+                row.updated_at = utc_now()
             session.commit()
     with _lock:
         _rows[token] = {"fp": fingerprint, "data": data}

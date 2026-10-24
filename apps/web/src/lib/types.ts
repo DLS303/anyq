@@ -570,6 +570,7 @@ export type ObjectBudgetView = {
     other_kzt: number | null;
   };
   fact_kzt: number;
+  ks_fact_kzt?: number;
   fact_by_category: Record<BudgetCategory, number>;
   procurement_kzt: number;
   manual_kzt: number;

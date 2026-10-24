@@ -25,6 +25,7 @@ describe("release visibility", () => {
 
   it("opens a section from demo mode or the company flag", () => {
     expect(ORG_FEATURE_KEYS).toContain("drawings");
+    expect(ORG_FEATURE_KEYS).toContain("ks_acts");
     expect(featureOn("rfi", {}, false)).toBe(false);
     expect(featureOn("rfi", { rfi: true }, false)).toBe(true);
     expect(featureOn("rfi", {}, true)).toBe(true);
@@ -61,6 +62,7 @@ describe("release visibility", () => {
     expect(menuTabVisible("today", {}, false)).toBe(true);
     expect(menuTabVisible("money", {}, false)).toBe(true);
     expect(menuTabVisible("ks", { rfi: true }, false)).toBe(false);
+    expect(menuTabVisible("ks", { ks_acts: true }, false)).toBe(true);
     expect(menuTabVisible("ks", {}, true)).toBe(true);
     expect(menuTabVisible("sub", {}, true)).toBe(true);
   });

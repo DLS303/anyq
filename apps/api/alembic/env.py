@@ -3,6 +3,7 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
+from app.ks_schema import KsBase
 from app.meeting_schema import MeetingBase
 from app.sql_backend import Base, resolve_database_url
 
@@ -11,7 +12,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 config.set_main_option("sqlalchemy.url", resolve_database_url())
-target_metadata = [Base.metadata, MeetingBase.metadata]
+target_metadata = [Base.metadata, MeetingBase.metadata, KsBase.metadata]
 
 
 _SKIP_INDEXES = {
@@ -35,6 +36,8 @@ def _ours(table) -> bool:
 
 
 def include_object(object_, name, type_, reflected, compare_to):
+    if name == "ex_vat_rates_overlap":
+        return False
     if type_ == "table":
         return name in _table_names()
     if type_ == "index":

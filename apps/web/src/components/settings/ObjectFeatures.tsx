@@ -21,6 +21,7 @@ const COPY: Record<OrgFeatureKey, { title: "featDrawings"; hint: "featDrawingsHi
   gantt: { title: "featGantt", hint: "featGanttHint" },
   meetings: { title: "featMeetings", hint: "featMeetingsHint" },
   offline: { title: "featOffline", hint: "featOfflineHint" },
+  ks_acts: { title: "featKsActs", hint: "featKsActsHint" },
 };
 
 type CopyKey = keyof ReturnType<typeof t>;

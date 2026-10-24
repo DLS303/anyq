@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Float,
     ForeignKeyConstraint,
     Index,
@@ -125,8 +126,30 @@ class IdempotencyKey(Base):
     fingerprint: Mapped[str] = mapped_column(Text)
     response_json: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(String(40), index=True)
+    company_id: Mapped[str | None] = mapped_column(String(180))
+    scope: Mapped[str | None] = mapped_column(String(40))
+    status: Mapped[str | None] = mapped_column(String(12))
+    updated_at: Mapped[str | None] = mapped_column(String(40))
+    expires_at: Mapped[str | None] = mapped_column(String(40))
 
-    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_idempotency_user_key"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_idempotency_user_key"),
+        CheckConstraint(
+            "status IS NULL OR status IN ('in_progress', 'done')",
+            name="ck_idempotency_keys_status",
+        ),
+        Index(
+            "ux_idempotency_company_user_key",
+            "company_id",
+            "user_id",
+            "key",
+            unique=True,
+            sqlite_where=text("company_id IS NOT NULL"),
+            postgresql_where=text("company_id IS NOT NULL"),
+        ),
+        Index("ix_idempotency_company_updated", "company_id", "updated_at"),
+        Index("ix_idempotency_expires", "expires_at"),
+    )
 
 
 class InvitationRow(Base):

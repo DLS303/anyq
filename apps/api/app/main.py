@@ -16,6 +16,7 @@ from app.routers import (
     files,
     health,
     invitations,
+    ks_acts,
     materials,
     meetings,
     moderation,
@@ -42,7 +43,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Idempotency-Key"],
 )
 
 app.include_router(health.router)
@@ -59,6 +60,7 @@ app.include_router(estimates.router)
 app.include_router(acts.router)
 app.include_router(site.router)
 app.include_router(meetings.router)
+app.include_router(ks_acts.router)
 app.include_router(org_features.router)
 app.include_router(invitations.router)
 app.include_router(budget.router)

@@ -159,6 +159,10 @@ def object_budget_view(store, project, user) -> dict:
     procured = procurement_actual(lines, offers, docs, settings.vat_rate)
     manual = manual_actual(expenses)
     fact_by = merge_fact(procured, manual)
+    from app.ks_acts import signed_works_kzt
+
+    ks_fact = signed_works_kzt(project.id)
+    fact_by["works"] = int(fact_by.get("works", 0)) + ks_fact
     fact = sum(fact_by.values())
     planned = plan.total_kzt if plan else 0
     if plan is None:
@@ -184,6 +188,7 @@ def object_budget_view(store, project, user) -> dict:
         },
         "fact_kzt": fact,
         "fact_by_category": fact_by,
+        "ks_fact_kzt": ks_fact,
         "procurement_kzt": sum(procured.values()),
         "manual_kzt": sum(manual.values()),
         "remaining_kzt": remaining,

@@ -12,6 +12,7 @@ from app.company_features import (
     project_company_id,
     require_feature,
 )
+from app.config import demo_mode
 from app.deps import require_user
 from app.idempotency import IdempotencyConflict, run_idempotent
 from app.paths import write_stored_file
@@ -337,6 +338,7 @@ def bundle(pid: str, user: User = Depends(require_user)):
         "plan_meetings": [],
         "action_items": [],
         "task_assignees": [],
+        "ks_acts": [],
         "directory": store._by_project(store.directory, p.id),
         "members": store.list_project_members(p),
         "can_manage_members": store.can_manage_project(user, p),
@@ -348,6 +350,10 @@ def bundle(pid: str, user: User = Depends(require_user)):
     data["plan_meetings"] = plans
     data["action_items"] = items
     data["task_assignees"] = people
+    if demo_mode() or bool(flags.get("ks_acts")):
+        from app.ks_acts import list_acts
+
+        data["ks_acts"] = list_acts(p.id)
     return {"ok": True, "data": apply_bundle_flags(p, data, flags)}
 
 

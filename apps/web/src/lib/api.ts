@@ -1223,3 +1223,92 @@ export function acceptInvitation(
     body: JSON.stringify(body),
   });
 }
+
+export type KsActLine = {
+  id: string;
+  line_no: number;
+  name: string;
+  unit: string;
+  qty_contract: string;
+  qty_prev: string;
+  qty_period: string;
+  unit_price_tiyn: number;
+  amount_tiyn: number;
+  over_contract: boolean;
+};
+
+export type KsAct = {
+  id: string;
+  project_id: string;
+  number: number;
+  act_date: string;
+  period_from: string;
+  period_to: string;
+  status: string;
+  total_tiyn: number;
+  vat_tiyn: number;
+  total_with_vat_tiyn: number;
+  row_version: number;
+  lines?: KsActLine[];
+};
+
+function ksHeaders(idempotencyKey?: string) {
+  const headers = new Headers();
+  if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
+  return headers;
+}
+
+export function fetchKsActs(projectId: string, signal?: AbortSignal) {
+  return request<KsAct[]>(`/v1/site/projects/${projectId}/ks-acts`, { signal });
+}
+
+export function fetchKsAct(actId: string, signal?: AbortSignal) {
+  return request<KsAct>(`/v1/site/ks-acts/${actId}`, { signal });
+}
+
+export function createKsAct(
+  projectId: string,
+  body: { id: string; act_date: string; period_from: string; period_to: string },
+  idempotencyKey: string,
+) {
+  return request<KsAct>(`/v1/site/projects/${projectId}/ks-acts`, {
+    method: "POST",
+    headers: ksHeaders(idempotencyKey),
+    body: JSON.stringify(body),
+  });
+}
+
+export function saveKsLines(
+  actId: string,
+  body: { row_version: number; lines: { id: string; qty_period: string }[] },
+  idempotencyKey: string,
+) {
+  return request<KsAct>(`/v1/site/ks-acts/${actId}/lines`, {
+    method: "PUT",
+    headers: ksHeaders(idempotencyKey),
+    body: JSON.stringify(body),
+  });
+}
+
+export function submitKsAct(actId: string, rowVersion: number, idempotencyKey: string) {
+  return request<KsAct>(`/v1/site/ks-acts/${actId}/submit`, {
+    method: "POST",
+    headers: ksHeaders(idempotencyKey),
+    body: JSON.stringify({ row_version: rowVersion }),
+  });
+}
+
+export async function downloadKs(path: string, filename: string) {
+  const res = await apiFetch(path);
+  if (!res.ok) {
+    const json = await readBody<Envelope<unknown>>(res).catch(() => null);
+    throw new ApiError(detailOf(json, res.statusText), res.status);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
