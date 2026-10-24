@@ -592,6 +592,16 @@ def answer_rfi(rid: str, body: AnswerIn, user: User = Depends(require_feature("r
         raise HTTPException(400, str(e)) from e
 
 
+_LEGACY_PUNCH_READONLY = "Замечания только для чтения. Откройте вкладку «Фото до и после»."
+
+
+def _punch_photos_enabled(project: Project) -> bool:
+    company_id = project_company_id(project)
+    if not company_id:
+        return False
+    return bool(flag_map(company_id).get("punch_photos"))
+
+
 @router.post("/projects/{pid}/punches")
 def add_punch(
     pid: str,
@@ -600,6 +610,8 @@ def add_punch(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     project = _guard_pid(user, pid)
+    if _punch_photos_enabled(project):
+        raise HTTPException(409, _LEGACY_PUNCH_READONLY)
     if body.photo.strip() and not feature_open_for_company(project_company_id(project), "punch_photos"):
         raise HTTPException(404, "Не найдено")
     return _saved(user, idempotency_key, body, lambda: store.add_punch(pid, body.model_dump()))
@@ -608,6 +620,10 @@ def add_punch(
 @router.post("/punches/{iid}/status")
 def punch_status(iid: str, body: StatusIn, user: User = Depends(require_user)):
     _guard_item(user, store.punches, iid)
+    item = store.punches.get(iid)
+    project = store.get_project(getattr(item, "project_id", "")) if item else None
+    if project is not None and _punch_photos_enabled(project):
+        raise HTTPException(409, _LEGACY_PUNCH_READONLY)
     try:
         return {"ok": True, "data": store.set_punch(iid, body.status)}
     except ValueError as e:

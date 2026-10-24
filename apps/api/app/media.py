@@ -15,6 +15,9 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+# Reject decompression bombs before pixel data is expanded.
+Image.MAX_IMAGE_PIXELS = 48_000_000
+
 _FORMATS = {
     "JPEG": ("image/jpeg", ".jpg"),
     "PNG": ("image/png", ".png"),

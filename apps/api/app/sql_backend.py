@@ -827,7 +827,7 @@ class ChangedByOther(Exception):
         super().__init__("Изменено другим")
 
 
-SCHEMA_HEAD = "20261019_0002_pf0"
+SCHEMA_HEAD = "20261019_0004_pf2a"
 MIGRATION_LOCK = 21419007
 
 
@@ -1588,6 +1588,10 @@ class SqlRuntime:
     def _flush_dict(self, session: Session, store, collection: str, bag: TrackedDict) -> None:
         deleted = [str(key) for key in bag.deleted]
         dirty = [str(key) for key in bag.dirty]
+        if collection == "users":
+            # The single-owner index is checked per statement. Clear the previous
+            # owner before writing the user who takes that role.
+            dirty.sort(key=lambda key: str(getattr(bag.peek(key), "role", "") or "") == "owner")
         ids = list(dict.fromkeys(deleted + dirty))
         existing: dict[str, int] = {}
         for chunk in _chunks(ids, 200):

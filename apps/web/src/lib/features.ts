@@ -29,6 +29,7 @@ const TAB_FEATURE: Partial<Record<string, OrgFeatureKey>> = {
   draw: "drawings",
   gantt: "gantt",
   meet: "meetings",
+  punchPhotos: "punch_photos",
 };
 
 export function featureOn(key: OrgFeatureKey, flags: CompanyFlags | null | undefined, demo = DEMO_MODE) {
@@ -65,7 +66,7 @@ export const features = buildFeatures(null);
 export const DEMO_ONLY_TABS = ["sub", "draw", "ks"] as const;
 
 export const PILOT_MAIN_TABS = ["today", "punch", "procurement", "money", "qa"] as const;
-export const PILOT_MORE_TABS = ["rfi", "gantt", "crew", "meet", "dir", "sub", "draw", "ks"] as const;
+export const PILOT_MORE_TABS = ["rfi", "gantt", "crew", "meet", "dir", "sub", "draw", "ks", "punchPhotos"] as const;
 export const LEGACY_OBJECT_TABS = [
   "home",
   "daily",

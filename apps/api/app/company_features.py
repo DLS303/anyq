@@ -215,6 +215,10 @@ def set_feature(
                 session.add(row)
                 session.flush()
                 _audit(session, company_id, key, enabled, actor, False)
+                if enabled and key == "punch_photos":
+                    from app.punch_photos import import_legacy_for_company
+
+                    import_legacy_for_company(session, company_id)
                 session.commit()
             except IntegrityError as exc:
                 session.rollback()
@@ -244,6 +248,10 @@ def set_feature(
             session.rollback()
             raise HTTPException(status_code=409, detail="Изменено другим")
         _audit(session, company_id, key, enabled, actor, before)
+        if enabled and key == "punch_photos":
+            from app.punch_photos import import_legacy_for_company
+
+            import_legacy_for_company(session, company_id)
         session.commit()
         current.enabled = enabled
         current.changed_by = actor

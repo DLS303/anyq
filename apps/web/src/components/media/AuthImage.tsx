@@ -7,7 +7,7 @@ import { t } from "@/i18n/messages";
 import { fetchAuthorizedBlob, isAbortError } from "@/lib/api";
 
 function needsSession(src: string) {
-  return src.startsWith("/v1/files/") || src.startsWith("/uploads/") || src.includes("/expenses/");
+  return src.startsWith("/v1/files/") || src.startsWith("/uploads/") || src.includes("/expenses/") || src.includes("/punch-items/");
 }
 
 export function AuthImage({ src, alt = "", className }: { src: string; alt?: string; className?: string }) {

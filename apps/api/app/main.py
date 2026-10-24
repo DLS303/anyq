@@ -24,6 +24,7 @@ from app.routers import (
     plots,
     procurement,
     public,
+    punch_photos,
     site,
     specialists,
 )
@@ -59,6 +60,7 @@ app.include_router(materials.router)
 app.include_router(estimates.router)
 app.include_router(acts.router)
 app.include_router(site.router)
+app.include_router(punch_photos.router)
 app.include_router(org_features.router)
 app.include_router(invitations.router)
 app.include_router(budget.router)

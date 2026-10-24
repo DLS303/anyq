@@ -17,6 +17,7 @@ import { ErrorRetry, LoadingSkeleton, isMissing, useAsync, useGuardedSubmit } fr
 import { AuthImage } from "@/components/media/AuthImage";
 import { InvitePanel } from "@/components/invites/InvitePanel";
 import { ObjectBudgetCard } from "./ObjectBudgetCard";
+import { PunchPhotos } from "./PunchPhotos";
 import { DailyReport, type DailyEntry } from "./DailyReport";
 import { InspectionForm } from "./InspectionForm";
 import { MeetingForm } from "./MeetingForm";
@@ -59,6 +60,7 @@ type Tab =
   | "rfi"
   | "sub"
   | "punch"
+  | "punchPhotos"
   | "procurement"
   | "qa"
   | "draw"
@@ -85,6 +87,8 @@ function tabLabel(id: Tab, m: Msg, pilot: boolean) {
       return m.tabSub;
     case "punch":
       return pilot ? m.tabIssues : m.tabPunch;
+    case "punchPhotos":
+      return m.punchPhotoTab;
     case "procurement":
       return m.tabBuy;
     case "qa":
@@ -499,6 +503,8 @@ export function ProjectHub({ locale, id }: { locale: Locale; id: string }) {
           </Tool>
         )
       ) : null}
+
+      {tab === "punchPhotos" ? <PunchPhotos locale={locale} projectId={p.id} /> : null}
 
       {tab === "procurement" ? <ProcurementTab locale={locale} projectId={p.id} projectTitle={p.title} /> : null}
 

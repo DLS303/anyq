@@ -784,7 +784,7 @@ def test_upgrade_dedupes_emails_and_restores_consents(tmp_path, capsys):
         assert [(row[0], row[1]) for row in events] == [("grant", 1), ("withdraw", 2)]
         assert int(revision) == 2
         assert failures == 0
-        command.downgrade(cfg, "-1")
+        command.downgrade(cfg, "20261021_0001c_app_role")
         names = set(inspect(engine).get_table_names())
         assert "companies" not in names
         assert "company_features" not in names
@@ -1167,7 +1167,7 @@ def test_app_role_cannot_rewrite_consent_events(tmp_path, monkeypatch):
                 {"row_hash": b"\x11"},
             )
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "20261019_0002_pf0"
+        assert version == "20261019_0004_pf2a"
         with pytest.raises(DatabaseError), app_engine.begin() as connection:
             connection.execute(text("UPDATE alembic_version SET version_num = 'stale'"))
     finally:
